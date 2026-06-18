@@ -3,13 +3,6 @@ import streamlit as st
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 
-chat_model = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0.5
-    # Al no poner api_key aquí, LangChain buscará automáticamente 
-    # la variable de entorno OPENAI_API_KEY
-)
-
 # Configuración de la app
 st.set_page_config(
     page_title="Jarvi 2.0 - Agente de Soluciones Fotovoltaicas",
@@ -19,13 +12,14 @@ st.set_page_config(
 st.title("Jarvi ⚡ Agente de Soluciones Fotovoltaicas") 
 st.markdown("La ingeniería de preventa en Aisa transforma necesidades energéticas en soluciones solares personalizadas.")
 
-# ==========================================
-# 3. FORZAMOS A USAR LA NUEVA
-# ==========================================
+# =================================================================
+# INICIALIZACIÓN DEL MODELO
+# LangChain buscará automáticamente la variable de entorno OPENAI_API_KEY
+# tanto en tu PC como en Railway (si la configuraste en el panel).
+# =================================================================
 chat_model = ChatOpenAI(
     model="gpt-4o-mini",
-    temperature=0.5,
-    api_key=MI_LLAVE_NUEVA
+    temperature=0.5
 )
 
 # Inicializar el historial de mensajes
