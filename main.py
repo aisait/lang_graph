@@ -4,8 +4,7 @@ from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 
 st.set_page_config(page_title="Jarvi - AISA Solar", page_icon="⚡", layout="wide")
 
-# 1. IDENTIDAD Y RESTRICCIONES (El "Cerebro")
-# Instrucción explícita de NO inventar productos.
+# 1. IDENTIDAD Y RESTRICCIONES
 JARVI_PROMPT = """Eres Jarvi, ingeniero de preventa de AISA Solar. 
 TU FUENTE DE INFORMACIÓN ES EXCLUSIVAMENTE www.aisa.com.gt.
 - Si un producto o servicio NO está en www.aisa.com.gt, no lo inventes ni lo sugieras. 
@@ -22,10 +21,11 @@ st.title("Jarvi ⚡ Agente de Soluciones Fotovoltaicas")
 
 with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     st.markdown("""
-    ¡Hola! Soy Jarvi, tu ingeniero de preventa de **AISA Solar**. 
-    *   **¿Buscas una solución?** Pregúntame qué buscas y te asesoraré basándome únicamente en los servicios de AISA.
-    *   **Productos:** Solo te hablaré de soluciones disponibles en [www.aisa.com.gt](https://www.aisa.com.gt).
-    *   **Contacto:** Si no tengo la información técnica, te indicaré cómo contactar a AISA directamente.
+    ¡Hola! Soy Jarvi, tu ingeniero de preventa de **AISA Solar**. Para obtener la mejor asesoría, sigue estos pasos:
+    * **Describe tu necesidad Sistema Atado a la Red o aislado de la  red eléctrica Nacional:** Explícame tu proyecto, consumo energético mensual o ubicación para darte una solución a medida.
+    * **Consulta sobre productos:** Pregúntame específicamente por la disponibilidad y características técnicas de equipos en [www.aisa.com.gt](https://www.aisa.com.gt).
+    * **Sé preciso:** Evita consultas genéricas; cuanto más detalle técnico me des, mejor podré recomendarte las soluciones de AISA.
+    * **Contacto directo:** Si necesitas una cotización formal o atención personalizada, pregúntame cómo comunicarte directamente con el equipo de AISA.
     """)
 
 # 3. LÓGICA DE INICIO (Saludo automático)
@@ -33,7 +33,7 @@ if len(st.session_state.messages) == 1:
     greeting = "¡Hola! Soy Jarvi de AISA Solar. ¿Buscas una solución fotovoltaica hoy? Cuéntame qué necesitas y te ayudaré con los servicios de AISA."
     st.session_state.messages.append(AIMessage(content=greeting))
 
-# 4. CONFIGURACIÓN (Sin selector de modelo para evitar errores)
+# 4. CONFIGURACIÓN
 chat_model = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
 
 # 5. RENDERIZADO
