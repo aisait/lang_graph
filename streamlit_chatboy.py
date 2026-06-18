@@ -3,17 +3,12 @@ import streamlit as st
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 
-# ==========================================
-# 1. DESTRUIR LA LLAVE VIEJA FANTASMA
-# ==========================================
-if "OPENAI_API_KEY" in os.environ:
-    del os.environ["OPENAI_API_KEY"]
-
-# ==========================================
-# 2. PON TU LLAVE NUEVA AQUÍ
-# ==========================================
-MI_LLAVE_NUEVA = ""
-
+chat_model = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0.5
+    # Al no poner api_key aquí, LangChain buscará automáticamente 
+    # la variable de entorno OPENAI_API_KEY
+)
 
 # Configuración de la app
 st.set_page_config(
