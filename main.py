@@ -2,32 +2,32 @@ import streamlit as st
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 
-# 1. Configuración de la página (esto crea el diseño base)
-st.set_page_config(page_title="Jarvi 2.0 - Aisa Solar", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Jarvi 2.0", page_icon="⚡", layout="wide")
 
 st.title("Jarvi ⚡ Agente de Soluciones Fotovoltaicas")
-st.markdown("La ingeniería de preventa en Aisa transforma necesidades energéticas en soluciones solares personalizadas.")
 
-# 2. BARRA LATERAL (Sidebar) - Esto debe aparecer sí o sí
+# 1. Definición del rol estricto
+# Esto fuerza al modelo a ser Jarvi y a ignorar cualquier identidad de OpenAI
+SYSTEM_INSTRUCTION = """Eres Jarvi, el experto técnico de AISA Solar (www.aisa.com.gt). 
+Tu ÚNICA identidad es Jarvi. Si te preguntan quién eres, debes decir que eres Jarvi de AISA Solar. 
+Prohibido decir que eres un asistente de OpenAI o un modelo de lenguaje genérico. 
+Si el usuario menciona 'Jarvi', reconoce tu nombre inmediatamente."""
+
+# 2. Inicialización de sesión con el sistema forzado
+if "messages" not in st.session_state:
+    st.session_state.messages = [SystemMessage(content=SYSTEM_INSTRUCTION)]
+
+# 3. Sidebar funcional
 with st.sidebar:
-    st.header("Configuración")
-    model_choice = st.selectbox("Selecciona el modelo", ["gpt-4o-mini", "gpt-3.5-turbo"])
-    temperature = st.slider("Temperatura", 0.0, 1.0, 0.5, 0.1)
-    st.divider()
-    if st.button("Borrar historial de chat"):
-        st.session_state.messages = []
+    model_choice = st.selectbox("Modelo", ["gpt-4o-mini", "gpt-3.5-turbo"])
+    if st.button("Reiniciar Conversación"):
+        st.session_state.messages = [SystemMessage(content=SYSTEM_INSTRUCTION)]
         st.rerun()
 
-# 3. Inicialización del modelo
-chat_model = ChatOpenAI(model=model_choice, temperature=temperature)
+# 4. Inicializar modelo
+chat_model = ChatOpenAI(model=model_choice, temperature=0.5)
 
-# 4. Inicializar historial
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        SystemMessage(content="Eres Jarvi, experto de AISA Solar. Responde siempre con profesionalismo y enfócate en www.aisa.com.gt")
-    ]
-
-# 5. Renderizar historial (Omitiendo el SystemMessage)
+# 5. Renderizado
 for msg in st.session_state.messages:
     if isinstance(msg, SystemMessage): continue
     role = "assistant" if isinstance(msg, AIMessage) else "user"
@@ -41,7 +41,6 @@ if prompt := st.chat_input("¿Qué buscas lograr con la energía solar?"):
         st.markdown(prompt)
 
     response = chat_model.invoke(st.session_state.messages)
-    
     st.session_state.messages.append(AIMessage(content=response.content))
     with st.chat_message("assistant"):
         st.markdown(response.content)
