@@ -1,10 +1,3 @@
-Aquí tienes el código completo y refactorizado de `main.py`. He aplicado la corrección topológica exacta, colocando la inyección de `MemorySaver` **después** de la construcción estructural del grafo y **antes** de la interfaz de usuario.
-
-También limpié los espacios invisibles y añadí la generación automática de un `thread_id` único por sesión utilizando la librería estándar `uuid`, garantizando así que el *checkpointer* aísle correctamente a cada usuario concurrente en producción.
-
-Puedes copiar y pegar este bloque completo para reemplazar tu archivo actual:
-
-```python
 # main.py
 import streamlit as st
 import os
@@ -291,5 +284,3 @@ if prompt := st.chat_input("¿Qué sistema de AISA Solar necesitas: Agua, Energ�
             
             # Sincronizamos el UI state con el state maestro del Checkpointer
             st.session_state.messages = response_state["messages"]
-
-```
