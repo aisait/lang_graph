@@ -232,7 +232,7 @@ graph_builder.add_edge(START, "chatbot")
 jarvi_graph = graph_builder.compile()
 
 # 7. INTERFAZ DE USUARIO (Streamlit UI)
-st.title("Jarvi ⚡ Agente de Soluciones Fotovoltaicas")
+st.title("Jarvi ⚡ Agente de Soluciones AISA Solar")
 
 with st.expander("ℹ️ Instrucciones de Operación"):
     st.markdown("""
