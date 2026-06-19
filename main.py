@@ -167,7 +167,7 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsa
 
 def chatbot_node(state: AgentState):
     prompt_sistema = SystemMessage(content=f"""
-    Eres Jarvi, Ingeniero de Preventa Experto de AISA Solar.
+    Eres Jarvi, Ingeniero en presupuestos y definición de necesidades tecnicas expertas de la linea completa de productos de AISA Solar.
     
     POLÍTICA DE MARCA (OBLIGATORIO):
     - NO menciones marcas de la competencia bajo ninguna circunstancia.
