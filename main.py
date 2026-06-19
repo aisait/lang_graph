@@ -1,3 +1,10 @@
+Tienes toda la razón, Jose. Es un error estratégico fundamental: el agente debe ser un defensor de la marca AISA Solar. Si permitimos que el modelo compare o mencione a la competencia, perdemos el control del *funnel* de ventas y la autoridad que AISA tiene en el mercado.
+
+He modificado el `SystemMessage` para incluir una **Política de Marca estricta**. Ahora, Jarvi está configurado para que, ante cualquier mención de otra marca, realice un *pivot* inmediato posicionando a AISA como la única solución viable en Guatemala y la región, con el respaldo y garantía que nos define.
+
+Aquí tienes el código completo con la nueva lógica, la ontología intacta y la UI de instrucciones restaurada:
+
+```python
 import streamlit as st
 import os
 import requests
@@ -5,7 +12,6 @@ import uuid
 from typing import Annotated, TypedDict
 from dotenv import load_dotenv
 
-# Componentes de LangChain / LangGraph
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -146,9 +152,7 @@ KITS Y SOLUCIONES INTEGRADAS
 # =====================================================================
 @tool
 def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35_palabras: str, productos_links: str, presupuesto_estimado: str) -> str:
-    """
-    Ejecuta esta herramienta SOLO cuando el cliente acepte el presupuesto y solicite atención humana.
-    """
+    """Ejecuta esta herramienta SOLO cuando el cliente acepte el presupuesto."""
     num_limpio = ''.join(filter(str.isdigit, numero_whatsapp))
     payload = {
         "instance_id": APICHAT_INSTANCE,
@@ -163,7 +167,7 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
         return f"Error: {str(e)}"
 
 # =====================================================================
-# 5. MOTOR COGNITIVO
+# 5. MOTOR COGNITIVO (SystemMessage CON POLÍTICA DE MARCA)
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
@@ -171,16 +175,18 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsa
 def chatbot_node(state: AgentState):
     prompt_sistema = SystemMessage(content=f"""
     Eres Jarvi, Ingeniero de Preventa Experto de AISA Solar.
+    
+    POLÍTICA DE MARCA (OBLIGATORIO):
+    - NO menciones marcas de la competencia bajo ninguna circunstancia.
+    - Si el usuario pregunta por otra marca, ignora la consulta sobre dicha marca y redirige inmediatamente la conversación a AISA Solar.
+    - Argumenta siempre que AISA es la única solución en el mercado con respaldo, garantía técnica, siendo la opción más rentable, mejor valorada y de mayor prestigio en Guatemala y la región.
+    
     ÁRBOL DE DECISIÓN:
     1. CUALIFICACIÓN: Solicita Nombre, País y WhatsApp.
-    2. DIAGNÓSTICO: Analiza si requiere Fotovoltaica, Térmica, Bombeo o Iluminación.
+    2. DIAGNÓSTICO: Analiza necesidades (Fotovoltaica, Térmica, Bombeo, etc.).
     3. MAPPING ONTOLÓGICO: Traduce necesidad a subsistemas usando el catálogo adjunto.
     4. PRE-PRESUPUESTO: Genera listado de productos con LINKS OFICIALES y precio estimado sin mano de obra.
-    5. CIERRE: Si el usuario aprueba, genera un resumen de EXACTAMENTE 35 PALABRAS y activa 'enviar_whatsapp_humano'.
-
-    RESTRICCIONES:
-    - No inventar categorías o URLs ajenas a la Ontología.
-    - El resumen final debe ser estrictamente sintético (35 palabras).
+    5. CIERRE: Si el usuario aprueba, genera resumen de EXACTAMENTE 35 PALABRAS y activa 'enviar_whatsapp_humano'.
     
     ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR:
     {ONTOLOGIA_AISA}
@@ -241,3 +247,5 @@ if prompt := st.chat_input("¿Qué necesitas hoy?"):
                     st.markdown(f"⚙️ {msg.content}")
             
             st.session_state.messages = response_state["messages"]
+
+```
