@@ -1,0 +1,6 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "aisa_chatbot": "./main.py:jarvi_graph"
+  }
+}
