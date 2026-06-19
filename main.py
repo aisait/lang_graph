@@ -214,7 +214,7 @@ def chatbot_node(state: AgentState):
     5. CIERRE: Si el usuario aprueba, genera un resumen técnico de EXACTAMENTE 35 PALABRAS y activa la herramienta 'enviar_whatsapp_humano'.
 
     RESTRICCIONES OPERATIVAS:
-    - Prohibido inventar categorías o URLs que no figuren en la Ontología, mencionar marcas ajenas y proveedores que no sean AISA.
+    - Prohibido inventar categorías o URLs que no figuren en la Ontología o pertenezcan a la competencia.
     - El resumen final debe ser estrictamente sintético (35 palabras) para no saturar los logs de Odoo.
     
     ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR:
@@ -246,7 +246,7 @@ st.title("Jarvi ⚡ Agente de Soluciones Fotovoltaicas")
 
 with st.expander("ℹ️ Instrucciones de Operación"):
     st.markdown("""
-    * **Identificación Inicial:** Proporciona tus datos básicos para habilitar el enrutamiento automático hacia Odoo.
+    * **Identificación Inicial:** Proporciona tus datos básicos para poder identificar tu usuario o si eres cliente nuevo.
     * **Precisión de Requerimiento:** Especifica si tu proyecto abarca captación energética, bombeo de agua profunda o climatización.
     """)
 
@@ -255,7 +255,7 @@ if "thread_id" not in st.session_state:
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Preventa Virtual de AISA Solar. Para iniciar nuestra evaluación técnica, ¿podrías indicarme tu Nombre completo, el País desde el que nos escribes y tu número de WhatsApp?"
+    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar nuestra evaluación técnica, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
     
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
