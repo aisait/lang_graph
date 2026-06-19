@@ -44,7 +44,7 @@ for msg in st.session_state.messages:
         st.markdown(msg.content)
 
 # 6. INTERACCIÓN
-if prompt := st.chat_input("¿Buscas una solución fotovoltaica?"):
+if prompt := st.chat_input("¿Qué sistema de AISA Solar necesitas: Agua, Energía, Respaldo o Climatización?"):
     st.session_state.messages.append(HumanMessage(content=prompt))
     with st.chat_message("user"):
         st.markdown(prompt)
