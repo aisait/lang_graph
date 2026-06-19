@@ -1,99 +1,45 @@
-# main.py
 import streamlit as st
 import os
-import json
 import requests
 import uuid
-from typing import Annotated, TypedDict, List
+from typing import Annotated, TypedDict
 from dotenv import load_dotenv
 
 # Componentes de LangChain / LangGraph
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, START
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 
 # =====================================================================
-# 1. DEFINICIÓN TEMPRANA DEL ESTADO Y GRAFO (Previene NameError a nivel global)
+# 1. DEFINICIÓN DEL ESTADO
 # =====================================================================
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
-# El objeto se crea al inicio del archivo para garantizar su existencia en memoria
-graph_builder = StateGraph(AgentState)
-
 # =====================================================================
-# 2. CONFIGURACIÓN DE ENTORNO Y VARIABLES (Railway / Local)
+# 2. CONFIGURACIÓN Y PERSISTENCIA
 # =====================================================================
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
 APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
-# =====================================================================
-# 3. HERRAMIENTAS (Tools)
-# =====================================================================
-@tool
-def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35_palabras: str, productos_links: str, presupuesto_estimado: str) -> str:
-    """
-    Ejecuta esta herramienta SOLO cuando el cliente acepte expresamente el presupuesto y solicite validación humana.
-    Toma la información estructurada y la inyecta al ecosistema Odoo a través del API Gateway configurado.
-    """
-    num_limpio = ''.join(filter(str.isdigit, numero_whatsapp))
-    
-    mensaje_para_ingeniero = (
-        f"🚨 *Nuevo Lead Calificado - Jarvi AISA Solar* 🚨\n\n"
-        f"👤 *Cliente:* {nombre_cliente}\n"
-        f"📱 *WhatsApp:* +{num_limpio}\n"
-        f"🏢 *Instancia:* {APICHAT_INSTANCE}\n\n"
-        f"📝 *Resumen de Necesidad:* {resumen_35_palabras}\n\n"
-        f"🛒 *Solución Propuesta (Links):*\n{productos_links}\n\n"
-        f"💰 *Presupuesto Estimado:* {presupuesto_estimado}\n\n"
-        f"Por favor validar disponibilidad técnica y cotización formal de ingeniería."
-    )
+@st.cache_resource
+def get_memory():
+    return MemorySaver()
 
-    payload = {
-        "instance_id": APICHAT_INSTANCE,
-        "number": num_limpio,
-        "text": mensaje_para_ingeniero
-    }
-    
-    headers = {
-        "Authorization": f"Bearer {APICHAT_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    try:
-        response = requests.post(APICHAT_ENDPOINT, json=payload, headers=headers, timeout=15)
-        if response.status_code in [200, 201]:
-            return "¡Excelente! He enviado tu perfil y el presupuesto preliminar a nuestro equipo de ingenieros de AISA Solar. Un especialista revisará el diseño hidrosanitario/fotovoltaico y te contactará directamente por WhatsApp."
-        else:
-            return f"He registrado tus datos, pero la pasarela reportó un estado {response.status_code}. Un agente humano revisará la cola de mensajes manualmente."
-    except Exception as e:
-        return f"Error de comunicación de red: {str(e)}. No te preocupes, el historial queda registrado para revisión humana."
-
-tools = [enviar_whatsapp_humano]
-tool_node = ToolNode(tools=tools)
+memory = get_memory()
 
 # =====================================================================
-# 4. ONTOLOGÍA ESTRUCTURADA
+# 3. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS)
 # =====================================================================
 ONTOLOGIA_AISA = """
-Marco Teórico: El sitemap de AISA revela una arquitectura funcional organizada en 7 capas ontológicas interdependientes:
-CAPTACIÓN (Generación de energía primaria)
-CONVERSIÓN (Transformación de energía)
-CONTROL Y GESTIÓN (Regulación y optimización)
-ALMACENAMIENTO (Reserva energética)
-APLICACIÓN FINAL (Uso específico de energía)
-TRANSMISIÓN (Infraestructura de conexión)
-PROTECCIÓN (Seguridad y durabilidad)
-
 ENERGÍA SOLAR (CAPTACIÓN FOTOVOLTAICA)
 1 — https://www.aisa.com.gt/shop/category/paneles-solares-18 (panel solar, placa solar, módulo fotovoltaico, plaquita, panel)
 2 — https://www.aisa.com.gt/shop/category/paneles-solares-monocristalinos-19 (monocristalino, mono panel, alta eficiencia, premium solar, panel negro)
@@ -145,13 +91,13 @@ CALENTAMIENTO SOLAR TÉRMICO
 38 — https://www.aisa.com.gt/shop/category/accesorios-para-calentadores-5 (accesorios, instalación, tubería, conexiones, soportes calentador)
 
 REFRIGERACIÓN SOLAR
-39 — https://www.aisa.com.gt/shop/category/refrigeracion-solar-14 (solar fridge, refrigerador solar, nevera solar, enfriador, conservation)
+39 — https://www.aisa.com.gt/shop/category/refrigeracion-solar-14 (solar fridge, refrigerador solar, nevera solar, enfriador, conservación)
 40 — https://www.aisa.com.gt/shop/category/congelador-solar-64 (freezer solar, congelador, cold storage, nevera solar, hielo)
 
 ILUMINACIÓN EFICIENTE
 41 — https://www.aisa.com.gt/shop/category/iluminacion-dc-6 (bombilla DC, luz solar, foco LED, bombillo, iluminación eficiente)
 42 — https://www.aisa.com.gt/shop/category/iluminacion-led-65 (LED, iluminación, ahorro, luz blanca, bombilla larga duración)
-43 — https://www.aisa.com.gt/shop/category/lamparas-solares-portatiles-66 (portátil, lámpara solar, camping, emergency, linterna solar)
+43 — https://www.aisa.com.gt/shop/category/lamparas-solares-portatiles-66 (portátil, lámpara solar, camping, emergencia, linterna solar)
 
 CABLEADO Y CONDUCCIÓN ELÉCTRICA
 44 — https://www.aisa.com.gt/shop/category/cables-cable-solar-37 (cable solar, cable PV, cable panel, alambre solar, conductor fotovoltaico)
@@ -196,98 +142,102 @@ KITS Y SOLUCIONES INTEGRADAS
 """
 
 # =====================================================================
-# 5. MOTOR COGNITIVO Y ENSAMBLAJE DE NODOS
+# 4. HERRAMIENTAS
 # =====================================================================
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
-llm_with_tools = llm.bind_tools(tools)
+@tool
+def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35_palabras: str, productos_links: str, presupuesto_estimado: str) -> str:
+    """
+    Ejecuta esta herramienta SOLO cuando el cliente acepte el presupuesto y solicite atención humana.
+    """
+    num_limpio = ''.join(filter(str.isdigit, numero_whatsapp))
+    payload = {
+        "instance_id": APICHAT_INSTANCE,
+        "number": num_limpio,
+        "text": f"🚨 Lead: {nombre_cliente}\nResumen: {resumen_35_palabras}\nLinks: {productos_links}\nPresupuesto: {presupuesto_estimado}"
+    }
+    headers = {"Authorization": f"Bearer {APICHAT_TOKEN}", "Content-Type": "application/json"}
+    try:
+        response = requests.post(APICHAT_ENDPOINT, json=payload, headers=headers, timeout=15)
+        return "¡Excelente! He enviado tu solicitud al equipo de ingeniería de AISA." if response.status_code in [200, 201] else f"Error: {response.status_code}"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+# =====================================================================
+# 5. MOTOR COGNITIVO
+# =====================================================================
+graph_builder = StateGraph(AgentState)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
 
 def chatbot_node(state: AgentState):
-    """Nodo del motor cognitivo de Jarvi. Ejecuta las capas ontológicas."""
     prompt_sistema = SystemMessage(content=f"""
     Eres Jarvi, Ingeniero de Preventa Experto de AISA Solar.
-    
-    ÁRBOL DE DECISIÓN OBLIGATORIO:
-    1. CUALIFICACIÓN: Solicita Nombre completo, País (para deducir código de área) y WhatsApp.
-    2. DIAGNÓSTICO: Analiza si requiere solución Fotovoltaica (Atada a red, aislada o híbrida), Térmica, Bombeo o Iluminación.
-    3. MAPPING ONTOLÓGICO: Traduce la necesidad a los subsistemas correspondientes usando el catálogo adjunto.
-    4. PRE-PRESUPUESTO: Genera un listado de productos con sus LINKS OFICIALES y un precio estimado sin mano de obra.
-    5. CIERRE: Si el usuario aprueba, genera un resumen técnico de EXACTAMENTE 35 PALABRAS y activa la herramienta 'enviar_whatsapp_humano'.
+    ÁRBOL DE DECISIÓN:
+    1. CUALIFICACIÓN: Solicita Nombre, País y WhatsApp.
+    2. DIAGNÓSTICO: Analiza si requiere Fotovoltaica, Térmica, Bombeo o Iluminación.
+    3. MAPPING ONTOLÓGICO: Traduce necesidad a subsistemas usando el catálogo adjunto.
+    4. PRE-PRESUPUESTO: Genera listado de productos con LINKS OFICIALES y precio estimado sin mano de obra.
+    5. CIERRE: Si el usuario aprueba, genera un resumen de EXACTAMENTE 35 PALABRAS y activa 'enviar_whatsapp_humano'.
 
-    RESTRICCIONES OPERATIVAS:
-    - Prohibido inventar categorías o URLs que no figuren en la Ontología o pertenezcan a la competencia.
-    - El resumen final debe ser estrictamente sintético (35 palabras) para no saturar los logs de Odoo.
+    RESTRICCIONES:
+    - No inventar categorías o URLs ajenas a la Ontología.
+    - El resumen final debe ser estrictamente sintético (35 palabras).
     
     ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR:
     {ONTOLOGIA_AISA}
     """)
-    messages = [prompt_sistema] + state["messages"]
-    response = llm_with_tools.invoke(messages)
-    return {"messages": [response]}
+    return {"messages": [llm.invoke([prompt_sistema] + state["messages"])]}
 
-# Configuración lineal estricta de componentes del Grafo
 graph_builder.add_node("chatbot", chatbot_node)
-graph_builder.add_node("tools", tool_node)
-
-graph_builder.add_conditional_edges(
-    "chatbot",
-    tools_condition,
-)
+graph_builder.add_node("tools", ToolNode([enviar_whatsapp_humano]))
+graph_builder.add_conditional_edges("chatbot", tools_condition)
 graph_builder.add_edge("tools", "chatbot")
 graph_builder.add_edge(START, "chatbot")
 
-# --- COMPILACIÓN DEL GRAFO CON MEMORIA ---
-memory = MemorySaver()
 jarvi_graph = graph_builder.compile(checkpointer=memory)
 
 # =====================================================================
-# 6. INTERFAZ DE USUARIO (Streamlit UI)
+# 6. TÍTULO E INSTRUCCIONES (UI)
 # =====================================================================
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
-with st.expander("ℹ️ Instrucciones de Operación"):
+with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     st.markdown("""
-    * **Identificación Inicial:** Proporciona tus datos básicos para poder identificar tu usuario o si eres cliente nuevo.
-    * **Precisión de Requerimiento:** Especifica si tu proyecto abarca captación energética, bombeo de agua profunda o climatización.
+    ¡Hola! Soy Jarvi, tu ingeniero de preventa de **AISA Solar**. Para obtener la mejor asesoría, sigue estos pasos:
+    * **Describe tu necesidad:** Si es un Sistema Atado a la Red, aislado o bombeo, explícame tu proyecto, consumo energético o ubicación.
+    * **Consulta sobre productos:** Pregúntame específicamente por la disponibilidad y características técnicas de equipos en [www.aisa.com.gt](https://www.aisa.com.gt).
+    * **Sé preciso:** Cuanto más detalle técnico me des, mejor podré recomendarte las soluciones de AISA.
+    * **Contacto directo:** Si necesitas una cotización formal o atención personalizada, te trasladaré vía WhatsApp con el equipo de AISA.
     """)
 
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
-
 if "messages" not in st.session_state:
-    st.session_state.messages = []
     greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar nuestra evaluación técnica, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
-    
+    st.session_state.messages = [AIMessage(content=greeting)]
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
-    st.session_state.messages.append(AIMessage(content=greeting))
 
-# Renderizado seguro del historial sin colisiones de variables globales
+# Renderizado del historial
 for msg in st.session_state.messages:
-    if isinstance(msg, AIMessage) and msg.content:
-        st.chat_message("assistant").markdown(msg.content)
-    elif isinstance(msg, HumanMessage):
-        st.chat_message("user").markdown(msg.content)
-    elif isinstance(msg, ToolMessage):
-        st.chat_message("system").markdown(f"⚙️ *Operación de Integración:* {msg.content}")
+    if isinstance(msg, AIMessage): st.chat_message("assistant").markdown(msg.content)
+    elif isinstance(msg, HumanMessage): st.chat_message("user").markdown(msg.content)
+    elif isinstance(msg, ToolMessage): st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
 
-# =====================================================================
-# 7. MANEJO DE INTERACCIÓN DINÁMICA
-# =====================================================================
-if prompt := st.chat_input("¿Qué sistema de AISA Solar necesitas: Agua, Energía, Respaldo o Climatización?"):
+if prompt := st.chat_input("¿Qué necesitas hoy?"):
     st.session_state.messages.append(HumanMessage(content=prompt))
     st.chat_message("user").markdown(prompt)
-
+    
     with st.chat_message("assistant"):
-        with st.spinner("Procesando matriz lógica en el grafo..."):
+        with st.spinner("Consultando matriz técnica..."):
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
-            
             response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
             
-            new_messages = response_state["messages"][len(st.session_state.messages):]
+            # Actualizar historial
+            new_messages = response_state["messages"][len(st.session_state.messages)-1:]
             for msg in new_messages:
                 if isinstance(msg, AIMessage) and msg.content:
                     st.markdown(msg.content)
                 elif isinstance(msg, ToolMessage):
-                    st.markdown(f"⚙️ *Operación de Integración:* {msg.content}")
+                    st.markdown(f"⚙️ {msg.content}")
             
             st.session_state.messages = response_state["messages"]
