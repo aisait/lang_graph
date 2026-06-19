@@ -236,8 +236,9 @@ st.title("Jarvi ⚡ Agente de Soluciones Fotovoltaicas")
 
 with st.expander("ℹ️ Instrucciones de Operación"):
     st.markdown("""
-    * **Identificación Inicial:** Proporciona tus datos básicos para habilitar el enrutamiento automático hacia Odoo.
-    * **Precisión de Requerimiento:** Especifica si tu proyecto abarca captación energética, bombeo de agua profunda o climatización.
+    * **Identifícate al iniciar:** Proporciona tu nombre completo, el país desde el que escribes y tu número de WhatsApp. Jarvi necesita estos datos obligatoriamente al principio para poder registrar tu perfil y habilitar el seguimiento técnico posterior.
+    * **Describe tu necesidad energética o hídrica:** Explica detalladamente qué tipo de solución buscas (por ejemplo, paneles solares para reducir la factura de luz, bomas para un pozo profundo o calentadores de agua comerciales). El asistente analizará el catálogo oficial y te devolverá un presupuesto preliminar junto con los enlaces directos de los productos que necesitas.
+    * **Confirma el envío para hablar con un asesor humano:** Si estás de acuerdo con la propuesta técnica y el costo estimado que te presenta Jarvi, dile explícitamente que deseas hablar con un especialista. El asistente activará la pasarela automática y enviará tu expediente técnico resumido directamente a un ingeniero de AISA Solar para darte atención personalizada por WhatsApp.
     """)
 
 if "messages" not in st.session_state:
