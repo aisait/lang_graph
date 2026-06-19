@@ -208,11 +208,11 @@ st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
 with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     st.markdown("""
-    ¡Hola! Soy Jarvi, tu ingeniero de preventa de **AISA Solar**. Para obtener la mejor asesoría, sigue estos pasos:
+    ¡Hola! Soy Jarvi, tu ingeniero de soluciones de **AISA Solar**. Para obtener la mejor asesoría, sigue estos pasos:
     * **Describe tu necesidad:** Si es un Sistema Atado a la Red, aislado o bombeo, explícame tu proyecto, consumo energético o ubicación.
     * **Consulta sobre productos:** Pregúntame específicamente por la disponibilidad y características técnicas de equipos en [www.aisa.com.gt](https://www.aisa.com.gt).
     * **Sé preciso:** Cuanto más detalle técnico me des, mejor podré recomendarte las soluciones de AISA.
-    * **Contacto directo:** Si necesitas una cotización formal o atención personalizada, te trasladaré vía WhatsApp con el equipo de AISA.
+    * **Contacto directo:** Si necesitas una cotización formal o atención personalizada, luego de definir bien tus necesidades técnicas te trasladaré vía WhatsApp con el especialista humano de AISA.
     """)
 
 if "thread_id" not in st.session_state:
