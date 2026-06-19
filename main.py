@@ -242,7 +242,7 @@ jarvi_graph = graph_builder.compile(checkpointer=memory)
 # =====================================================================
 # 6. INTERFAZ DE USUARIO (Streamlit UI)
 # =====================================================================
-st.title("Jarvi ⚡ Agente de Soluciones Fotovoltaicas")
+st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
 with st.expander("ℹ️ Instrucciones de Operación"):
     st.markdown("""
