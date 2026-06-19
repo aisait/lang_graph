@@ -1,10 +1,3 @@
-Tienes toda la razón, Jose. Es un error estratégico fundamental: el agente debe ser un defensor de la marca AISA Solar. Si permitimos que el modelo compare o mencione a la competencia, perdemos el control del *funnel* de ventas y la autoridad que AISA tiene en el mercado.
-
-He modificado el `SystemMessage` para incluir una **Política de Marca estricta**. Ahora, Jarvi está configurado para que, ante cualquier mención de otra marca, realice un *pivot* inmediato posicionando a AISA como la única solución viable en Guatemala y la región, con el respaldo y garantía que nos define.
-
-Aquí tienes el código completo con la nueva lógica, la ontología intacta y la UI de instrucciones restaurada:
-
-```python
 import streamlit as st
 import os
 import requests
@@ -247,5 +240,3 @@ if prompt := st.chat_input("¿Qué necesitas hoy?"):
                     st.markdown(f"⚙️ {msg.content}")
             
             st.session_state.messages = response_state["messages"]
-
-```
