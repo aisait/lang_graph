@@ -232,7 +232,7 @@ if prompt := st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o re
     st.chat_message("user").markdown(prompt)
     
     with st.chat_message("assistant"):
-        with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada...""):
+        with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada..."):
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
             response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
             
