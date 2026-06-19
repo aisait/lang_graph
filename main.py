@@ -15,7 +15,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 
-# 1. CONFIGURACIÓN DE ENTORNO Y VARIABLES (Railway / Local)
+# 1. CONFIGURACIÓN DE ENTORNO Y VARIABLES
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
@@ -23,16 +23,6 @@ APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
-
-# 1.1 Instanciar el guardián de memoria
-memory = MemorySaver()
-
-# 1.2 Compilar el grafo inyectando la memoria
-jarvi_graph = graph_builder.compile(checkpointer=memory)
-
-# 1.3 Al invocar el grafo en Streamlit, pásale un thread_id único del usuario
-config = {"configurable": {"thread_id": st.session_state.get("user_id", "sesion_unica_123")}}
-response_state = jarvi_graph.invoke({"messages": st.session_state.messages}, config)
 
 # 2. ONTOLOGÍA ESTRUCTURADA (Fuente Única de Verdad)
 ONTOLOGIA_AISA = """
@@ -159,10 +149,8 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
     Ejecuta esta herramienta SOLO cuando el cliente acepte expresamente el presupuesto y solicite validación humana.
     Toma la información estructurada y la inyecta al ecosistema Odoo a través del API Gateway configurado.
     """
-    # Limpieza estricta del formato de número telefónico
     num_limpio = ''.join(filter(str.isdigit, numero_whatsapp))
     
-    # Formateo semántico del payload estructurado
     mensaje_para_ingeniero = (
         f"🚨 *Nuevo Lead Calificado - Jarvi AISA Solar* 🚨\n\n"
         f"👤 *Cliente:* {nombre_cliente}\n"
@@ -186,9 +174,7 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
     }
 
     try:
-        # Petición activa de producción hacia el endpoint dinámico de Acruxlab/Odoo
         response = requests.post(APICHAT_ENDPOINT, json=payload, headers=headers, timeout=15)
-        
         if response.status_code in [200, 201]:
             return "¡Excelente! He enviado tu perfil y el presupuesto preliminar a nuestro equipo de ingenieros de AISA Solar. Un especialista revisará el diseño hidrosanitario/fotovoltaico y te contactará directamente por WhatsApp."
         else:
@@ -226,7 +212,7 @@ def chatbot_node(state: AgentState):
     response = llm_with_tools.invoke(messages)
     return {"messages": [response]}
 
-# 6. CONFIGURACIÓN DEL GRAFO (LangGraph)
+# 6. CONFIGURACIÓN DEL GRAFO Y MEMORIA (LangGraph)
 graph_builder = StateGraph(AgentState)
 graph_builder.add_node("chatbot", chatbot_node)
 
@@ -234,14 +220,13 @@ tool_node = ToolNode(tools=tools)
 graph_builder.add_node("tools", tool_node)
 
 from langgraph.prebuilt import tools_condition
-graph_builder.add_conditional_edges(
-    "chatbot",
-    tools_condition,
-)
+graph_builder.add_conditional_edges("chatbot", tools_condition)
 graph_builder.add_edge("tools", "chatbot")
 graph_builder.add_edge(START, "chatbot")
 
-jarvi_graph = graph_builder.compile()
+# INYECTAMOS LA MEMORIA AQUÍ (Después de construir el grafo, antes de la UI)
+memory = MemorySaver()
+jarvi_graph = graph_builder.compile(checkpointer=memory)
 
 # 7. INTERFAZ DE USUARIO (Streamlit UI)
 st.title("Jarvi ⚡ Agente de Soluciones AISA Solar")
@@ -253,12 +238,17 @@ with st.expander("ℹ️ Instrucciones de Operación"):
     * **Confirma el envío para hablar con un asesor humano:** Si estás de acuerdo con la propuesta técnica y el costo estimado que te presenta Jarvi, dile explícitamente que deseas hablar con un especialista. El asistente activará la pasarela automática y enviará tu expediente técnico resumido directamente a un ingeniero de AISA Solar para darte atención personalizada por WhatsApp.
     """)
 
+# Inicializamos el estado y el ID de sesión
 if "messages" not in st.session_state:
     st.session_state.messages = []
     greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Preventa Virtual de AISA Solar. Para iniciar nuestra evaluación técnica, ¿podrías indicarme tu Nombre completo, el País desde el que nos escribes y tu número de WhatsApp?"
     st.session_state.messages.append(AIMessage(content=greeting))
 
-# Renderizado del flujo conversacional estado-persitente
+if "thread_id" not in st.session_state:
+    # Genera un ID de sesión simple o usa uno por defecto
+    st.session_state.thread_id = "sesion_unica_123"
+
+# Renderizado del flujo conversacional
 for msg in st.session_state.messages:
     if isinstance(msg, AIMessage) and msg.content:
         st.chat_message("assistant").markdown(msg.content)
@@ -267,18 +257,27 @@ for msg in st.session_state.messages:
     elif isinstance(msg, ToolMessage):
         st.chat_message("system").markdown(f"⚙️ *Operación de Integración:* {msg.content}")
 
-# 8. MANEJO DE INTERACCIÓN
+# 8. MANEJO DE INTERACCIÓN (Con configuración de memoria inyectada)
 if prompt := st.chat_input("¿Qué sistema de AISA Solar necesitas: Agua, Energía, Respaldo o Climatización?"):
     st.session_state.messages.append(HumanMessage(content=prompt))
     st.chat_message("user").markdown(prompt)
 
     with st.chat_message("assistant"):
         with st.spinner("Procesando matriz lógica en el grafo..."):
-            response_state = jarvi_graph.invoke({"messages": st.session_state.messages})
+            
+            # Pasamos la configuración del thread_id aquí, justo al momento de invocar
+            config = {"configurable": {"thread_id": st.session_state.thread_id}}
+            
+            # Invocamos el grafo pasando SOLO la nueva entrada humana, 
+            # LangGraph se encarga de recordar el resto gracias a MemorySaver
+            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
+            
+            # Obtenemos solo los mensajes nuevos generados en esta iteración
             new_messages = response_state["messages"][len(st.session_state.messages):]
             
             for msg in new_messages:
                 if isinstance(msg, AIMessage) and msg.content:
                     st.markdown(msg.content)
             
+            # Actualizamos la UI con el estado global de mensajes del grafo
             st.session_state.messages = response_state["messages"]
