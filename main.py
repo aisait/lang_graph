@@ -216,6 +216,7 @@ def chatbot_node(state: AgentState):
 
     RESTRICCIONES OPERATIVAS:
     - Prohibido inventar categorías o URLs que no figuren en la Ontología.
+    - Prohibido listar, mecionar, nombrar o sugerir ninguna marca o empresa nacional extrenjera, proveedor o servico que no se AISA.
     - El resumen final debe ser estrictamente sintético (35 palabras) para no saturar los logs de Odoo.
     
     ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR:
