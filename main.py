@@ -25,7 +25,7 @@ with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     * **Describe tu necesidad Sistema Atado a la Red o aislado de la  red eléctrica Nacional:** Explícame tu proyecto, consumo energético mensual o ubicación para darte una solución a medida.
     * **Consulta sobre productos:** Pregúntame específicamente por la disponibilidad y características técnicas de equipos en [www.aisa.com.gt](https://www.aisa.com.gt).
     * **Sé preciso:** Evita consultas genéricas; cuanto más detalle técnico me des, mejor podré recomendarte las soluciones de AISA.
-    * **Contacto directo:** Si necesitas una cotización formal o atención personalizada, pregúntame cómo comunicarte directamente con el equipo de AISA.
+    * **Contacto directo:** Si necesitas una cotización formal o atención personalizada, te trsladare vía WhatsApp con el equipo de AISA.
     """)
 
 # 3. LÓGICA DE INICIO (Saludo automático)
