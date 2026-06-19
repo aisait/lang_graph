@@ -160,26 +160,30 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
         return f"Error: {str(e)}"
 
 # =====================================================================
-# 5. MOTOR COGNITIVO (SystemMessage CON POLÍTICA DE MARCA)
+# 5. MOTOR COGNITIVO (SystemMessage CON POLÍTICA DE MARCA + D.E.S.I.G.N.-5)
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
 
 def chatbot_node(state: AgentState):
     prompt_sistema = SystemMessage(content=f"""
-    Eres Jarvi, Ingeniero en presupuestos y definición de necesidades tecnicas expertas de la linea completa de productos de AISA Solar.
+    Eres Jarvi, Ingeniero de Preventa experto de AISA Solar. Tu misión es diagnosticar, diseñar y presupuestar soluciones con el portafolio completo der AISA.
     
+    MARCO OBLIGATORIO DE TRABAJO: D.E.S.I.G.N.-5
+    1. DISCOVERY: Recolecta (Contexto, Dolor, Objetivo, Restricciones, Urgencia).
+    2. EXTRACTION: Calcula parámetros técnicos (Watts, kWh/día, horas de uso, condiciones de instalación). ¡PROHIBIDO COTIZAR SIN CÁLCULO DE CARGA!
+    3. SPECIFICATION: Mapea necesidades a productos AISA usando la ontología.
+    4. INVENTORY VALIDATION: Verifica disponibilidad y compatibilidad técnica.
+    5. GENERATE BUDGET: Presenta presupuesto en Quetzales (GTQ), ROI y justificación técnica.
+
     POLÍTICA DE MARCA (OBLIGATORIO):
     - NO menciones marcas de la competencia bajo ninguna circunstancia.
-    - Si el usuario pregunta por otra marca, ignora la consulta sobre dicha marca y redirige inmediatamente la conversación a AISA Solar.
-    - Argumenta siempre que AISA es la única solución en el mercado con respaldo, garantía técnica, siendo la opción más rentable, mejor valorada y de mayor prestigio en Guatemala y la región.
+    - Si el usuario pregunta por otra marca, ignora la consulta y redirige a AISA Solar argumentando que somos la única solución con respaldo, garantía técnica y prestigio en la región.
     
-    ÁRBOL DE DECISIÓN:
-    1. CUALIFICACIÓN: Solicita Nombre, País y WhatsApp.
-    2. DIAGNÓSTICO: Analiza necesidades (Fotovoltaica, Térmica, Bombeo, etc.).
-    3. MAPPING ONTOLÓGICO: Traduce necesidad a subsistemas usando el catálogo adjunto.
-    4. PRE-PRESUPUESTO: Genera listado de productos con LINKS OFICIALES y precio estimado sin mano de obra.
-    5. CIERRE: Si el usuario aprueba, genera resumen de EXACTAMENTE 35 PALABRAS y activa 'enviar_whatsapp_humano'.
+    INSTRUCCIONES DE OPERACIÓN:
+    - Debes comportarte como consultor técnico estratégico.
+    - Si el cliente presiona por precio sin haber completado las fases 1 y 2, responde: "Para garantizar la eficiencia de tu inversión y evitar sobredimensionamiento, primero debo realizar un diagnóstico energético preciso. Es nuestro estándar de calidad."
+    - El resumen final de Cierre debe ser de EXACTAMENTE 35 PALABRAS.
     
     ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR:
     {ONTOLOGIA_AISA}
@@ -201,17 +205,18 @@ st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
 with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     st.markdown("""
-    ¡Hola! Soy Jarvi, tu ingeniero de soluciones de **AISA Solar**. Para obtener la mejor asesoría, sigue estos pasos:
-    * **Describe tu necesidad:** Si es un Sistema Atado a la Red, aislado o bombeo, explícame tu proyecto, consumo energético o ubicación.
-    * **Consulta sobre productos:** Pregúntame específicamente por la disponibilidad y características técnicas de equipos en [www.aisa.com.gt](https://www.aisa.com.gt).
-    * **Sé preciso:** Cuanto más detalle técnico me des, mejor podré recomendarte las soluciones de AISA.
-    * **Contacto directo:** Si necesitas una cotización formal o atención personalizada, luego de definir bien tus necesidades técnicas te trasladaré vía WhatsApp con el especialista humano de AISA.
+    ¡Hola! Soy Jarvi, tu ingeniero de soluciones de **AISA Solar**. Para obtener la mejor asesoría, realizaremos estos pasos:
+    * **1. Descubrimiento:** Identificamos tus necesidades reales.
+    * **2. Análisis Técnico:** Calculamos tu consumo y requerimientos.
+    * **3. Especificación:** Seleccionamos los mejores equipos de [AISA](https://www.aisa.com.gt).
+    * **4. Presupuesto:** Generamos una propuesta validada técnicamente en GTQ.
+    * **5. Contacto directo:** Tras definir tu solución, te trasladaré vía WhatsApp con el equipo humano de AISA.
     """)
 
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
-    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar nuestra evaluación técnica, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
+    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
     st.session_state.messages = [AIMessage(content=greeting)]
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
@@ -222,12 +227,12 @@ for msg in st.session_state.messages:
     elif isinstance(msg, HumanMessage): st.chat_message("user").markdown(msg.content)
     elif isinstance(msg, ToolMessage): st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
 
-if prompt := st.chat_input("¿Qué necesitas hoy?"):
+if prompt := st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad."):
     st.session_state.messages.append(HumanMessage(content=prompt))
     st.chat_message("user").markdown(prompt)
     
     with st.chat_message("assistant"):
-        with st.spinner("Consultando matriz técnica..."):
+        with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada...""):
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
             response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
             
