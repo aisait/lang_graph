@@ -1,7 +1,9 @@
+# main.py
 import streamlit as st
 import os
 import json
 import requests
+import uuid
 from typing import Annotated, TypedDict, List
 from dotenv import load_dotenv
 
@@ -11,7 +13,8 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, Tool
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
+from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.checkpoint.memory import MemorySaver
 
 # 1. CONFIGURACIÓN DE ENTORNO Y VARIABLES (Railway / Local)
 load_dotenv()
@@ -92,7 +95,7 @@ REFRIGERACIÓN SOLAR
 ILUMINACIÓN EFICIENTE
 41 — https://www.aisa.com.gt/shop/category/iluminacion-dc-6 (bombilla DC, luz solar, foco LED, bombillo, iluminación eficiente)
 42 — https://www.aisa.com.gt/shop/category/iluminacion-led-65 (LED, iluminación, ahorro, luz blanca, bombilla larga duración)
-43 — https://www.aisa.com.gt/shop/category/lamparas-solares-portatiles-66 (portátil, lámpara solar, camping, emergencia, linterna solar)
+43 — https://www.aisa.com.gt/shop/category/lamparas-solares-portatiles-66 (portátil, lámpara solar, camping, emergency, linterna solar)
 
 CABLEADO Y CONDUCCIÓN ELÉCTRICA
 44 — https://www.aisa.com.gt/shop/category/cables-cable-solar-37 (cable solar, cable PV, cable panel, alambre solar, conductor fotovoltaico)
@@ -147,10 +150,8 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
     Ejecuta esta herramienta SOLO cuando el cliente acepte expresamente el presupuesto y solicite validación humana.
     Toma la información estructurada y la inyecta al ecosistema Odoo a través del API Gateway configurado.
     """
-    # Limpieza estricta del formato de número telefónico
     num_limpio = ''.join(filter(str.isdigit, numero_whatsapp))
     
-    # Formateo semántico del payload estructurado
     mensaje_para_ingeniero = (
         f"🚨 *Nuevo Lead Calificado - Jarvi AISA Solar* 🚨\n\n"
         f"👤 *Cliente:* {nombre_cliente}\n"
@@ -174,7 +175,6 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
     }
 
     try:
-        # Petición activa de producción hacia el endpoint dinámico de Acruxlab/Odoo
         response = requests.post(APICHAT_ENDPOINT, json=payload, headers=headers, timeout=15)
         
         if response.status_code in [200, 201]:
@@ -203,7 +203,7 @@ def chatbot_node(state: AgentState):
     5. CIERRE: Si el usuario aprueba, genera un resumen técnico de EXACTAMENTE 35 PALABRAS y activa la herramienta 'enviar_whatsapp_humano'.
 
     RESTRICCIONES OPERATIVAS:
-    - Prohibido inventar categorías o URLs que no figuren en la Ontología, mensionar marcas ajenas y proveedores que no sean AISA.
+    - Prohibido inventar categorías o URLs que no figuren en la Ontología, mencionar marcas ajenas y proveedores que no sean AISA.
     - El resumen final debe ser estrictamente sintético (35 palabras) para no saturar los logs de Odoo.
     
     ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR:
@@ -220,7 +220,6 @@ graph_builder.add_node("chatbot", chatbot_node)
 tool_node = ToolNode(tools=tools)
 graph_builder.add_node("tools", tool_node)
 
-from langgraph.prebuilt import tools_condition
 graph_builder.add_conditional_edges(
     "chatbot",
     tools_condition,
@@ -228,28 +227,39 @@ graph_builder.add_conditional_edges(
 graph_builder.add_edge("tools", "chatbot")
 graph_builder.add_edge(START, "chatbot")
 
-jarvi_graph = graph_builder.compile()
+# --- COMPILACIÓN CON EL CHECKPOINTER DE MEMORIA INTERNA ---
+memory = MemorySaver()
+jarvi_graph = graph_builder.compile(checkpointer=memory)
 
 # 7. INTERFAZ DE USUARIO (Streamlit UI)
-st.title("Jarvi ⚡ Agente de Soluciones Fotovoltaicas")
+st.title("Jarvi ⚡ Agente de Soluciones de AISA")
 
 with st.expander("ℹ️ Instrucciones de Operación"):
     st.markdown("""
-    * **Identificación Inicial:** Proporciona tus datos básicos para habilitar el enrutamiento automático hacia Odoo.
+    * **Identificación Inicial:** Proporciona tus datos básicos para habilitar el enrutamiento automático hacia un especialista.
     * **Precisión de Requerimiento:** Especifica si tu proyecto abarca captación energética, bombeo de agua profunda o climatización.
     """)
 
+# Inicializar un ID de hilo persistente por sesión de navegador para LangGraph
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())
+
+# Inicialización y sincronización atómica del estado base de mensajes
 if "messages" not in st.session_state:
     st.session_state.messages = []
     greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Preventa Virtual de AISA Solar. Para iniciar nuestra evaluación técnica, ¿podrías indicarme tu Nombre completo, el País desde el que nos escribes y tu número de WhatsApp?"
+    
+    # Inyectar el saludo inicial directamente en la memoria persistente del Grafo
+    config = {"configurable": {"thread_id": st.session_state.thread_id}}
+    jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
     st.session_state.messages.append(AIMessage(content=greeting))
 
-# Renderizado del flujo conversacional estado-persitente
+# Renderizado del flujo conversacional histórico
 for msg in st.session_state.messages:
     if isinstance(msg, AIMessage) and msg.content:
         st.chat_message("assistant").markdown(msg.content)
     elif isinstance(msg, HumanMessage):
-        st.chat_message("user").markdown(msg.content)
+        st.chat_message("user").markdown(msg.content)  # Ajustado: extracción de contenido dinámico corregida
     elif isinstance(msg, ToolMessage):
         st.chat_message("system").markdown(f"⚙️ *Operación de Integración:* {msg.content}")
 
@@ -260,11 +270,17 @@ if prompt := st.chat_input("¿Qué sistema de AISA Solar necesitas: Agua, Energ�
 
     with st.chat_message("assistant"):
         with st.spinner("Procesando matriz lógica en el grafo..."):
-            response_state = jarvi_graph.invoke({"messages": st.session_state.messages})
-            new_messages = response_state["messages"][len(st.session_state.messages):]
+            config = {"configurable": {"thread_id": st.session_state.thread_id}}
             
+            # Pasamos únicamente el nuevo mensaje; LangGraph recupera el historial usando el checkpointer nativo
+            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
+            
+            # Sincronizamos los mensajes nuevos generados por el grafo de vuelta al estado de Streamlit
+            new_messages = response_state["messages"][len(st.session_state.messages):]
             for msg in new_messages:
                 if isinstance(msg, AIMessage) and msg.content:
                     st.markdown(msg.content)
+                elif isinstance(msg, ToolMessage):
+                    st.markdown(f"⚙️ *Operación de Integración:* {msg.content}")
             
             st.session_state.messages = response_state["messages"]
