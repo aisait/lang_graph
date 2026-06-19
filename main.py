@@ -30,7 +30,7 @@ with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
 
 # 3. LÓGICA DE INICIO (Saludo automático)
 if len(st.session_state.messages) == 1:
-    greeting = "¡Hola! Soy Jarvi de AISA Solar. ¿Buscas una solución fotovoltaica hoy? Cuéntame qué necesitas y te ayudaré con los servicios de AISA."
+    greeting = "¡Hola! 👋 Soy Jarvi de AISA Solar, tu asistente inteligente. Para brindarte una atención personalizada, ¿podrías compartirme tu Nombre y Apellido? Y, si deseas recibir por WhatsApp la información y recomendaciones que conversemos, también puedes compartirme tu número. Cuéntame qué necesitas hoy y con gusto te ayudaré a encontrar la mejor solución de AISA."
     st.session_state.messages.append(AIMessage(content=greeting))
 
 # 4. CONFIGURACIÓN
