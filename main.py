@@ -13,6 +13,7 @@ from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
+from langgraph.checkpoint.memory import MemorySaver
 
 # 1. CONFIGURACIÓN DE ENTORNO Y VARIABLES (Railway / Local)
 load_dotenv()
@@ -22,6 +23,16 @@ APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
+
+# 1.1 Instanciar el guardián de memoria
+memory = MemorySaver()
+
+# 1.2 Compilar el grafo inyectando la memoria
+jarvi_graph = graph_builder.compile(checkpointer=memory)
+
+# 1.3 Al invocar el grafo en Streamlit, pásale un thread_id único del usuario
+config = {"configurable": {"thread_id": st.session_state.get("user_id", "sesion_unica_123")}}
+response_state = jarvi_graph.invoke({"messages": st.session_state.messages}, config)
 
 # 2. ONTOLOGÍA ESTRUCTURADA (Fuente Única de Verdad)
 ONTOLOGIA_AISA = """
