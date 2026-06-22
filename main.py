@@ -6,7 +6,7 @@ import io
 from typing import Annotated, TypedDict
 from dotenv import load_dotenv
 
-# Dependencias añadidas para la capa de Voz Auditable
+# Dependencias de IA y Voz
 from openai import OpenAI
 from elevenlabs.client import ElevenLabs
 
@@ -32,10 +32,10 @@ APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
 APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
 
-# Inicialización segura de Clientes de Audio
+# Inicialización de Clientes de Audio
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 eleven_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
-VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # ID Base Configurable
+VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM") # Cambia por tu ID real
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
@@ -44,6 +44,12 @@ def get_memory():
     return MemorySaver()
 
 memory = get_memory()
+
+# Inicializar variables de estado para control de Audio y UI (EVITA EL LOOP)
+if "audio_key" not in st.session_state:
+    st.session_state.audio_key = 0  
+if "audio_responses" not in st.session_state:
+    st.session_state.audio_responses = {}  
 
 # =====================================================================
 # 3. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS)
@@ -97,7 +103,7 @@ CALENTAMIENTO SOLAR TÉRMICO
 35 — https://www.aisa.com.gt/shop/category/calentadores-solares-tubos-vacio-2 (tubos al vacío, vacío, alta temperatura, invierno, heat pipe)
 36 — https://www.aisa.com.gt/shop/category/calentadores-solares-placa-plana-3 (placa plana, colector plano, tropical, económico, tradicional)
 37 — https://www.aisa.com.gt/shop/category/termo-tanque-4 (termo, tanque, reservorio, agua caliente, deposito térmico)
-38 — https://www.aisa.com.gt/shop/category/accesorios-para-calentadores-5 (accesorios, installation, tubería, conexiones, soportes calentador)
+38 — https://www.aisa.com.gt/shop/category/accesorios-para-calentadores-5 (accesorios, instalación, tubería, conexiones, soportes calentador)
 
 REFRIGERACIÓN SOLAR
 39 — https://www.aisa.com.gt/shop/category/refrigeracion-solar-14 (solar fridge, refrigerador solar, nevera solar, enfriador, conservación)
@@ -151,7 +157,7 @@ KITS Y SOLUCIONES INTEGRADAS
 """
 
 # =====================================================================
-# 4. HERRAMIENTAS
+# 4. HERRAMIENTAS Y FUNCIONES DE AUDIO
 # =====================================================================
 @tool
 def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35_palabras: str, productos_links: str, presupuesto_estimado: str) -> str:
@@ -169,39 +175,26 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
     except Exception as e:
         return f"Error: {str(e)}"
 
-# =====================================================================
-# 5. MÓDULO AUXILIAR DE AUDIO (AUDITADO CONTRA ERROR 402)
-# =====================================================================
 def transcribir_audio_microfono(audio_bytes) -> str:
-    """Procesa el flujo binario del micrófono vía OpenAI Whisper."""
     try:
-        if not audio_bytes:
-            return ""
+        if not audio_bytes: return ""
         buffer = io.BytesIO(audio_bytes)
         buffer.name = "audio.wav"
         transcript = openai_client.audio.transcriptions.create(model="whisper-1", file=buffer)
         return transcript.text
     except Exception as e:
-        st.error(f"Error en transcripción Whisper: {e}")
+        st.error(f"Error al transcribir: {e}")
         return ""
 
 def generar_audio_jarvi(texto: str):
-    """Genera audio con protección anti-caídas (Error 402 Fallback Automático)."""
     try:
-        # Intento 1: Ejecución con la voz configurada por la empresa
         audio_stream = eleven_client.generate(text=texto, voice=VOICE_ID, model="eleven_multilingual_v2")
         return b"".join(audio_stream)
-    except Exception as api_err:
-        # Intento 2: Fallback inmediato a voz nativa preconfigurada de cortesía (Evita caída 402)
-        try:
-            audio_stream_fallback = eleven_client.generate(text=texto, voice="Rachel", model="eleven_multilingual_v2")
-            return b"".join(audio_stream_fallback)
-        except Exception:
-            # Tolerancia a fallos absoluta: no interrumpe el flujo principal si el proveedor de TTS cae
-            return None
+    except Exception:
+        return None
 
 # =====================================================================
-# 6. MOTOR COGNITIVO (SystemMessage CON POLÍTICA DE MARCA + D.E.S.I.G.N.-5)
+# 5. MOTOR COGNITIVO
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
@@ -238,7 +231,7 @@ graph_builder.add_edge(START, "chatbot")
 jarvi_graph = graph_builder.compile(checkpointer=memory)
 
 # =====================================================================
-# 7. TÍTULO E INSTRUCCIONES (UI)
+# 6. TÍTULO E INSTRUCCIONES (UI)
 # =====================================================================
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
@@ -260,47 +253,60 @@ if "messages" not in st.session_state:
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
 
-# Renderizado estructurado del historial conversacional
+# Renderizado del historial y Audio
 for idx, msg in enumerate(st.session_state.messages):
     if isinstance(msg, AIMessage):
         with st.chat_message("assistant"):
             st.markdown(msg.content)
-            # Agregar control de audio individual solo al último mensaje del asistente si es válido
-            if idx == len(st.session_state.messages) - 1 and msg.content:
-                audio_res = generar_audio_jarvi(msg.content)
-                if audio_res:
-                    st.audio(audio_res, format="audio/mp3")
+            if idx in st.session_state.audio_responses:
+                st.audio(st.session_state.audio_responses[idx], format="audio/mp3")
     elif isinstance(msg, HumanMessage): 
         st.chat_message("user").markdown(msg.content)
     elif isinstance(msg, ToolMessage): 
         st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
 
 # =====================================================================
-# 8. CAPA DE ENTRADA UNIFICADA (TEXTO + MICRÓFONO DISCRETO)
+# 7. MANEJO DE ENTRADA (AUDIO Y TEXTO)
 # =====================================================================
-# Disposición del micrófono de forma integrada justo encima del input de chat de forma sutil
-col_space, col_mic = st.columns([0.85, 0.15])
-with col_mic:
-    audio_data = st.audio_input("🎙️", label_visibility="collapsed")
+st.markdown("---")
 
-prompt_texto = st.chat_input("¿Qué solución necesitas? Paneles, Bombeo o Respaldo? Cuéntame ubicación y consumo actual")
+col1, col2 = st.columns([0.6, 0.4])
 
-# Resolver procedencia del Prompt
+with col1:
+    audio_data = st.audio_input("🎙️ Enviar nota de voz", key=f"mic_{st.session_state.audio_key}")
+with col2:
+    st.write("") 
+    st.write("") 
+    recibir_audio = st.checkbox("✅ Recibir respuesta con nota de voz", value=False)
+
+prompt_texto = st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad.")
+
 input_valido = None
-if audio_data:
+
+if audio_data is not None:
     with st.spinner("Transcribiendo mensaje de voz..."):
-        input_valido = transcribir_audio_microfono(audio_data.getvalue())
+        texto_transcrito = transcribir_audio_microfono(audio_data.getvalue())
+        if texto_transcrito:
+            input_valido = texto_transcrito
+            st.session_state.audio_key += 1 # Rompe el loop recargando el widget
+
 elif prompt_texto:
     input_valido = prompt_texto
 
-# Procesamiento reactivo dentro del grafo corporativo
 if input_valido:
     st.session_state.messages.append(HumanMessage(content=input_valido))
-    st.chat_message("user").markdown(input_valido)
     
-    with st.chat_message("assistant"):
-        with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada..."):
-            config = {"configurable": {"thread_id": st.session_state.thread_id}}
-            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=input_valido)]}, config)
-            st.session_state.messages = response_state["messages"]
-            st.rerun()
+    with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada..."):
+        config = {"configurable": {"thread_id": st.session_state.thread_id}}
+        response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=input_valido)]}, config)
+        st.session_state.messages = response_state["messages"]
+        
+        if recibir_audio:
+            with st.spinner("Generando respuesta en audio..."):
+                ultimo_mensaje = st.session_state.messages[-1].content
+                audio_bytes = generar_audio_jarvi(ultimo_mensaje)
+                if audio_bytes:
+                    idx_actual = len(st.session_state.messages) - 1
+                    st.session_state.audio_responses[idx_actual] = audio_bytes
+        
+        st.rerun() # Fuerza el repintado limpio de la UI
