@@ -226,8 +226,10 @@ if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "is_voice_mode" not in st.session_state:
     st.session_state.is_voice_mode = False
-if "last_processed_audio_size" not in st.session_state:
-    st.session_state.last_processed_audio_size = None # Usar el tamaño en lugar del objeto para evitar bloqueos
+
+# FIX: Nuevo contador para forzar la recreación del widget de audio
+if "audio_key_counter" not in st.session_state:
+    st.session_state.audio_key_counter = 0
 
 if "messages" not in st.session_state:
     greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
@@ -244,7 +246,13 @@ for msg in st.session_state.messages:
 # =====================================================================
 # LÓGICA DE CAPTURA DUAL: AUDIO Y TEXTO
 # =====================================================================
-audio_value = st.audio_input("🎤 Grabar mensaje de voz")
+
+# FIX: Inyectamos el contador en el key. Al cambiar el valor, Streamlit asume que es un componente nuevo y vacío.
+audio_value = st.audio_input(
+    "🎤 Grabar mensaje de voz", 
+    key=f"audio_input_{st.session_state.audio_key_counter}"
+)
+
 text_value = st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad.")
 
 prompt = None
@@ -253,10 +261,8 @@ if text_value:
     st.session_state.is_voice_mode = False
     prompt = text_value
 
-# FIX: Validamos por el tamaño del archivo en bytes para asegurar que Streamlit detecte la nueva grabación correctamente
-elif audio_value is not None and len(audio_value.getvalue()) != st.session_state.last_processed_audio_size:
+elif audio_value is not None:
     st.session_state.is_voice_mode = True
-    st.session_state.last_processed_audio_size = len(audio_value.getvalue())
     
     with st.spinner("Escuchando tu mensaje de voz..."):
         try:
@@ -266,6 +272,10 @@ elif audio_value is not None and len(audio_value.getvalue()) != st.session_state
                 file=audio_value
             )
             prompt = transcript.text
+            
+            # FIX: Incrementamos la llave aquí. En la próxima pasada natural del script, el componente estará en blanco.
+            st.session_state.audio_key_counter += 1
+            
         except Exception as e:
             st.error(f"Error al transcribir el audio: {e}")
 
