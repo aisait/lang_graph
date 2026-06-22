@@ -4,3 +4,4 @@ langchain-core
 langgraph
 python-dotenv
 requests
+elevenlabs==1.5.0
