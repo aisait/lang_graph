@@ -2,12 +2,8 @@ import streamlit as st
 import os
 import requests
 import uuid
-import io
+from typing import Annotated, TypedDict
 from dotenv import load_dotenv
-
-# Dependencias para Audio (No borres estas líneas)
-from openai import OpenAI
-from elevenlabs.client import ElevenLabs
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -27,11 +23,6 @@ class AgentState(TypedDict):
 # 2. CONFIGURACIÓN Y PERSISTENCIA
 # =====================================================================
 load_dotenv()
-# Inicialización de clientes para Audio
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-eleven_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
-VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
-
 APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
 APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
@@ -45,7 +36,7 @@ def get_memory():
 memory = get_memory()
 
 # =====================================================================
-# 3. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS) - [MANTENIDO INTACTO]
+# 3. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS)
 # =====================================================================
 ONTOLOGIA_AISA = """
 ENERGÍA SOLAR (CAPTACIÓN FOTOVOLTAICA)
@@ -150,7 +141,7 @@ KITS Y SOLUCIONES INTEGRADAS
 """
 
 # =====================================================================
-# 4. HERRAMIENTAS - [MANTENIDO INTACTO]
+# 4. HERRAMIENTAS
 # =====================================================================
 @tool
 def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35_palabras: str, productos_links: str, presupuesto_estimado: str) -> str:
@@ -169,7 +160,7 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
         return f"Error: {str(e)}"
 
 # =====================================================================
-# 5. MOTOR COGNITIVO - [MANTENIDO INTACTO]
+# 5. MOTOR COGNITIVO (SystemMessage CON POLÍTICA DE MARCA + D.E.S.I.G.N.-5)
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
@@ -206,7 +197,7 @@ graph_builder.add_edge(START, "chatbot")
 jarvi_graph = graph_builder.compile(checkpointer=memory)
 
 # =====================================================================
-# 6. TÍTULO E INSTRUCCIONES (UI) - [MANTENIDO INTACTO]
+# 6. TÍTULO E INSTRUCCIONES (UI)
 # =====================================================================
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
@@ -228,63 +219,23 @@ if "messages" not in st.session_state:
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
 
-# =====================================================================
-# NUEVA LÓGICA DE AUDIO (Inyectada al final)
-# =====================================================================
-if "audio_key" not in st.session_state:
-    st.session_state.audio_key = 0
-
-def transcribir_voz(audio_bytes):
-    buffer = io.BytesIO(audio_bytes)
-    buffer.name = "audio.wav"
-    transcript = openai_client.audio.transcriptions.create(model="whisper-1", file=buffer)
-    return transcript.text
-
-def generar_audio_respuesta(texto):
-    audio_stream = eleven_client.generate(text=texto, voice=VOICE_ID, model="eleven_multilingual_v2")
-    return b"".join(audio_stream)
-
 # Renderizado del historial
 for msg in st.session_state.messages:
     if isinstance(msg, AIMessage): st.chat_message("assistant").markdown(msg.content)
     elif isinstance(msg, HumanMessage): st.chat_message("user").markdown(msg.content)
     elif isinstance(msg, ToolMessage): st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
 
-# Entrada unificada
-col_audio, col_text = st.columns([0.2, 0.8])
-
-with col_audio:
-    audio_input = st.audio_input("🎙️ Nota de voz", key=f"audio_mic_{st.session_state.audio_key}")
-
-prompt_text = st.chat_input("¿Qué solución necesitas hoy?")
-
-input_final = None
-es_voz = False
-
-if audio_input:
-    with st.spinner("Transcribiendo..."):
-        input_final = transcribir_voz(audio_input.getvalue())
-        es_voz = True
-        st.session_state.audio_key += 1 # Resetear el widget de audio para evitar bucles
-elif prompt_text:
-    input_final = prompt_text
-
-if input_final:
-    st.session_state.messages.append(HumanMessage(content=input_final))
-    st.chat_message("user").markdown(input_final)
+if prompt := st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad."):
+    st.session_state.messages.append(HumanMessage(content=prompt))
+    st.chat_message("user").markdown(prompt)
     
     with st.chat_message("assistant"):
-        with st.spinner("Consultando en tiempo real..."):
+        with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada..."):
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
-            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=input_final)]}, config)
+            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
             
-            # Obtener respuesta final
-            respuesta_texto = response_state["messages"][-1].content
-            st.markdown(respuesta_texto)
-            
-            # Solo reproducir audio si la fuente fue voz
-            if es_voz:
-                audio_bytes = generar_audio_respuesta(respuesta_texto)
-                st.audio(audio_bytes, format="audio/mp3", autoplay=True)
-            
+            # Sincronización robusta con el estado del Grafo
             st.session_state.messages = response_state["messages"]
+            
+            # Forzamos recarga para renderizar todo el estado actualizado limpiamente
+            st.rerun()
