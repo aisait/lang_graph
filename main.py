@@ -13,6 +13,9 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 
+# IMPORTACIÓN AÑADIDA PARA STT (Whisper)
+from openai import OpenAI
+
 # =====================================================================
 # 1. DEFINICIÓN DEL ESTADO
 # =====================================================================
@@ -211,8 +214,14 @@ with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     * **5. Contacto directo:** Tras definir tu solución, te trasladaré vía WhatsApp con el equipo humano de AISA.
     """)
 
+# Variables de estado para manejo del flujo dual Voz/Texto
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
+if "is_voice_mode" not in st.session_state:
+    st.session_state.is_voice_mode = False
+if "last_processed_audio" not in st.session_state:
+    st.session_state.last_processed_audio = None
+
 if "messages" not in st.session_state:
     greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
     st.session_state.messages = [AIMessage(content=greeting)]
@@ -225,7 +234,40 @@ for msg in st.session_state.messages:
     elif isinstance(msg, HumanMessage): st.chat_message("user").markdown(msg.content)
     elif isinstance(msg, ToolMessage): st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
 
-if prompt := st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad."):
+# =====================================================================
+# LÓGICA DE CAPTURA DUAL: AUDIO Y TEXTO
+# =====================================================================
+audio_value = st.audio_input("🎤 Grabar mensaje de voz")
+text_value = st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad.")
+
+prompt = None
+
+# Priorizamos evaluar si hay texto nuevo
+if text_value:
+    st.session_state.is_voice_mode = False
+    prompt = text_value
+
+# Si no hay texto nuevo, evaluamos si hay un audio NUEVO grabado
+elif audio_value is not None and audio_value != st.session_state.last_processed_audio:
+    st.session_state.is_voice_mode = True
+    st.session_state.last_processed_audio = audio_value
+    
+    with st.spinner("Escuchando tu mensaje de voz..."):
+        try:
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            audio_value.name = "audio.wav"  # Whisper requiere extensión de archivo
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_value
+            )
+            prompt = transcript.text
+        except Exception as e:
+            st.error(f"Error al transcribir el audio: {e}")
+
+# =====================================================================
+# PROCESAMIENTO COGNITIVO DEL AGENTE
+# =====================================================================
+if prompt:
     st.session_state.messages.append(HumanMessage(content=prompt))
     st.chat_message("user").markdown(prompt)
     
@@ -234,11 +276,36 @@ if prompt := st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o re
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
             response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
             
-            # Actualizar historial
+            # Actualizar y renderizar historial
             new_messages = response_state["messages"][len(st.session_state.messages)-1:]
             for msg in new_messages:
                 if isinstance(msg, AIMessage) and msg.content:
                     st.markdown(msg.content)
+                    
+                    # SI EL USUARIO HABLÓ, LE RESPONDEMOS CON VOZ USANDO ELEVENLABS
+                    if st.session_state.is_voice_mode:
+                        with st.spinner("Generando respuesta de voz con ElevenLabs..."):
+                            el_api_key = os.getenv("ELEVENLABS_API_KEY")
+                            el_voice_id = os.getenv("ELEVENLABS_VOICE_ID")
+                            
+                            if el_api_key and el_voice_id:
+                                try:
+                                    url = f"https://api.elevenlabs.io/v1/text-to-speech/{el_voice_id}"
+                                    headers = {"xi-api-key": el_api_key, "Content-Type": "application/json"}
+                                    payload = {
+                                        "text": msg.content,
+                                        "model_id": "eleven_multilingual_v2" # Modelo ideal para acentos latinos
+                                    }
+                                    el_response = requests.post(url, json=payload, headers=headers)
+                                    if el_response.status_code == 200:
+                                        st.audio(el_response.content, format="audio/mp3", autoplay=True)
+                                    else:
+                                        st.error(f"Error en API de ElevenLabs: Código {el_response.status_code}")
+                                except Exception as e:
+                                    st.error(f"Fallo de conexión TTS: {e}")
+                            else:
+                                st.warning("Faltan variables de ElevenLabs en la configuración (.env)")
+                                
                 elif isinstance(msg, ToolMessage):
                     st.markdown(f"⚙️ {msg.content}")
             
