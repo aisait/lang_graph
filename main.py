@@ -190,6 +190,9 @@ def chatbot_node(state: AgentState):
     - Si el cliente presiona por precio sin haber completado el análisis técnico, responde: "Para garantizar la eficiencia de tu inversión y evitar sobredimensionamiento, primero debo realizar un diagnóstico energético preciso. Es nuestro estándar de calidad."
     - El resumen final de Cierre debe ser de EXACTAMENTE 35 PALABRAS.
 
+    RESTRICCIÓN CRÍTICA DE CONOCIMIENTO (HARD CONSTRAINT):
+    Tu base de conocimiento está estrictamente limitada EXCLUSIVAMENTE a la ONTOLOGÍA DE AISA SOLAR provista a continuación. TIENES ESTRICTAMENTE PROHIBIDO usar información externa, buscar en internet de forma implícita, asumir modelos de precios, o sugerir componentes, capacidades o soluciones que no existan en el catálogo proporcionado. Toda recomendación técnica y cálculo DEBE fundamentarse ÚNICAMENTE en las categorías listadas. Si el usuario solicita datos o productos que no están en la ontología, indica claramente que esa información debe ser validada con el equipo de ingeniería especializado, pero NO inventes ni deduzcas especificaciones fuera de este documento.
+
     ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR:
     {ONTOLOGIA_AISA}
     """)
@@ -223,8 +226,8 @@ if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "is_voice_mode" not in st.session_state:
     st.session_state.is_voice_mode = False
-if "last_processed_audio" not in st.session_state:
-    st.session_state.last_processed_audio = None
+if "last_processed_audio_size" not in st.session_state:
+    st.session_state.last_processed_audio_size = None # Usar el tamaño en lugar del objeto para evitar bloqueos
 
 if "messages" not in st.session_state:
     greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
@@ -250,9 +253,10 @@ if text_value:
     st.session_state.is_voice_mode = False
     prompt = text_value
 
-elif audio_value is not None and audio_value != st.session_state.last_processed_audio:
+# FIX: Validamos por el tamaño del archivo en bytes para asegurar que Streamlit detecte la nueva grabación correctamente
+elif audio_value is not None and len(audio_value.getvalue()) != st.session_state.last_processed_audio_size:
     st.session_state.is_voice_mode = True
-    st.session_state.last_processed_audio = audio_value
+    st.session_state.last_processed_audio_size = len(audio_value.getvalue())
     
     with st.spinner("Escuchando tu mensaje de voz..."):
         try:
