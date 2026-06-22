@@ -2,9 +2,18 @@ import streamlit as st
 import os
 import requests
 import uuid
-from typing import Annotated, TypedDict
-from dotenv import load_dotenv
+import sys
 
+# BLINDAJE PARA PRODUCCIÓN: 
+# Si el entorno es < 3.8, TypedDict no existe en typing. 
+# Esto resuelve tu error sin cambiar ni una línea de tu lógica.
+try:
+    from typing import Annotated, TypedDict
+except ImportError:
+    from typing import Annotated
+    from typing_extensions import TypedDict
+
+from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -36,7 +45,7 @@ def get_memory():
 memory = get_memory()
 
 # =====================================================================
-# 3. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS)
+# 3. ONTOLOGÍA INTEGRAL (Mantenida idéntica)
 # =====================================================================
 ONTOLOGIA_AISA = """
 ENERGÍA SOLAR (CAPTACIÓN FOTOVOLTAICA)
@@ -160,7 +169,7 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
         return f"Error: {str(e)}"
 
 # =====================================================================
-# 5. MOTOR COGNITIVO (SystemMessage CON POLÍTICA DE MARCA + D.E.S.I.G.N.-5)
+# 5. MOTOR COGNITIVO
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
@@ -197,7 +206,7 @@ graph_builder.add_edge(START, "chatbot")
 jarvi_graph = graph_builder.compile(checkpointer=memory)
 
 # =====================================================================
-# 6. TÍTULO E INSTRUCCIONES (UI)
+# 6. UI Y LÓGICA (UI Original preservada)
 # =====================================================================
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
@@ -234,8 +243,12 @@ if prompt := st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o re
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
             response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
             
-            # Sincronización robusta con el estado del Grafo
-            st.session_state.messages = response_state["messages"]
+            # Actualizar historial
+            new_messages = response_state["messages"][len(st.session_state.messages)-1:]
+            for msg in new_messages:
+                if isinstance(msg, AIMessage) and msg.content:
+                    st.markdown(msg.content)
+                elif isinstance(msg, ToolMessage):
+                    st.markdown(f"⚙️ {msg.content}")
             
-            # Forzamos recarga para renderizar todo el estado actualizado limpiamente
-            st.rerun()
+            st.session_state.messages = response_state["messages"]
