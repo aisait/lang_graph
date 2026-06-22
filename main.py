@@ -3,10 +3,9 @@ import os
 import requests
 import uuid
 import io
-from typing import Annotated, TypedDict
 from dotenv import load_dotenv
 
-# Dependencias adicionales validadas en requirements.txt
+# Dependencias para Audio (No borres estas líneas)
 from openai import OpenAI
 from elevenlabs.client import ElevenLabs
 
@@ -28,14 +27,14 @@ class AgentState(TypedDict):
 # 2. CONFIGURACIÓN Y PERSISTENCIA
 # =====================================================================
 load_dotenv()
-APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
-APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
-APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
-
-# Inicialización segura de clientes IA
+# Inicialización de clientes para Audio
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 eleven_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+
+APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
+APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
+APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
@@ -45,14 +44,8 @@ def get_memory():
 
 memory = get_memory()
 
-# Variables de estado críticas para el control del UI del micrófono y ahorro de API
-if "audio_key" not in st.session_state:
-    st.session_state.audio_key = 0  
-if "audio_responses" not in st.session_state:
-    st.session_state.audio_responses = {}  
-
 # =====================================================================
-# 3. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS)
+# 3. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS) - [MANTENIDO INTACTO]
 # =====================================================================
 ONTOLOGIA_AISA = """
 ENERGÍA SOLAR (CAPTACIÓN FOTOVOLTAICA)
@@ -157,7 +150,7 @@ KITS Y SOLUCIONES INTEGRADAS
 """
 
 # =====================================================================
-# 4. HERRAMIENTAS Y MÓDULOS DE AUDIO
+# 4. HERRAMIENTAS - [MANTENIDO INTACTO]
 # =====================================================================
 @tool
 def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35_palabras: str, productos_links: str, presupuesto_estimado: str) -> str:
@@ -175,32 +168,8 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
     except Exception as e:
         return f"Error: {str(e)}"
 
-def transcribir_audio_microfono(audio_bytes) -> str:
-    """Procesa el flujo de audio asegurando la transcripción de Whisper."""
-    try:
-        if not audio_bytes: return ""
-        buffer = io.BytesIO(audio_bytes)
-        buffer.name = "audio.wav"
-        transcript = openai_client.audio.transcriptions.create(model="whisper-1", file=buffer)
-        return transcript.text
-    except Exception as e:
-        st.error(f"Error al transcribir la nota de voz: {e}")
-        return ""
-
-def generar_audio_jarvi(texto: str):
-    """Fallback dinámico auditado: si falla el ID primario, conmuta a voz base nativa."""
-    try:
-        audio_stream = eleven_client.generate(text=texto, voice=VOICE_ID, model="eleven_multilingual_v2")
-        return b"".join(audio_stream)
-    except Exception:
-        try:
-            audio_stream_fallback = eleven_client.generate(text=texto, voice="Rachel", model="eleven_multilingual_v2")
-            return b"".join(audio_stream_fallback)
-        except Exception:
-            return None
-
 # =====================================================================
-# 5. MOTOR COGNITIVO (SystemMessage CON POLÍTICA DE MARCA + D.E.S.I.G.N.-5)
+# 5. MOTOR COGNITIVO - [MANTENIDO INTACTO]
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
@@ -237,7 +206,7 @@ graph_builder.add_edge(START, "chatbot")
 jarvi_graph = graph_builder.compile(checkpointer=memory)
 
 # =====================================================================
-# 6. TÍTULO E INSTRUCCIONES (UI)
+# 6. TÍTULO E INSTRUCCIONES (UI) - [MANTENIDO INTACTO]
 # =====================================================================
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
@@ -260,66 +229,62 @@ if "messages" not in st.session_state:
     jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
 
 # =====================================================================
-# 7. RENDERIZADO DEL HISTORIAL
+# NUEVA LÓGICA DE AUDIO (Inyectada al final)
 # =====================================================================
-for idx, msg in enumerate(st.session_state.messages):
-    if isinstance(msg, AIMessage): 
-        with st.chat_message("assistant"):
-            st.markdown(msg.content)
-            # Renderizado persistente del audio almacenado
-            if idx in st.session_state.audio_responses:
-                st.audio(st.session_state.audio_responses[idx], format="audio/mp3")
-    elif isinstance(msg, HumanMessage): 
-        st.chat_message("user").markdown(msg.content)
-    elif isinstance(msg, ToolMessage): 
-        st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
+if "audio_key" not in st.session_state:
+    st.session_state.audio_key = 0
 
-# =====================================================================
-# 8. SISTEMA UNIFICADO DE ENTRADA (Manejo de estados y Audio)
-# =====================================================================
-st.markdown("---")
-col_mic, col_check = st.columns([0.6, 0.4])
+def transcribir_voz(audio_bytes):
+    buffer = io.BytesIO(audio_bytes)
+    buffer.name = "audio.wav"
+    transcript = openai_client.audio.transcriptions.create(model="whisper-1", file=buffer)
+    return transcript.text
 
-with col_mic:
-    # La key dinámica rompe el bucle de Streamlit, limpiando el buffer del micrófono
-    audio_data = st.audio_input("🎙️ Enviar nota de voz", key=f"mic_{st.session_state.audio_key}")
-    
-with col_check:
-    st.write("") 
-    st.write("") 
-    recibir_audio = st.checkbox("✅ Recibir respuesta con nota de voz", value=False)
+def generar_audio_respuesta(texto):
+    audio_stream = eleven_client.generate(text=texto, voice=VOICE_ID, model="eleven_multilingual_v2")
+    return b"".join(audio_stream)
 
-prompt_texto = st.chat_input("¿Qué solución necesitas? Paneles, Bombeo o Respaldo? Cuéntame ubicación, consumo actual y si buscas ahorro, autonomía o continuidad.")
+# Renderizado del historial
+for msg in st.session_state.messages:
+    if isinstance(msg, AIMessage): st.chat_message("assistant").markdown(msg.content)
+    elif isinstance(msg, HumanMessage): st.chat_message("user").markdown(msg.content)
+    elif isinstance(msg, ToolMessage): st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
 
-input_valido = None
+# Entrada unificada
+col_audio, col_text = st.columns([0.2, 0.8])
 
-if audio_data is not None:
-    with st.spinner("Transcribiendo mensaje de voz..."):
-        texto_transcrito = transcribir_audio_microfono(audio_data.getvalue())
-        if texto_transcrito:
-            input_valido = texto_transcrito
-            st.session_state.audio_key += 1 # Resetea el widget de audio
+with col_audio:
+    audio_input = st.audio_input("🎙️ Nota de voz", key=f"audio_mic_{st.session_state.audio_key}")
 
-elif prompt_texto:
-    input_valido = prompt_texto
+prompt_text = st.chat_input("¿Qué solución necesitas hoy?")
 
-if input_valido:
-    st.session_state.messages.append(HumanMessage(content=input_valido))
-    st.chat_message("user").markdown(input_valido)
+input_final = None
+es_voz = False
+
+if audio_input:
+    with st.spinner("Transcribiendo..."):
+        input_final = transcribir_voz(audio_input.getvalue())
+        es_voz = True
+        st.session_state.audio_key += 1 # Resetear el widget de audio para evitar bucles
+elif prompt_text:
+    input_final = prompt_text
+
+if input_final:
+    st.session_state.messages.append(HumanMessage(content=input_final))
+    st.chat_message("user").markdown(input_final)
     
     with st.chat_message("assistant"):
-        with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada..."):
+        with st.spinner("Consultando en tiempo real..."):
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
-            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=input_valido)]}, config)
+            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=input_final)]}, config)
+            
+            # Obtener respuesta final
+            respuesta_texto = response_state["messages"][-1].content
+            st.markdown(respuesta_texto)
+            
+            # Solo reproducir audio si la fuente fue voz
+            if es_voz:
+                audio_bytes = generar_audio_respuesta(respuesta_texto)
+                st.audio(audio_bytes, format="audio/mp3", autoplay=True)
+            
             st.session_state.messages = response_state["messages"]
-            
-            # Sintetizar audio únicamente si el cliente lo autorizó en el Checkbox
-            if recibir_audio:
-                with st.spinner("Generando respuesta en audio..."):
-                    ultimo_mensaje = st.session_state.messages[-1].content
-                    audio_bytes = generar_audio_jarvi(ultimo_mensaje)
-                    if audio_bytes:
-                        idx_actual = len(st.session_state.messages) - 1
-                        st.session_state.audio_responses[idx_actual] = audio_bytes
-            
-            st.rerun()
