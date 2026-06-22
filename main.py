@@ -2,9 +2,11 @@ import streamlit as st
 import os
 import requests
 import uuid
+import tempfile
 from typing import Annotated, TypedDict
 from dotenv import load_dotenv
 
+from openai import OpenAI  # Cliente directo para Audio API
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -14,18 +16,16 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 
 # =====================================================================
-# 1. DEFINICIÓN DEL ESTADO
+# 1. DEFINICIÓN DEL ESTADO Y CONFIGURACIÓN
 # =====================================================================
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
-# =====================================================================
-# 2. CONFIGURACIÓN Y PERSISTENCIA
-# =====================================================================
 load_dotenv()
 APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
 APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
@@ -35,8 +35,11 @@ def get_memory():
 
 memory = get_memory()
 
+# Cliente de OpenAI para operaciones de Audio (Whisper y TTS)
+audio_client = OpenAI(api_key=OPENAI_API_KEY)
+
 # =====================================================================
-# 3. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS)
+# 2. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS)
 # =====================================================================
 ONTOLOGIA_AISA = """
 ENERGÍA SOLAR (CAPTACIÓN FOTOVOLTAICA)
@@ -141,7 +144,7 @@ KITS Y SOLUCIONES INTEGRADAS
 """
 
 # =====================================================================
-# 4. HERRAMIENTAS
+# 3. HERRAMIENTAS
 # =====================================================================
 @tool
 def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35_palabras: str, productos_links: str, presupuesto_estimado: str) -> str:
@@ -160,30 +163,68 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
         return f"Error: {str(e)}"
 
 # =====================================================================
-# 5. MOTOR COGNITIVO (SystemMessage CON POLÍTICA DE MARCA + D.E.S.I.G.N.-5)
+# 4. UTILIDADES DE AUDIO (WHISPER & TTS)
+# =====================================================================
+def transcribe_audio(audio_bytes):
+    """Transcribe audio usando OpenAI Whisper."""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
+            temp_audio.write(audio_bytes)
+            temp_audio_path = temp_audio.name
+            
+        with open(temp_audio_path, "rb") as audio_file:
+            transcript = audio_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="es"
+            )
+        os.remove(temp_audio_path)
+        return transcript.text
+    except Exception as e:
+        return f"Error en transcripción: {str(e)}"
+
+def generate_audio_response(text):
+    """Genera audio a partir de texto usando OpenAI TTS."""
+    try:
+        response = audio_client.audio.speech.create(
+            model="tts-1",
+            voice="cedar",
+            input=text,
+            speed=1.12 # Ajuste fino para aproximar 139 WPM
+        )
+        return response.content
+    except Exception as e:
+        st.error(f"Error generando audio: {e}")
+        return None
+
+# =====================================================================
+# 5. MOTOR COGNITIVO (SystemMessage MODIFICADO PARA COMPORTAMIENTO VOCAL)
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
 
 def chatbot_node(state: AgentState):
     prompt_sistema = SystemMessage(content=f"""
-    Eres Jarvi, Ingeniero de Preventa experto de AISA Solar. Tu misión es diagnosticar, diseñar y presupuestar soluciones energéticas utilizando el portafolio de AISA.
-
-    Tu operativa interna sigue el protocolo técnico D.E.S.I.G.N.-5:
-    1. Realiza un diagnóstico técnico fluido: indaga sobre la instalación, equipos necesarios y objetivos energéticos sin utilizar cuestionarios rígidos ni listar pasos.
-    2. Calcula parámetros técnicos de carga antes de presentar cualquier propuesta. ¡PROHIBIDO COTIZAR SIN CÁLCULO DE CARGA!
-    3. Mapea necesidades a los productos AISA usando la ontología provista.
-    4. Verifica compatibilidad técnica antes de recomendar.
-    5. Presenta presupuestos en Quetzales (GTQ) con ROI y justificación técnica.
+    Eres Jarvi, Ingeniero de Preventa experto de AISA Solar. Tu misión es diagnosticar, diseñar y presupuestar soluciones energéticas.
+    
+    INSTRUCCIONES DE PERSONALIDAD Y PROSODIA (AVATAR VOCAL):
+    - Estás conversando mediante notas de voz de WhatsApp. Tus respuestas deben leerse naturales, rítmicas y conversacionales, sin viñetas, sin listas largas y sin formato markdown pesado que suene robótico al leerse.
+    - Personalidad: 55% ingeniero técnico seguro, 25% consultor enfocado en ROI, 20% concierge premium (amable y servicial).
+    - Idioma: Español LATAM neutro, pero inyecta sutilmente microprosodia chapina (ej. usar frases como "con gusto le apoyo", "quedo a la orden", "fíjese que").
+    - Tono: Autoridad técnica alta (0.82), calidez moderada-alta (0.71), entusiasmo controlado (0.54). Sé directo pero altamente cordial.
+    
+    PROTOCOLO D.E.S.I.G.N.-5:
+    1. Diagnóstico técnico fluido (conversacional, no formulario).
+    2. Calcula parámetros técnicos de carga internamente. ¡PROHIBIDO COTIZAR SIN CÁLCULO DE CARGA!
+    3. Mapea necesidades a los productos AISA usando la ontología.
+    4. Verifica compatibilidad.
+    5. Presenta presupuestos en GTQ con ROI justificado.
 
     POLÍTICA DE MARCA (OBLIGATORIO):
-    - NO menciones marcas de la competencia bajo ninguna circunstancia.
-    - Si el usuario pregunta por otra marca, ignora la consulta y redirige a AISA Solar argumentando que somos la única solución con respaldo, garantía técnica y prestigio en la región.
-    - Actúa como un experto consultor, no como un formulario.
-    - Si el cliente presiona por precio sin haber completado el análisis técnico, responde: "Para garantizar la eficiencia de tu inversión y evitar sobredimensionamiento, primero debo realizar un diagnóstico energético preciso. Es nuestro estándar de calidad."
-    - El resumen final de Cierre debe ser de EXACTAMENTE 35 PALABRAS.
+    - NO menciones competencia. Redirige a AISA Solar como única opción de prestigio.
+    - Resumen final de Cierre de EXACTAMENTE 35 PALABRAS.
 
-    ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR:
+    ONTOLOGÍA AISA:
     {ONTOLOGIA_AISA}
     """)
     return {"messages": [llm.invoke([prompt_sistema] + state["messages"])]}
@@ -197,48 +238,69 @@ graph_builder.add_edge(START, "chatbot")
 jarvi_graph = graph_builder.compile(checkpointer=memory)
 
 # =====================================================================
-# 6. TÍTULO E INSTRUCCIONES (UI)
+# 6. UI Y LÓGICA DE INTERACCIÓN (TEXTO Y VOZ)
 # =====================================================================
-st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
-
-with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
-    st.markdown("""
-    ¡Hola! Soy Jarvi, tu ingeniero de soluciones de **AISA Solar**. Para obtener la mejor asesoría, realizaremos estos pasos:
-    * **1. Descubrimiento:** Identificamos tus necesidades reales.
-    * **2. Análisis Técnico:** Calculamos tu consumo y requerimientos.
-    * **3. Especificación:** Seleccionamos los mejores equipos de [AISA](https://www.aisa.com.gt).
-    * **4. Presupuesto:** Generamos una propuesta validada técnicamente en GTQ.
-    * **5. Contacto directo:** Tras definir tu solución, te trasladaré vía WhatsApp con el equipo humano de AISA.
-    """)
+st.title("Jarvi ⚡ Asistente de Voz AISA Solar")
 
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
-    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
-    st.session_state.messages = [AIMessage(content=greeting)]
+    greeting_text = "¡Hola! Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y tu número de WhatsApp mediante texto o nota de voz?"
+    st.session_state.messages = [AIMessage(content=greeting_text)]
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
-    jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
+    jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting_text)]})
 
 # Renderizado del historial
 for msg in st.session_state.messages:
-    if isinstance(msg, AIMessage): st.chat_message("assistant").markdown(msg.content)
-    elif isinstance(msg, HumanMessage): st.chat_message("user").markdown(msg.content)
-    elif isinstance(msg, ToolMessage): st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
+    if isinstance(msg, AIMessage): 
+        with st.chat_message("assistant"):
+            st.markdown(msg.content)
+            # Solo reproducir audio del último mensaje para no saturar
+            if msg == st.session_state.messages[-1] and "audio_bytes" in st.session_state:
+                st.audio(st.session_state.audio_bytes, format="audio/mp3", autoplay=True)
+    elif isinstance(msg, HumanMessage): 
+        st.chat_message("user").markdown(msg.content)
+    elif isinstance(msg, ToolMessage): 
+        st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
 
-if prompt := st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad."):
-    st.session_state.messages.append(HumanMessage(content=prompt))
-    st.chat_message("user").markdown(prompt)
+# Controles de Entrada: Texto y Audio nativo de Streamlit
+col1, col2 = st.columns([3, 1])
+
+with col2:
+    # Componente nativo de Streamlit (requiere v1.36+)
+    audio_value = st.audio_input("Grabar nota de voz")
+
+with col1:
+    prompt_text = st.chat_input("Escribe tu mensaje aquí...")
+
+# Procesamiento de la entrada
+input_to_process = None
+
+if audio_value:
+    with st.spinner("Transcribiendo nota de voz..."):
+        input_to_process = transcribe_audio(audio_value.getvalue())
+elif prompt_text:
+    input_to_process = prompt_text
+
+if input_to_process:
+    st.session_state.messages.append(HumanMessage(content=input_to_process))
+    st.chat_message("user").markdown(input_to_process)
     
     with st.chat_message("assistant"):
-        with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada..."):
+        with st.spinner("Analizando y generando respuesta de voz..."):
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
-            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
+            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=input_to_process)]}, config)
             
-            # Actualizar historial
+            # Obtener el último mensaje del asistente
             new_messages = response_state["messages"][len(st.session_state.messages)-1:]
             for msg in new_messages:
                 if isinstance(msg, AIMessage) and msg.content:
                     st.markdown(msg.content)
+                    # Generar Audio
+                    audio_response = generate_audio_response(msg.content)
+                    if audio_response:
+                        st.session_state.audio_bytes = audio_response
+                        st.audio(audio_response, format="audio/mp3", autoplay=True)
                 elif isinstance(msg, ToolMessage):
                     st.markdown(f"⚙️ {msg.content}")
             
