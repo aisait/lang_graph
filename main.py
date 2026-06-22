@@ -2,11 +2,9 @@ import streamlit as st
 import os
 import requests
 import uuid
-import tempfile
 from typing import Annotated, TypedDict
 from dotenv import load_dotenv
 
-from openai import OpenAI
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -15,6 +13,9 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 
+# --- Nueva importación para Audio ---
+from elevenlabs.client import ElevenLabs
+
 # =====================================================================
 # 1. DEFINICIÓN DEL ESTADO
 # =====================================================================
@@ -22,58 +23,31 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
 # =====================================================================
-# 2. CONFIGURACIÓN, AUDIO-CSS Y PERSISTENCIA
+# 2. CONFIGURACIÓN Y PERSISTENCIA
 # =====================================================================
 load_dotenv()
 APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
 APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
 
-st.set_page_config(page_title="Jarvi v2.1 ⚡ AISA Solar", page_icon="⚡", layout="wide")
-
-# CSS Inyectado para Dock de Entrada Minimalista y Control de Layout
-st.markdown("""
-    <style>
-    .block-container {
-        padding-bottom: 140px !important;
-    }
-    .whatsapp-dock {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        width: 100%;
-        background-color: #0e1117;
-        padding: 15px 20px 20px 20px;
-        border-top: 1px solid rgba(255, 255, 255, 0.1);
-        z-index: 1000;
-        display: flex;
-        flex-direction: column;
-    }
-    div[data-testid="column"] {
-        display: flex;
-        flex-direction: column;
-        justify-content: flex-end;
-    }
-    .stAudioInput {
-        min-height: 40px !important;
-        margin-bottom: 0px !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
 @st.cache_resource
 def get_memory():
     return MemorySaver()
 
 memory = get_memory()
-openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-# Registro de hashes de audio procesados para evitar loops infinitos tras st.rerun()
-if "processed_audio_hashes" not in st.session_state:
-    st.session_state.processed_audio_hashes = set()
+# Función auxiliar para ElevenLabs
+def generar_audio_elevenlabs(texto):
+    if not ELEVENLABS_API_KEY:
+        return None
+    client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+    audio = client.generate(text=texto, voice="Brian", model="eleven_multilingual_v2")
+    # Convertir generador a bytes
+    audio_data = b"".join(audio)
+    return audio_data
 
 # =====================================================================
 # 3. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS)
@@ -101,7 +75,7 @@ CONTROL Y GESTIÓN DE ENERGÍA
 15 — https://www.aisa.com.gt/shop/category/controlador-pwm-40 (PWM, controlador básico, regulador simple, económico, entry level)
 16 — https://www.aisa.com.gt/shop/category/medidores-de-energia-42 (medidor, monitor, wattmeter, energía, consumo)
 
-ALMACENAMIENTO ENERGÍTICO
+ALMACENAMIENTO ENERGÉTICO
 17 — https://www.aisa.com.gt/shop/category/baterias-solares-21 (batería solar, banco, acumulador, battery bank, reserva)
 18 — https://www.aisa.com.gt/shop/category/baterias-solares-bateria-de-gel-26 (gel battery, batería gel, sellada, AGM, acumulador sin mantenimiento)
 19 — https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-backup-105 (backup battery, UPS battery, respaldo, emergencia, batería de respaldo)
@@ -200,7 +174,7 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
         return f"Error: {str(e)}"
 
 # =====================================================================
-# 5. MOTOR COGNITIVO (SystemMessage CON POLÍTICA DE MARCA + D.E.S.I.G.N.-5)
+# 5. MOTOR COGNITIVO
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
@@ -237,43 +211,12 @@ graph_builder.add_edge(START, "chatbot")
 jarvi_graph = graph_builder.compile(checkpointer=memory)
 
 # =====================================================================
-# 6. CAPA DE AUDIO BAJO DEMANDA EXPLICITA
-# =====================================================================
-def transcribir_voz_whisper(audio_bytes) -> str:
-    if not openai_client: return "Error: Falta OPENAI_API_KEY"
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-            temp_file.write(audio_bytes)
-            temp_path = temp_file.name
-        with open(temp_path, "rb") as file_audio:
-            transcripcion = openai_client.audio.transcriptions.create(
-                model="whisper-1", file=file_audio, language="es"
-            )
-        os.remove(temp_path)
-        return transcripcion.text
-    except Exception as e:
-        return f"Error de Transcripción: {str(e)}"
-
-def generar_voz_elevenlabs(texto: str) -> bytes:
-    if not ELEVENLABS_API_KEY: return None
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
-    headers = {"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"}
-    payload = {"text": texto, "model_id": "eleven_multilingual_v2"}
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=15)
-        if response.status_code == 200:
-            return response.content
-    except Exception:
-        pass
-    return None
-
-# =====================================================================
-# 7. TÍTULO E INSTRUCCIONES (UI)
+# 6. TÍTULO E INSTRUCCIONES (UI)
 # =====================================================================
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
-with St.expander("ℹ️ ¿Cómo usar Jarvi?"):
-    St.markdown("""
+with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
+    st.markdown("""
     ¡Hola! Soy Jarvi, tu ingeniero de soluciones de **AISA Solar**. Para obtener la mejor asesoría, realizaremos estos pasos:
     * **1. Descubrimiento:** Identificamos tus necesidades reales.
     * **2. Análisis Técnico:** Calculamos tu consumo y requerimientos.
@@ -283,84 +226,47 @@ with St.expander("ℹ️ ¿Cómo usar Jarvi?"):
     """)
 
 if "thread_id" not in st.session_state:
-    St.session_state.thread_id = str(uuid.uuid4())
+    st.session_state.thread_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
-    Greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
-    St.session_state.messages = [AIMessage(content=greeting)]
-    Config = {"configurable": {"thread_id": st.session_state.thread_id}}
-    Jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
+    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
+    st.session_state.messages = [AIMessage(content=greeting)]
+    config = {"configurable": {"thread_id": st.session_state.thread_id}}
+    jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
 
-# Renderizado del historial de chat
-for msg in st.session_state.messages:
-    If isinstance(msg, AIMessage): 
-        With st.chat_message("assistant"):
-            St.markdown(msg.content)
-            If hasattr(msg, "audio_data") and msg.audio_data:
-                St.audio(msg.audio_data, format="audio/mp3")
-    Elif isinstance(msg, HumanMessage): 
-        St.chat_message("user").markdown(msg.content)
-    Elif isinstance(msg, ToolMessage): 
-        St.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
+# Renderizado del historial
+for i, msg in enumerate(st.session_state.messages):
+    if isinstance(msg, AIMessage):
+        st.chat_message("assistant").markdown(msg.content)
+        # Lógica para botón de audio
+        ultimos_mensajes_usuario = [m.content for m in st.session_state.messages if isinstance(m, HumanMessage)]
+        if ultimos_mensajes_usuario and any(keyword in ultimos_mensajes_usuario[-1].lower() for keyword in ["audio", "escuchar", "voz", "nota"]):
+            if st.button("🎧 Escuchar Respuesta", key=f"audio_btn_{i}"):
+                with st.spinner("Generando audio..."):
+                    audio_bytes = generar_audio_elevenlabs(msg.content)
+                    if audio_bytes:
+                        st.audio(audio_bytes, format="audio/mp3")
+                    else:
+                        st.error("Configura ELEVENLABS_API_KEY")
 
-# =====================================================================
-# 8. DOCK INFERIOR (ESTILO CHAT CON ENTRADA COMBINADA)
-# =====================================================================
-st.markdown('<div class="whatsapp-dock">', unsafe_allow_html=True)
-col_input, col_btn, col_mic = st.columns([7, 1.2, 1.8], gap="small", vertical_alignment="bottom")
+    elif isinstance(msg, HumanMessage): st.chat_message("user").markdown(msg.content)
+    elif isinstance(msg, ToolMessage): st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
 
-with col_input:
-    Texto_usuario = st.text_input("Mensaje", label_visibility="collapsed", placeholder="¿Qué solución necesitas hoy?", key="txt_in")
-
-with col_btn:
-    Btn_enviado = st.button("➔", use_container_width=True, type="primary", key="btn_send")
-
-with col_mic:
-    Audio_usuario = st.audio_input("Grabar", label_visibility="collapsed", key="audio_in")
-st.markdown('</div>', unsafe_allow_html=True)
-
-# =====================================================================
-# 9. PROCESAMIENTO PROTEGIDO DE ENTRADAS
-# =====================================================================
-prompt_final = None
-
-if btn_enviado and texto_usuario:
-    Prompt_final = texto_usuario
-elif audio_usuario:
-    Audio_bytes = audio_usuario.getvalue()
-    Audio_hash = hash(audio_bytes)
+if prompt := st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad."):
+    st.session_state.messages.append(HumanMessage(content=prompt))
+    st.chat_message("user").markdown(prompt)
     
-    # Validar que no se re-procese el mismo archivo de audio en la recarga de página
-    If audio_hash not in st.session_state.processed_audio_hashes:
-        St.session_state.processed_audio_hashes.add(audio_hash)
-        With st.spinner("Transcribiendo nota de voz..."):
-            Prompt_final = transcribir_voz_whisper(audio_bytes)
-
-# Procesamiento Cognitivo en LangGraph
-if prompt_final:
-    St.session_state.messages.append(HumanMessage(content=prompt_final))
-    St.chat_message("user").markdown(prompt_final)
-    
-    # Evaluación de la intención explícita de audio en el prompt
-    Solicita_voz = any(kw in prompt_final.lower() for kw in ["audio", "voz", "escuchar", "habla", "nota de voz", "cuéntame"])
-    
-    With st.chat_message("assistant"):
-        With st.spinner("Consultando con ingeniería especializada..."):
-            Config = {"configurable": {"thread_id": st.session_state.thread_id}}
-            Response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt_final)]}, config)
+    with st.chat_message("assistant"):
+        with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada..."):
+            config = {"configurable": {"thread_id": st.session_state.thread_id}}
+            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
             
-            New_messages = response_state["messages"][len(st.session_state.messages)-1:]
-            For msg in new_messages:
-                If isinstance(msg, AIMessage) and msg.content:
-                    St.markdown(msg.content)
-                    
-                    # Generación condicionada a petición del usuario
-                    If solicita_voz:
-                        Audio_mp3 = generar_voz_elevenlabs(msg.content)
-                        If audio_mp3:
-                            Msg.audio_data = audio_mp3
-                            St.audio(audio_mp3, format="audio/mp3")
+            # Actualizar historial
+            new_messages = response_state["messages"][len(st.session_state.messages)-1:]
+            for msg in new_messages:
+                if isinstance(msg, AIMessage) and msg.content:
+                    st.markdown(msg.content)
                 elif isinstance(msg, ToolMessage):
-                    St.markdown(f"⚙️ {msg.content}")
+                    st.markdown(f"⚙️ {msg.content}")
             
-            St.session_state.messages = response_state["messages"]
-            St.rerun()
+            st.session_state.messages = response_state["messages"]
+            st.rerun()
