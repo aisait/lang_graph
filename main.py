@@ -2,8 +2,13 @@ import streamlit as st
 import os
 import requests
 import uuid
+import io
 from typing import Annotated, TypedDict
 from dotenv import load_dotenv
+
+# Importaciones para IA
+from openai import OpenAI
+from elevenlabs.client import ElevenLabs
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -12,9 +17,6 @@ from langgraph.graph import StateGraph, START
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
-
-# --- Nueva importación para Audio ---
-from elevenlabs.client import ElevenLabs
 
 # =====================================================================
 # 1. DEFINICIÓN DEL ESTADO
@@ -26,10 +28,14 @@ class AgentState(TypedDict):
 # 2. CONFIGURACIÓN Y PERSISTENCIA
 # =====================================================================
 load_dotenv()
+# Inicialización de clientes para Voz
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+eleven_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+
 APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
 APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
@@ -38,16 +44,6 @@ def get_memory():
     return MemorySaver()
 
 memory = get_memory()
-
-# Función auxiliar para ElevenLabs
-def generar_audio_elevenlabs(texto):
-    if not ELEVENLABS_API_KEY:
-        return None
-    client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-    audio = client.generate(text=texto, voice="Brian", model="eleven_multilingual_v2")
-    # Convertir generador a bytes
-    audio_data = b"".join(audio)
-    return audio_data
 
 # =====================================================================
 # 3. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS)
@@ -174,7 +170,20 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
         return f"Error: {str(e)}"
 
 # =====================================================================
-# 5. MOTOR COGNITIVO
+# 5. FUNCIONES DE VOZ
+# =====================================================================
+def transcribir_audio(audio_bytes):
+    buffer = io.BytesIO(audio_bytes)
+    buffer.name = "audio.wav"
+    transcript = openai_client.audio.transcriptions.create(model="whisper-1", file=buffer)
+    return transcript.text
+
+def generar_audio_jarvi(texto):
+    audio = eleven_client.generate(text=texto, voice=VOICE_ID, model="eleven_multilingual_v2")
+    return b"".join(audio)
+
+# =====================================================================
+# 6. MOTOR COGNITIVO
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
@@ -211,7 +220,7 @@ graph_builder.add_edge(START, "chatbot")
 jarvi_graph = graph_builder.compile(checkpointer=memory)
 
 # =====================================================================
-# 6. TÍTULO E INSTRUCCIONES (UI)
+# 7. INTERFAZ Y UI (INCLUYENDO LÓGICA DE VOZ)
 # =====================================================================
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
@@ -225,6 +234,11 @@ with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     * **5. Contacto directo:** Tras definir tu solución, te trasladaré vía WhatsApp con el equipo humano de AISA.
     """)
 
+# Sidebar para voz
+with st.sidebar:
+    st.header("Entrada de Voz")
+    audio_file = st.audio_input("🎤 Mantén presionado para hablar")
+
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
@@ -233,40 +247,38 @@ if "messages" not in st.session_state:
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
 
+# Lógica de procesamiento unificada
+prompt = None
+if audio_file:
+    with st.spinner("Transcribiendo..."):
+        prompt = transcribir_audio(audio_file.getvalue())
+else:
+    prompt = st.chat_input("¿Qué solución necesitas hoy?")
+
 # Renderizado del historial
 for i, msg in enumerate(st.session_state.messages):
     if isinstance(msg, AIMessage):
-        st.chat_message("assistant").markdown(msg.content)
-        # Lógica para botón de audio
-        ultimos_mensajes_usuario = [m.content for m in st.session_state.messages if isinstance(m, HumanMessage)]
-        if ultimos_mensajes_usuario and any(keyword in ultimos_mensajes_usuario[-1].lower() for keyword in ["audio", "escuchar", "voz", "nota"]):
-            if st.button("🎧 Escuchar Respuesta", key=f"audio_btn_{i}"):
-                with st.spinner("Generando audio..."):
-                    audio_bytes = generar_audio_elevenlabs(msg.content)
-                    if audio_bytes:
-                        st.audio(audio_bytes, format="audio/mp3")
-                    else:
-                        st.error("Configura ELEVENLABS_API_KEY")
+        with st.chat_message("assistant"):
+            st.markdown(msg.content)
+            # Botón de reproducción de audio
+            if i == len(st.session_state.messages) - 1:
+                if st.button("🔊 Escuchar respuesta"):
+                    with st.spinner("Generando audio..."):
+                        audio_data = generar_audio_jarvi(msg.content)
+                        st.audio(audio_data, format="audio/mpeg", autoplay=True)
+    elif isinstance(msg, HumanMessage): 
+        st.chat_message("user").markdown(msg.content)
+    elif isinstance(msg, ToolMessage): 
+        st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
 
-    elif isinstance(msg, HumanMessage): st.chat_message("user").markdown(msg.content)
-    elif isinstance(msg, ToolMessage): st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
-
-if prompt := st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad."):
+# Ejecución del Grafo
+if prompt:
     st.session_state.messages.append(HumanMessage(content=prompt))
     st.chat_message("user").markdown(prompt)
     
     with st.chat_message("assistant"):
-        with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada..."):
+        with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería..."):
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
             response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
-            
-            # Actualizar historial
-            new_messages = response_state["messages"][len(st.session_state.messages)-1:]
-            for msg in new_messages:
-                if isinstance(msg, AIMessage) and msg.content:
-                    st.markdown(msg.content)
-                elif isinstance(msg, ToolMessage):
-                    st.markdown(f"⚙️ {msg.content}")
-            
             st.session_state.messages = response_state["messages"]
             st.rerun()
