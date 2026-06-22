@@ -2,11 +2,8 @@ import streamlit as st
 import os
 import requests
 import uuid
-from typing import Annotated, TypedDict, List, Union
+from typing import Annotated, TypedDict
 from dotenv import load_dotenv
-
-# Librería corregida para ElevenLabs v1.0+
-from elevenlabs.client import ElevenLabs
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -20,7 +17,7 @@ from langgraph.checkpoint.memory import MemorySaver
 # 1. DEFINICIÓN DEL ESTADO
 # =====================================================================
 class AgentState(TypedDict):
-    messages: Annotated[List[Union[HumanMessage, AIMessage, ToolMessage]], add_messages]
+    messages: Annotated[list, add_messages]
 
 # =====================================================================
 # 2. CONFIGURACIÓN Y PERSISTENCIA
@@ -29,8 +26,6 @@ load_dotenv()
 APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
 APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
-# Inicialización del cliente para evitar errores
-eleven_client = ElevenLabs(api_key=os.getenv("ELEVEN_API_KEY"))
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
@@ -41,7 +36,7 @@ def get_memory():
 memory = get_memory()
 
 # =====================================================================
-# 3. ONTOLOGÍA INTEGRAL (Mantenida intacta)
+# 3. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS)
 # =====================================================================
 ONTOLOGIA_AISA = """
 ENERGÍA SOLAR (CAPTACIÓN FOTOVOLTAICA)
@@ -146,17 +141,8 @@ KITS Y SOLUCIONES INTEGRADAS
 """
 
 # =====================================================================
-# 4. HERRAMIENTAS CORREGIDAS
+# 4. HERRAMIENTAS
 # =====================================================================
-def generar_audio_respuesta(texto_respuesta: str):
-    # Corrección: Sintaxis v1.0+ para ElevenLabs
-    audio_stream = eleven_client.text_to_speech.convert(
-        text=texto_respuesta,
-        voice_id="tu_voice_id", 
-        model_id="eleven_multilingual_v2"
-    )
-    return b"".join([chunk for chunk in audio_stream])
-
 @tool
 def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35_palabras: str, productos_links: str, presupuesto_estimado: str) -> str:
     """Ejecuta esta herramienta SOLO cuando el cliente acepte el presupuesto."""
@@ -174,7 +160,7 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
         return f"Error: {str(e)}"
 
 # =====================================================================
-# 5. MOTOR COGNITIVO
+# 5. MOTOR COGNITIVO (SystemMessage CON POLÍTICA DE MARCA + D.E.S.I.G.N.-5)
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
@@ -182,15 +168,19 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsa
 def chatbot_node(state: AgentState):
     prompt_sistema = SystemMessage(content=f"""
     Eres Jarvi, Ingeniero de Preventa experto de AISA Solar. Tu misión es diagnosticar, diseñar y presupuestar soluciones energéticas utilizando el portafolio de AISA.
+
     Tu operativa interna sigue el protocolo técnico D.E.S.I.G.N.-5:
-    1. Realiza un diagnóstico técnico fluido.
+    1. Realiza un diagnóstico técnico fluido: indaga sobre la instalación, equipos necesarios y objetivos energéticos sin utilizar cuestionarios rígidos ni listar pasos.
     2. Calcula parámetros técnicos de carga antes de presentar cualquier propuesta. ¡PROHIBIDO COTIZAR SIN CÁLCULO DE CARGA!
     3. Mapea necesidades a los productos AISA usando la ontología provista.
     4. Verifica compatibilidad técnica antes de recomendar.
     5. Presenta presupuestos en Quetzales (GTQ) con ROI y justificación técnica.
 
     POLÍTICA DE MARCA (OBLIGATORIO):
-    - NO menciones marcas de la competencia.
+    - NO menciones marcas de la competencia bajo ninguna circunstancia.
+    - Si el usuario pregunta por otra marca, ignora la consulta y redirige a AISA Solar argumentando que somos la única solución con respaldo, garantía técnica y prestigio en la región.
+    - Actúa como un experto consultor, no como un formulario.
+    - Si el cliente presiona por precio sin haber completado el análisis técnico, responde: "Para garantizar la eficiencia de tu inversión y evitar sobredimensionamiento, primero debo realizar un diagnóstico energético preciso. Es nuestro estándar de calidad."
     - El resumen final de Cierre debe ser de EXACTAMENTE 35 PALABRAS.
 
     ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR:
@@ -212,33 +202,44 @@ jarvi_graph = graph_builder.compile(checkpointer=memory)
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
 with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
-    st.markdown("¡Hola! Soy Jarvi, tu ingeniero de soluciones de **AISA Solar**.")
+    st.markdown("""
+    ¡Hola! Soy Jarvi, tu ingeniero de soluciones de **AISA Solar**. Para obtener la mejor asesoría, realizaremos estos pasos:
+    * **1. Descubrimiento:** Identificamos tus necesidades reales.
+    * **2. Análisis Técnico:** Calculamos tu consumo y requerimientos.
+    * **3. Especificación:** Seleccionamos los mejores equipos de [AISA](https://www.aisa.com.gt).
+    * **4. Presupuesto:** Generamos una propuesta validada técnicamente en GTQ.
+    * **5. Contacto directo:** Tras definir tu solución, te trasladaré vía WhatsApp con el equipo humano de AISA.
+    """)
 
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
-    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
+    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
     st.session_state.messages = [AIMessage(content=greeting)]
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
 
+# Renderizado del historial
 for msg in st.session_state.messages:
     if isinstance(msg, AIMessage): st.chat_message("assistant").markdown(msg.content)
     elif isinstance(msg, HumanMessage): st.chat_message("user").markdown(msg.content)
     elif isinstance(msg, ToolMessage): st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
 
-if prompt := st.chat_input("¿Qué solución necesitas?"):
+if prompt := st.chat_input("¿Qué solución necesitas? Paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad."):
     st.session_state.messages.append(HumanMessage(content=prompt))
     st.chat_message("user").markdown(prompt)
     
     with st.chat_message("assistant"):
-        with st.spinner("Consultando ingeniería..."):
+        with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada..."):
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
             response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
+            
+            # Actualizar historial
             new_messages = response_state["messages"][len(st.session_state.messages)-1:]
             for msg in new_messages:
                 if isinstance(msg, AIMessage) and msg.content:
                     st.markdown(msg.content)
                 elif isinstance(msg, ToolMessage):
                     st.markdown(f"⚙️ {msg.content}")
+            
             st.session_state.messages = response_state["messages"]
