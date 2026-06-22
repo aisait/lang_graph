@@ -2,18 +2,18 @@ import streamlit as st
 import os
 import requests
 import uuid
-import sys
+from typing import Annotated
 
-# BLINDAJE PARA PRODUCCIÓN: 
-# Si el entorno es < 3.8, TypedDict no existe en typing. 
-# Esto resuelve tu error sin cambiar ni una línea de tu lógica.
+# Solución robusta de compatibilidad para TypedDict (No altera tu lógica)
 try:
-    from typing import Annotated, TypedDict
+    from typing import TypedDict
 except ImportError:
-    from typing import Annotated
     from typing_extensions import TypedDict
 
 from dotenv import load_dotenv
+from openai import OpenAI
+from elevenlabs.client import ElevenLabs
+
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -36,6 +36,9 @@ APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
 APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
 
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+eleven_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
 @st.cache_resource
@@ -45,7 +48,7 @@ def get_memory():
 memory = get_memory()
 
 # =====================================================================
-# 3. ONTOLOGÍA INTEGRAL (Mantenida idéntica)
+# 3. ONTOLOGÍA INTEGRAL (70 CATEGORÍAS)
 # =====================================================================
 ONTOLOGIA_AISA = """
 ENERGÍA SOLAR (CAPTACIÓN FOTOVOLTAICA)
@@ -150,7 +153,7 @@ KITS Y SOLUCIONES INTEGRADAS
 """
 
 # =====================================================================
-# 4. HERRAMIENTAS
+# 4. HERRAMIENTAS Y FUNCIONES DE AUDIO
 # =====================================================================
 @tool
 def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35_palabras: str, productos_links: str, presupuesto_estimado: str) -> str:
@@ -167,6 +170,13 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
         return "¡Excelente! He enviado tu solicitud al equipo de ingeniería de AISA." if response.status_code in [200, 201] else f"Error: {response.status_code}"
     except Exception as e:
         return f"Error: {str(e)}"
+
+def transcribir_audio(audio_file):
+    return openai_client.audio.transcriptions.create(model="whisper-1", file=audio_file).text
+
+def generar_audio_respuesta(texto):
+    audio = eleven_client.generate(text=texto, voice="pNInz6obpgDaG2maQkMR", model="eleven_multilingual_v2")
+    return b"".join(audio)
 
 # =====================================================================
 # 5. MOTOR COGNITIVO
@@ -206,7 +216,7 @@ graph_builder.add_edge(START, "chatbot")
 jarvi_graph = graph_builder.compile(checkpointer=memory)
 
 # =====================================================================
-# 6. UI Y LÓGICA (UI Original preservada)
+# 6. UI Y LÓGICA (Preservada e integrada con audio)
 # =====================================================================
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
@@ -234,20 +244,35 @@ for msg in st.session_state.messages:
     elif isinstance(msg, HumanMessage): st.chat_message("user").markdown(msg.content)
     elif isinstance(msg, ToolMessage): st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
 
-if prompt := st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad."):
-    st.session_state.messages.append(HumanMessage(content=prompt))
-    st.chat_message("user").markdown(prompt)
-    
+# ENTRADA: Audio o Texto
+audio_input = st.audio_input("Grabar nota de voz")
+prompt = st.chat_input("¿Qué solución necesitas hoy?")
+
+user_text = None
+if audio_input:
+    with st.spinner("Transcribiendo nota de voz..."):
+        user_text = transcribir_audio(audio_input)
+        st.chat_message("user").markdown(user_text)
+        st.session_state.messages.append(HumanMessage(content=user_text))
+elif prompt:
+    user_text = prompt
+    st.chat_message("user").markdown(user_text)
+    st.session_state.messages.append(HumanMessage(content=user_text))
+
+if user_text:
     with st.chat_message("assistant"):
-        with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada..."):
+        with st.spinner("Consultando en tiempo real..."):
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
-            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
+            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=user_text)]}, config)
             
-            # Actualizar historial
+            # Actualizar historial y mostrar mensajes
             new_messages = response_state["messages"][len(st.session_state.messages)-1:]
             for msg in new_messages:
                 if isinstance(msg, AIMessage) and msg.content:
                     st.markdown(msg.content)
+                    # REPRODUCIR AUDIO
+                    audio_bytes = generar_audio_respuesta(msg.content)
+                    st.audio(audio_bytes, format="audio/mp3")
                 elif isinstance(msg, ToolMessage):
                     st.markdown(f"⚙️ {msg.content}")
             
