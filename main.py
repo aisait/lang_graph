@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import requests
 import uuid
+import io
 from typing import Annotated, TypedDict
 from dotenv import load_dotenv
 
@@ -13,7 +14,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 
-# IMPORTACIÓN AÑADIDA PARA STT (Whisper)
+# IMPORTACIÓN Y CLIENTE PARA OPENAI (Whisper + TTS)
 from openai import OpenAI
 
 # =====================================================================
@@ -29,6 +30,9 @@ load_dotenv()
 APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
 APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
+
+# Instancia global del cliente OpenAI
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
@@ -163,7 +167,7 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
         return f"Error: {str(e)}"
 
 # =====================================================================
-# 5. MOTOR COGNITIVO (SystemMessage CON POLÍTICA DE MARCA + D.E.S.I.G.N.-5)
+# 5. MOTOR COGNITIVO
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
@@ -214,7 +218,7 @@ with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     * **5. Contacto directo:** Tras definir tu solución, te trasladaré vía WhatsApp con el equipo humano de AISA.
     """)
 
-# Variables de estado para manejo del flujo dual Voz/Texto
+# Variables de estado
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "is_voice_mode" not in st.session_state:
@@ -242,20 +246,17 @@ text_value = st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o re
 
 prompt = None
 
-# Priorizamos evaluar si hay texto nuevo
 if text_value:
     st.session_state.is_voice_mode = False
     prompt = text_value
 
-# Si no hay texto nuevo, evaluamos si hay un audio NUEVO grabado
 elif audio_value is not None and audio_value != st.session_state.last_processed_audio:
     st.session_state.is_voice_mode = True
     st.session_state.last_processed_audio = audio_value
     
     with st.spinner("Escuchando tu mensaje de voz..."):
         try:
-            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            audio_value.name = "audio.wav"  # Whisper requiere extensión de archivo
+            audio_value.name = "audio.wav"
             transcript = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_value
@@ -282,29 +283,24 @@ if prompt:
                 if isinstance(msg, AIMessage) and msg.content:
                     st.markdown(msg.content)
                     
-                    # SI EL USUARIO HABLÓ, LE RESPONDEMOS CON VOZ USANDO ELEVENLABS
+                    # SI EL USUARIO HABLÓ, LE RESPONDEMOS CON VOZ USANDO OPENAI TTS
                     if st.session_state.is_voice_mode:
-                        with st.spinner("Generando respuesta de voz con ElevenLabs..."):
-                            el_api_key = os.getenv("ELEVENLABS_API_KEY")
-                            el_voice_id = os.getenv("ELEVENLABS_VOICE_ID")
-                            
-                            if el_api_key and el_voice_id:
-                                try:
-                                    url = f"https://api.elevenlabs.io/v1/text-to-speech/{el_voice_id}"
-                                    headers = {"xi-api-key": el_api_key, "Content-Type": "application/json"}
-                                    payload = {
-                                        "text": msg.content,
-                                        "model_id": "eleven_multilingual_v2" # Modelo ideal para acentos latinos
-                                    }
-                                    el_response = requests.post(url, json=payload, headers=headers)
-                                    if el_response.status_code == 200:
-                                        st.audio(el_response.content, format="audio/mp3", autoplay=True)
-                                    else:
-                                        st.error(f"Error en API de ElevenLabs: Código {el_response.status_code}")
-                                except Exception as e:
-                                    st.error(f"Fallo de conexión TTS: {e}")
-                            else:
-                                st.warning("Faltan variables de ElevenLabs en la configuración (.env)")
+                        with st.spinner("Generando respuesta de voz..."):
+                            try:
+                                speech_response = client.audio.speech.create(
+                                    model="tts-1",
+                                    voice="alloy",
+                                    input=msg.content
+                                )
+                                # Convertir stream a BytesIO para Streamlit
+                                audio_buffer = io.BytesIO()
+                                for chunk in speech_response.iter_bytes(chunk_size=4096):
+                                    audio_buffer.write(chunk)
+                                audio_buffer.seek(0)
+                                
+                                st.audio(audio_buffer, format="audio/mp3", autoplay=True)
+                            except Exception as e:
+                                st.error(f"Fallo en síntesis de voz: {e}")
                                 
                 elif isinstance(msg, ToolMessage):
                     st.markdown(f"⚙️ {msg.content}")
