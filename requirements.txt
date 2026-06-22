@@ -1,7 +1,7 @@
-streamlit
-langchain-openai
-langchain-core
-langgraph
-python-dotenv
-requests
-elevenlabs==1.5.0
+streamlit>=1.35.0
+langchain-openai>=0.1.0
+langgraph>=0.0.30
+python-dotenv>=1.0.1
+requests>=2.31.0
+openai>=1.20.0
+elevenlabs>=1.0.0
