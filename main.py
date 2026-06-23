@@ -3,6 +3,7 @@ import os
 import requests
 import uuid
 import io
+import json
 from typing import Annotated, TypedDict, Optional
 from dotenv import load_dotenv
 
@@ -38,6 +39,10 @@ load_dotenv()
 APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
 APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
+
+# Variables de entorno para la API de Gmail en Railway
+RAILWAY_GMAIL_ENDPOINT = os.getenv("RAILWAY_GMAIL_ENDPOINT", "https://tu-app-railway.up.railway.app/api/send-email")
+EMAIL_CONTROLLER = "joseardon@aisa.com.gt"
 
 # Instancia global del cliente OpenAI
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -105,7 +110,7 @@ CALENTAMIENTO SOLAR TÉRMICO
 38 — https://www.aisa.com.gt/shop/category/accesorios-para-calentadores-5 (accesorios, instalación, tubería, conexiones, soportes calentador)
 
 REFRIGERACIÓN SOLAR
-39 — https://www.aisa.com.gt/shop/category/refrigeracion-solar-14 (solar fridge, refrigerador solar, nevera solar, enfriador, conservation)
+39 — https://www.aisa.com.gt/shop/category/refrigeracion-solar-14 (solar fridge, refrigerador solar, nevera solar, enfriador, conservación)
 40 — https://www.aisa.com.gt/shop/category/congelador-solar-64 (freezer solar, congelador, cold storage, nevera solar, hielo)
 
 ILUMINACIÓN EFICIENTE
@@ -159,26 +164,62 @@ KITS Y SOLUCIONES INTEGRADAS
 # 4. HERRAMIENTAS
 # =====================================================================
 @tool
-def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35_palabras: str, productos_links: str, presupuesto_estimado: str) -> str:
-    """Ejecuta esta herramienta SOLO cuando el cliente acepte el presupuesto."""
+def procesar_oportunidad_backend(nombre_apellidos: str, departamento_municipio: str, consumo_actual: str, empresa_electrica: str, definicion_necesidad: str, listado_equipos_html: str, numero_whatsapp: str, resumen_18_palabras: str) -> str:
+    """
+    Ejecuta esta herramienta SOLO cuando el cliente acepte el pre-cálculo y el listado de equipos con links.
+    Se encarga de enviar el WhatsApp y el Email al Controller a través de las APIs configuradas.
+    """
     num_limpio = ''.join(filter(str.isdigit, numero_whatsapp))
-    payload = {
+    
+    # 1. Preparación del cuerpo del Correo Formal (HTML/Text) para Railway/Gmail API
+    cuerpo_correo = f"""
+    Oportunidad Generada:
+    - Cliente: {nombre_apellidos}
+    - Ubicación: {departamento_municipio}
+    - Consumo Actual: {consumo_actual}
+    - Empresa Eléctrica: {empresa_electrica}
+    - Definición de Necesidad: {definicion_necesidad}
+    
+    Equipos Sugeridos (Solo equipos principales):
+    {listado_equipos_html}
+    
+    Observaciones:
+    El cliente ha validado los links. Pendiente de cotizar materiales de instalación, mano de obra, fletes y viáticos por el Controller.
+    """
+    
+    # Llamada simulada a la API de Gmail en Railway
+    payload_email = {
+        "to": EMAIL_CONTROLLER,
+        "subject": resumen_18_palabras,
+        "body": cuerpo_correo
+    }
+    
+    headers_email = {"Content-Type": "application/json"}
+    
+    try:
+        # Petición a Railway (Gmail API endpoint)
+        resp_email = requests.post(RAILWAY_GMAIL_ENDPOINT, json=payload_email, headers=headers_email, timeout=15)
+    except Exception as e:
+        print(f"Advertencia: No se pudo conectar a Railway API - {e}")
+        
+    # 2. Notificación WhatsApp vía Odoo/Acruxlab
+    payload_wa = {
         "instance_id": APICHAT_INSTANCE,
         "number": num_limpio,
-        "text": f"🚨 Lead: {nombre_cliente}\nResumen: {resumen_35_palabras}\nLinks: {productos_links}\nPresupuesto: {presupuesto_estimado}"
+        "text": f"🚨 Lead Aprobado: {nombre_apellidos}\nAsunto: {resumen_18_palabras}\nUbicación: {departamento_municipio}\nEquipos:\n{listado_equipos_html}"
     }
-    headers = {"Authorization": f"Bearer {APICHAT_TOKEN}", "Content-Type": "application/json"}
+    headers_wa = {"Authorization": f"Bearer {APICHAT_TOKEN}", "Content-Type": "application/json"}
     try:
-        response = requests.post(APICHAT_ENDPOINT, json=payload, headers=headers, timeout=15)
-        return "¡Excelente! He enviado tu solicitud al equipo de ingeniería de AISA." if response.status_code in [200, 201] else f"Error: {response.status_code}"
+        response_wa = requests.post(APICHAT_ENDPOINT, json=payload_wa, headers=headers_wa, timeout=15)
+        return "¡Excelente! He enviado tu solicitud vía email y WhatsApp al equipo de ingeniería de AISA." if response_wa.status_code in [200, 201] else f"Error WA: {response_wa.status_code}"
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error general: {str(e)}"
 
 # =====================================================================
-# 5. MOTOR COGNITIVO (INTEGRACIÓN PROTOCOLO C)
+# 5. MOTOR COGNITIVO (INTEGRACIÓN PROTOCOLO C & NUEVA DIRECTRIZ)
 # =====================================================================
 graph_builder = StateGraph(AgentState)
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
 
 # NODO 1: CLASIFICADOR EPITEMOLÓGICO
 def clasificador_topologia_node(state: AgentState):
@@ -229,7 +270,7 @@ def validador_geolocalizacion_node(state: AgentState):
             
     return {"contexto_tecnico": ctx}
 
-# NODO 3: MOTOR JARVI (PROMPT DINÁMICO REFINADO)
+# NODO 3: MOTOR JARVI (PROMPT DINÁMICO REFINADO CON DIRECTRICES JD)
 def chatbot_node(state: AgentState):
     ctx = state.get("contexto_tecnico", {
         "ciudad": None, "empresa_electrica": None, 
@@ -247,32 +288,21 @@ def chatbot_node(state: AgentState):
     - Topología Tecnológica Solicitada: {ctx.get('topologia') if ctx.get('topologia') else 'PENDIENTE DE DETECTAR'}
 
     REGLA DE CONDUCCIÓN COGNITIVA ESTRICTA:
-    1. Si la Ubicación o la Topología aparecen como 'PENDIENTE', tu ÚNICA prioridad absoluta en tu respuesta es saludar cordialmente (si es el inicio) y definir de manera ultra concreta qué tipo de sistema busca (Atado, Aislado, Bombeo o Calentador) y en qué ciudad/municipio se instalará. NO cotices ni diseñes nada hasta tener estos datos.
-    2. Demuestra el dominio de mercado de AISA Solar desde el primer momento mencionando que, basados en su ubicación ({ctx.get('ciudad')}) y su distribuidora ({ctx.get('empresa_electrica')}), calcularemos su propuesta optimizada con la tarifa real de la región (GTQ {ctx.get('tarifa_base_gtq')}) utilizando los componentes de nuestra ontología.
-    3. Mapeo estricto: Para sistemas Atados a la Red usa EXCLUSIVAMENTE la Categoría 4. Para Aislados la Categoría 5. Para Bombeo las Categorías 23 a 32. Para Calentadores las Categorías 33 a 38. Queda estrictamente prohibido proponer un sistema híbrido si el cliente especificó que busca un sistema aislado o atado clásico.
+    1. A lo largo de la conversación, DEBES recopilar sutilmente la siguiente información del cliente antes de cerrar: Nombre y Apellido, Departamento y Municipio, Consumo actual (kWh o gasto mensual), Empresa eléctrica, y Definición exacta de su necesidad.
+    2. Al presentar los equipos, es OBLIGATORIO incluir el enlace oficial de la Ontología para que el cliente pueda verlo en línea y validarlo.
+    3. Cada línea de producto sugerido deberá llevar su código de producto (si es inferible), una pequeña descripción, el link oficial y un precio de lista estimado en Quetzales basado en la ontología. 
+    4. NO DEBES calcular totales de proyecto en la cotización. 
 
-    Tu operativa interna sigue el protocolo técnico D.E.S.I.G.N.-5:
-    1. Realiza un diagnóstico técnico fluido: indaga sobre la instalación, equipos necesarios y objetivos energéticos sin utilizar cuestionarios rígidos ni listar pasos.
-    2. Calcula parámetros técnicos de carga antes de presentar cualquier propuesta. ¡PROHIBIDO COTIZAR SIN CÁLCULO DE CARGA!
-    3. Mapea necesidades a los productos AISA usando la ontología provista.
-    4. Verifica compatibilidad técnica antes de recomendar.
-    5. Presenta presupuestos en Quetzales (GTQ) con ROI y justificación técnica.
-
-    PROTOCOLO OBLIGATORIO DE VALIDACIÓN TÉCNICA Y MITIGACIÓN DE ALUCINACIONES:
-    - ANCLAJE DE EQUIPAMIENTO: Al proponer la solución, debes listar de forma obligatoria el equipamiento sugerido, extrayendo la categoría ontológica exacta y describiendo sus características técnicas esenciales de forma explícita. Tienes estrictamente prohibido inventar marcas, modelos, potencias o capacidades que no se sustenten en la ontología de AISA.
-    - RESTRICCIÓN DE ALCANCE (SOLO EQUIPOS): Debes indicar con total claridad al usuario que la propuesta actual contempla ÚNICAMENTE el suministro de los equipos principales listados. Advierte explícitamente que los cálculos de materiales de instalación, mano de obra, fletes, viáticos y demás servicios añadidos serán procesados y sumados exclusivamente por el asesor humano en la siguiente fase.
-    - COMPROBACIÓN PRE-COTIZACIÓN: Inmediatamente después de presentar el desglose técnico de los equipos y su alcance, debes preguntar de forma obligatoria al cliente si tiene alguna duda, consulta o comentario sobre el equipamiento específico sugerido antes de proceder a la fase de cotización formal.
-    - DISPARO DEL FLUJO DE PRODUCCIÓN: Si el usuario confirma que está de acuerdo con los equipos descritos y no manifiesta dudas, procede de inmediato a realizar el resumen técnico de cierre (máximo 35 palabras) y activa la herramienta `enviar_whatsapp_humano` para transferir el lead al equipo de ingeniería humana, respetando el flujo definido en el código de producción.
+    NUEVAS DIRECTRICES DE JUNTA DIRECTIVA (MANDATORIO):
+    - EXENCIÓN DE RESPONSABILIDAD: Al presentar la propuesta con los links, DEBES incluir OBLIGATORIAMENTE Y TEXTUALMENTE el siguiente párrafo: 
+      "Esta propuesta contempla ÚNICAMENTE el suministro de los equipos principales listados. Los cálculos de materiales de instalación, mano de obra, fletes, viáticos y demás servicios añadidos serán procesados y sumados exclusivamente por el asesor humano en la siguiente fase."
+    - CIERRE Y DESPEDIDA: Tras la validación en línea del cliente, despídete agradeciendo e indícale claramente: "Recibirás contacto por WhatsApp de nuestro vendedor a la brevedad. En breve serás procesado y atendido por un operador."
+    - HERRAMIENTA FINAL: Utiliza la herramienta `procesar_oportunidad_backend` para notificar al Controller humano (joseardon@aisa.com.gt). El parámetro `resumen_18_palabras` DEBE SER EXACTAMENTE DE 18 PALABRAS resumiendo la solución técnica que necesita el cliente. 
 
     POLÍTICA DE MARCA (OBLIGATORIO):
     - NO menciones marcas de la competencia bajo ninguna circunstancia.
-    - Si el usuario pregunta por otra marca, ignora la consulta y redirige a AISA Solar argumentando que somos la única solución con respaldo, garantía técnica y prestigio en la región.
-    - Actúa como un expert consultor, no como un formulario.
-    - Si el cliente presiona por precio sin haber completado el análisis técnico, responde: "Para garantizar la eficiencia de tu inversión y evitar sobredimensionamiento, primero debo realizar un diagnóstico energético preciso. Es nuestro estándar de calidad."
-    - El resumen final de Cierre debe ser de EXACTAMENTE 35 PALABRAS.
-
-    RESTRICCIÓN CRÍTICA DE CONOCIMIENTO (HARD CONSTRAINT):
-    Tu base de conocimiento está estrictamente limitada EXCLUSIVAMENTE a la ONTOLOGÍA DE AISA SOLAR provista a continuación. TIENES ESTRICTAMENTE PROHIBIDO usar información externa, buscar en internet de forma implícita, asumir modelos de precios, o sugerir componentes, capacidades o soluciones que no existan en el catálogo proporcionado. Toda recomendación técnica y cálculo DEBE fundamentarse ÚNICAMENTE en las categorías listadas. Si el usuario solicita datos o productos que no están en la ontología, indica claramente que esa información debe ser validada con el equipo de ingeniería especializado, pero NO inventes ni deduzcas especificaciones fuera de este documento.
+    - Actúa como un experto consultor, no como un formulario.
+    - Tu base de conocimiento está estrictamente limitada EXCLUSIVAMENTE a la ONTOLOGÍA DE AISA SOLAR.
 
     ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR:
     {ONTOLOGIA_AISA}
@@ -283,7 +313,7 @@ def chatbot_node(state: AgentState):
 graph_builder.add_node("clasificador", clasificador_topologia_node)
 graph_builder.add_node("validador", validador_geolocalizacion_node)
 graph_builder.add_node("chatbot", chatbot_node)
-graph_builder.add_node("tools", ToolNode([enviar_whatsapp_humano]))
+graph_builder.add_node("tools", ToolNode([procesar_oportunidad_backend]))
 
 graph_builder.add_edge(START, "clasificador")
 graph_builder.add_edge("clasificador", "validador")
@@ -301,11 +331,11 @@ st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     st.markdown("""
     ¡Hola! Soy Jarvi, tu ingeniero de soluciones de **AISA Solar**. Para obtener la mejor asesoría, realizaremos estos pasos:
-    * **1. Descubrimiento:** Identificamos tus necesidades reales.
-    * **2. Análisis Técnico:** Calculamos tu consumo y requerimientos.
-    * **3. Especificación:** Seleccionamos los mejores equipos de [AISA](https://www.aisa.com.gt).
-    * **4. Presupuesto:** Generamos una propuesta validada técnicamente en GTQ.
-    * **5. Contacto directo:** Tras definir tu solución, te trasladaré vía WhatsApp con el equipo humano de AISA.
+    * **1. Descubrimiento:** Identificamos tus necesidades reales, ubicación y consumo.
+    * **2. Análisis Técnico:** Calculamos tus requerimientos base.
+    * **3. Especificación:** Seleccionamos equipos con **enlaces directos** para tu validación.
+    * **4. Presupuesto:** Generamos la lista base en GTQ (sin costos de instalación).
+    * **5. Contacto directo:** Tras definir tu solución, enviaré la solicitud formal a nuestro Controller y te contactaremos por WhatsApp.
     """)
 
 # Variables de estado
@@ -321,8 +351,8 @@ if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
 
 if "messages" not in st.session_state:
-    # Se añade la petición de Ciudad/Municipio para activar el Protocolo C
-    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y Apellido, número de WhatsApp y en qué ciudad o municipio te encuentras para mapear tu tarifa eléctrica?"
+    # Se añade la petición inicial alineada a recopilar la información solicitada
+    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y Apellido, tu número de WhatsApp, y en qué departamento/municipio te encuentras para perfilar tu tarifa eléctrica?"
     st.session_state.messages = [AIMessage(content=greeting)]
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     
@@ -354,7 +384,7 @@ audio_value = st.audio_input(
     key=f"audio_input_{st.session_state.audio_key_counter}"
 )
 
-text_value = st.chat_input("¿Qué solución necesitas? Paneles, Bombeo o Respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad.")
+text_value = st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad.")
 
 prompt = None
 
@@ -405,7 +435,6 @@ if prompt:
             
             # Actualizar y renderizar historial
             new_messages = response_state["messages"][len(st.session_state.messages)-1:]
-    
             for msg in new_messages:
                 if isinstance(msg, AIMessage) and msg.content:
                     st.markdown(msg.content)
@@ -423,7 +452,6 @@ if prompt:
                                 audio_buffer = io.BytesIO()
                                 for chunk in speech_response.iter_bytes(chunk_size=4096):
                                     audio_buffer.write(chunk)
-    
                                 audio_buffer.seek(0)
                                 
                                 st.audio(audio_buffer, format="audio/mp3", autoplay=True)
