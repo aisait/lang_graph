@@ -3,7 +3,7 @@ import os
 import requests
 import uuid
 import io
-from typing import Annotated, TypedDict
+from typing import Annotated, TypedDict, Optional
 from dotenv import load_dotenv
 
 from langchain_openai import ChatOpenAI
@@ -18,10 +18,18 @@ from langgraph.checkpoint.memory import MemorySaver
 from openai import OpenAI
 
 # =====================================================================
-# 1. DEFINICIÓN DEL ESTADO
+# 1. DEFINICIÓN DEL ESTADO (ACTUALIZADO - PROTOCOLO C)
 # =====================================================================
+class InferenciaEnergetica(TypedDict):
+    ciudad: Optional[str]
+    empresa_electrica: Optional[str]
+    tarifa_base_gtq: Optional[float]
+    topologia: Optional[str]
+    calculo_carga_completado: bool
+
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
+    contexto_tecnico: InferenciaEnergetica  # Estado Fuertemente Tipado
 
 # =====================================================================
 # 2. CONFIGURACIÓN Y PERSISTENCIA
@@ -167,14 +175,81 @@ def enviar_whatsapp_humano(nombre_cliente: str, numero_whatsapp: str, resumen_35
         return f"Error: {str(e)}"
 
 # =====================================================================
-# 5. MOTOR COGNITIVO
+# 5. MOTOR COGNITIVO (INTEGRACIÓN PROTOCOLO C)
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([enviar_whatsapp_humano])
 
+# NODO 1: CLASIFICADOR EPITEMOLÓGICO
+def clasificador_topologia_node(state: AgentState):
+    messages = state.get("messages", [])
+    ctx = state.get("contexto_tecnico", {
+        "ciudad": None, "empresa_electrica": None, 
+        "tarifa_base_gtq": None, "topologia": None, 
+        "calculo_carga_completado": False
+    })
+    
+    if not messages: return {"contexto_tecnico": ctx}
+    
+    ultimo_mensaje = messages[-1].content.lower()
+    
+    if not ctx.get("topologia"):
+        if any(k in ultimo_mensaje for k in ["red", "atado", "interconectado", "ahorro", "eegsa"]):
+            ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
+        elif any(k in ultimo_mensaje for k in ["aislado", "batería", "bateria", "finca", "autónomo", "off-grid"]):
+            ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
+        elif any(k in ultimo_mensaje for k in ["bomba", "pozo", "caudal", "riego", "sumergible"]):
+            ctx["topologia"] = "Bombeo Solar"
+        elif any(k in ultimo_mensaje for k in ["calentador", "boiler", "agua caliente", "tubo", "termo"]):
+            ctx["topologia"] = "Calentamiento Solar Térmico"
+
+    return {"contexto_tecnico": ctx}
+
+# NODO 2: VALIDADOR DE DOMINIO DE MERCADO
+def validador_geolocalizacion_node(state: AgentState):
+    ctx = state.get("contexto_tecnico", {
+        "ciudad": None, "empresa_electrica": None, 
+        "tarifa_base_gtq": None, "topologia": None, 
+        "calculo_carga_completado": False
+    })
+    messages = state.get("messages", [])
+    if not messages: return {"contexto_tecnico": ctx}
+    
+    ultimo_mensaje = messages[-1].content.lower()
+    
+    if not ctx.get("ciudad"):
+        if any(k in ultimo_mensaje for k in ["guatemala", "mixco", "capital", "ciudad", "villa nueva", "petapa"]):
+            ctx["ciudad"] = "Guatemala Metropolitana"
+            ctx["empresa_electrica"] = "EEGSA"
+            ctx["tarifa_base_gtq"] = 1.45
+        elif any(k in ultimo_mensaje for k in ["quetzaltenango", "xela", "coban", "escuintla", "petén", "peten", "zacapa", "chiquimula", "jutiapa", "izabal"]):
+            ctx["ciudad"] = "Departamentos (Interior)"
+            ctx["empresa_electrica"] = "ENERGUATE (DEOCSA/DEORSA)"
+            ctx["tarifa_base_gtq"] = 1.95
+            
+    return {"contexto_tecnico": ctx}
+
+# NODO 3: MOTOR JARVI (PROMPT DINÁMICO)
 def chatbot_node(state: AgentState):
+    ctx = state.get("contexto_tecnico", {
+        "ciudad": None, "empresa_electrica": None, 
+        "tarifa_base_gtq": None, "topologia": None, 
+        "calculo_carga_completado": False
+    })
+    
     prompt_sistema = SystemMessage(content=f"""
     Eres Jarvi, Ingeniero de Preventa experto de AISA Solar. Tu misión es diagnosticar, diseñar y presupuestar soluciones energéticas utilizando el portafolio de AISA.
+
+    [DATOS FIRMADOS Y VALIDADOS EN PRODUCCIÓN (PROTOCOLO C)]:
+    - Ubicación del Proyecto: {ctx.get('ciudad') if ctx.get('ciudad') else 'PENDIENTE DE VALIDAR'}
+    - Distribuidora del Servicio: {ctx.get('empresa_electrica') if ctx.get('empresa_electrica') else 'PENDIENTE DE VALIDAR'}
+    - Tarifa indexada al sistema: GTQ {ctx.get('tarifa_base_gtq') if ctx.get('tarifa_base_gtq') else 'PENDIENTE'} /kWh
+    - Topología Tecnológica Solicitada: {ctx.get('topologia') if ctx.get('topologia') else 'PENDIENTE DE DETECTAR'}
+
+    REGLA DE CONDUCCIÓN COGNITIVA ESTRICTA:
+    1. Si la Ubicación o la Topología aparecen como 'PENDIENTE', tu ÚNICA prioridad absoluta en tu respuesta es saludar cordialmente (si es el inicio) y definir de manera ultra concreta qué tipo de sistema busca (Atado, Aislado, Bombeo o Calentador) y en qué ciudad/municipio se instalará. NO cotices ni diseñes nada hasta tener estos datos.
+    2. Demuestra el dominio de mercado de AISA Solar desde el primer momento mencionando que, basados en su ubicación ({ctx.get('ciudad')}) y su distribuidora ({ctx.get('empresa_electrica')}), calcularemos su propuesta optimizada con la tarifa real de la región (GTQ {ctx.get('tarifa_base_gtq')}) utilizando los componentes de nuestra ontología.
+    3. Mapeo estricto: Para sistemas Atados a la Red usa EXCLUSIVAMENTE la Categoría 4. Para Aislados la Categoría 5. Para Bombeo las Categorías 23 a 32. Para Calentadores las Categorías 33 a 38. Queda estrictamente prohibido proponer un sistema híbrido si el cliente especificó que busca un sistema aislado o atado clásico.
 
     Tu operativa interna sigue el protocolo técnico D.E.S.I.G.N.-5:
     1. Realiza un diagnóstico técnico fluido: indaga sobre la instalación, equipos necesarios y objetivos energéticos sin utilizar cuestionarios rígidos ni listar pasos.
@@ -198,11 +273,17 @@ def chatbot_node(state: AgentState):
     """)
     return {"messages": [llm.invoke([prompt_sistema] + state["messages"])]}
 
+# ENSAMBLAJE DEL GRAFO DIRIGIDO
+graph_builder.add_node("clasificador", clasificador_topologia_node)
+graph_builder.add_node("validador", validador_geolocalizacion_node)
 graph_builder.add_node("chatbot", chatbot_node)
 graph_builder.add_node("tools", ToolNode([enviar_whatsapp_humano]))
+
+graph_builder.add_edge(START, "clasificador")
+graph_builder.add_edge("clasificador", "validador")
+graph_builder.add_edge("validador", "chatbot")
 graph_builder.add_conditional_edges("chatbot", tools_condition)
 graph_builder.add_edge("tools", "chatbot")
-graph_builder.add_edge(START, "chatbot")
 
 jarvi_graph = graph_builder.compile(checkpointer=memory)
 
@@ -234,10 +315,23 @@ if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
 
 if "messages" not in st.session_state:
-    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
+    # Se añade la petición de Ciudad/Municipio para activar el Protocolo C
+    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre, número de WhatsApp y en qué ciudad o municipio te encuentras para mapear tu tarifa eléctrica?"
     st.session_state.messages = [AIMessage(content=greeting)]
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
-    jarvi_graph.update_state(config, {"messages": [AIMessage(content=greeting)]})
+    
+    # Se inyecta el Contexto Técnico en blanco desde la sesión inicial
+    estado_inicial = {
+        "messages": [AIMessage(content=greeting)],
+        "contexto_tecnico": {
+            "ciudad": None,
+            "empresa_electrica": None,
+            "tarifa_base_gtq": None,
+            "topologia": None,
+            "calculo_carga_completado": False
+        }
+    }
+    jarvi_graph.update_state(config, estado_inicial)
 
 # Renderizado del historial
 for msg in st.session_state.messages:
