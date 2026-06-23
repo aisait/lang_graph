@@ -357,7 +357,8 @@ def chatbot_node(state: AgentState):
     - Topología Tecnológica Solicitada: {ctx.get('topologia') if ctx.get('topologia') else 'PENDIENTE DE DETECTAR'}
 
     REGLA DE CONDUCCIÓN COGNITIVA ESTRICTA:
-    1. A lo largo de la conversación, DEBES recopilar sutilmente la siguiente información del cliente antes de cerrar: Nombre y Apellido, Departamento y Municipio, Consumo actual (kWh o gasto mensual), Empresa eléctrica, y Definición exacta de su necesidad.
+    1. A lo largo de la conversación, DEBES recopilar sutilmente la siguiente información del cliente antes de cerrar: Nombre y Apellido, Departamento y Municipio, 
+    Consumo actual (kWh o gasto mensual), Empresa eléctrica, y Definición exacta de su necesidad.
     2. Al presentar los equipos, es OBLIGATORIO incluir el enlace oficial de la Ontología para que el cliente pueda verlo en línea y validarlo.
     3. Cada línea de producto sugerido deberá llevar su código de producto (si es inferible), una pequeña descripción, el link oficial y un precio de lista estimado en Quetzales basado en la ontología.
     4. NO DEBES calcular totales de proyecto en la cotización.
@@ -418,8 +419,21 @@ if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
 
 if "messages" not in st.session_state:
-    # Se añade la petición inicial alineada a recopilar la información solicitada
-    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y Apellido, tu número de WhatsApp, y en qué departamento/municipio te encuentras para perfilar tu tarifa eléctrica?"
+    # MENSAJE DE BIENVENIDA ACTUALIZADO CON MENÚ
+    greeting = """¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. Estamos para ayudarte a encontrar la mejor solución energética.
+
+¿Sobre qué producto necesitas información hoy?
+
+1. Calentadores Solares
+2. Paneles Solares (Fuera de la red / lugares sin energía)
+3. Paneles Solares (Ahorro en factura eléctrica)
+4. Bombas de Agua Solares
+5. Bombas de Calor para piscinas
+6. Máquinas de hacer hielo (Ice Maker)
+7. Hieleras
+
+Cuéntame qué te interesa y, para darte una atención personalizada, ¿podrías indicarme también tu nombre y en qué zona te encuentras?"""
+    
     st.session_state.messages = [AIMessage(content=greeting)]
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     
@@ -521,10 +535,8 @@ if prompt:
                                     audio_buffer = io.BytesIO()
                                     for chunk in speech_response.iter_bytes(chunk_size=4096):
                                         audio_buffer.write(chunk)
-        
                                     audio_buffer.seek(0)
                                     st.audio(audio_buffer, format="audio/mp3", autoplay=True)
-                                    
                                 except Exception as e:
                                     st.error(f"Fallo en síntesis de voz: {e}")
                                     
@@ -545,7 +557,7 @@ if prompt:
                     estado_actual = estado_grafo.values.get("contexto_tecnico", {})
                 except Exception:
                     estado_actual = "No se pudo recuperar el estado del grafo."
-
+                
                 session_snapshot = {
                     "thread_id": st.session_state.get("thread_id", "Desconocido"),
                     "is_voice_mode": st.session_state.get("is_voice_mode", False),
