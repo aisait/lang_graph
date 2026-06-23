@@ -61,7 +61,7 @@ memory = get_memory()
 # =====================================================================
 # 3. ONTOLOGÍA FRAGMENTADA (OPTIMIZACIÓN DE VENTANA DE CONTEXTO)
 # =====================================================================
-PRODUCT_CATALOG = {
+ONTOLOGIA_BLOQUES = {
     "1": {"nombre": "CALENTADORES SOLARES PARA AGUA CALIENTE RESIDENCIAL Y PISCINA", "url": "https://www.aisa.com.gt/shop/category/calentadores-solares-1", "keywords": ["colector solar térmico plano", "termotanque solar presurizado", "calentador solar de tubos al vacío", "sistema termosifónico solar", "calentador solar no presurizado"]},
     "2": {"nombre": "TUBERÍA Y CONDUCTOS PARA INSTALACIONES HIDROSANITARIAS Y SOLARES", "url": "https://www.aisa.com.gt/shop/category/tuberia-4", "keywords": ["tubería PVC cédula 40", "tubo CPVC agua caliente", "poliducto corrugado", "tubería PEX", "manguera reforzada"]},
     "3": {"nombre": "ACCESORIOS DE CONEXIÓN Y VÁLVULAS PARA TUBERÍA", "url": "https://www.aisa.com.gt/shop/category/accesorios-5", "keywords": ["codo PVC", "tee PVC", "unión universal", "válvula de bola PVC", "adaptador"]},
