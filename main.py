@@ -226,10 +226,12 @@ if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "is_voice_mode" not in st.session_state:
     st.session_state.is_voice_mode = False
-
-# FIX: Nuevo contador para forzar la recreación del widget de audio
 if "audio_key_counter" not in st.session_state:
     st.session_state.audio_key_counter = 0
+
+# FIX DEFINITIVO: Variable temporal para evitar el bloqueo del frontend
+if "pending_prompt" not in st.session_state:
+    st.session_state.pending_prompt = None
 
 if "messages" not in st.session_state:
     greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y tu número de WhatsApp?"
@@ -247,7 +249,6 @@ for msg in st.session_state.messages:
 # LÓGICA DE CAPTURA DUAL: AUDIO Y TEXTO
 # =====================================================================
 
-# FIX: Inyectamos el contador en el key. Al cambiar el valor, Streamlit asume que es un componente nuevo y vacío.
 audio_value = st.audio_input(
     "🎤 Grabar mensaje de voz", 
     key=f"audio_input_{st.session_state.audio_key_counter}"
@@ -257,10 +258,12 @@ text_value = st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o re
 
 prompt = None
 
+# 1. Si el usuario escribe texto, se procesa normalmente
 if text_value:
     st.session_state.is_voice_mode = False
     prompt = text_value
 
+# 2. Si el usuario envía audio, lo procesamos de inmediato y forzamos reinicio
 elif audio_value is not None:
     st.session_state.is_voice_mode = True
     
@@ -271,13 +274,22 @@ elif audio_value is not None:
                 model="whisper-1",
                 file=audio_value
             )
-            prompt = transcript.text
+            # Guardamos la transcripción en la variable pendiente
+            st.session_state.pending_prompt = transcript.text
             
-            # FIX: Incrementamos la llave aquí. En la próxima pasada natural del script, el componente estará en blanco.
+            # Incrementamos la llave para que el widget se renderice limpio en la próxima pasada
             st.session_state.audio_key_counter += 1
+            
+            # Forzamos recarga INMEDIATA. Esto destruye el audio_value y limpia la interfaz.
+            st.rerun()
             
         except Exception as e:
             st.error(f"Error al transcribir el audio: {e}")
+
+# 3. Al recargar la página (gracias a st.rerun), recogemos el texto transcrito
+if st.session_state.pending_prompt:
+    prompt = st.session_state.pending_prompt
+    st.session_state.pending_prompt = None # Limpiamos para no crear un bucle
 
 # =====================================================================
 # PROCESAMIENTO COGNITIVO DEL AGENTE
