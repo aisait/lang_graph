@@ -4,6 +4,9 @@ import requests
 import uuid
 import io
 import json
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from typing import Annotated, TypedDict, Optional
 from dotenv import load_dotenv
 
@@ -36,13 +39,11 @@ class AgentState(TypedDict):
 # 2. CONFIGURACIÓN Y PERSISTENCIA
 # =====================================================================
 load_dotenv()
+
+# Variables para API de Acruxlab / Odoo
 APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
 APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
-
-# Variables de entorno para la API de Gmail en Railway
-RAILWAY_GMAIL_ENDPOINT = os.getenv("RAILWAY_GMAIL_ENDPOINT", "https://tu-app-railway.up.railway.app/api/send-email")
-EMAIL_CONTROLLER = "joseardon@aisa.com.gt"
 
 # Instancia global del cliente OpenAI
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -167,40 +168,47 @@ KITS Y SOLUCIONES INTEGRADAS
 def procesar_oportunidad_backend(nombre_apellidos: str, departamento_municipio: str, consumo_actual: str, empresa_electrica: str, definicion_necesidad: str, listado_equipos_html: str, numero_whatsapp: str, resumen_18_palabras: str) -> str:
     """
     Ejecuta esta herramienta SOLO cuando el cliente acepte el pre-cálculo y el listado de equipos con links.
-    Se encarga de enviar el WhatsApp y el Email al Controller a través de las APIs configuradas.
+    Se encarga de enviar el WhatsApp y el Email al Controller a través de SMTP y AcruxLab.
     """
     num_limpio = ''.join(filter(str.isdigit, numero_whatsapp))
+    controller_email = os.getenv("CONTROLLER_EMAIL", "joseardon@aisa.com.gt")
     
-    # 1. Preparación del cuerpo del Correo Formal (HTML/Text) para Railway/Gmail API
-    cuerpo_correo = f"""
-    Oportunidad Generada:
-    - Cliente: {nombre_apellidos}
-    - Ubicación: {departamento_municipio}
-    - Consumo Actual: {consumo_actual}
-    - Empresa Eléctrica: {empresa_electrica}
-    - Definición de Necesidad: {definicion_necesidad}
-    
-    Equipos Sugeridos (Solo equipos principales):
-    {listado_equipos_html}
-    
-    Observaciones:
-    El cliente ha validado los links. Pendiente de cotizar materiales de instalación, mano de obra, fletes y viáticos por el Controller.
-    """
-    
-    # Llamada simulada a la API de Gmail en Railway
-    payload_email = {
-        "to": EMAIL_CONTROLLER,
-        "subject": resumen_18_palabras,
-        "body": cuerpo_correo
-    }
-    
-    headers_email = {"Content-Type": "application/json"}
-    
+    # 1. Preparación y Envío del Correo vía SMTP nativo
+    status_email = "Pendiente"
     try:
-        # Petición a Railway (Gmail API endpoint)
-        resp_email = requests.post(RAILWAY_GMAIL_ENDPOINT, json=payload_email, headers=headers_email, timeout=15)
+        msg = MIMEMultipart()
+        msg['From'] = os.getenv("SMTP_USER")
+        msg['To'] = controller_email
+        msg['Subject'] = resumen_18_palabras
+        
+        cuerpo_correo = f"""Oportunidad Generada:
+- Cliente: {nombre_apellidos}
+- Ubicación: {departamento_municipio}
+- Consumo Actual: {consumo_actual}
+- Empresa Eléctrica: {empresa_electrica}
+- Definición de Necesidad: {definicion_necesidad}
+
+Equipos Sugeridos (Solo equipos principales):
+{listado_equipos_html}
+
+Observaciones:
+El cliente ha validado los links. Pendiente de cotizar materiales de instalación, mano de obra, fletes y viáticos por el Controller.
+"""
+        msg.attach(MIMEText(cuerpo_correo, 'plain'))
+        
+        # Conexión y envío
+        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+        smtp_port = int(os.getenv("SMTP_PORT", 587))
+        
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
+            server.send_message(msg)
+            
+        status_email = "Email SMTP enviado correctamente."
     except Exception as e:
-        print(f"Advertencia: No se pudo conectar a Railway API - {e}")
+        status_email = f"Error en Email SMTP: {str(e)}"
+        print(status_email) # Log interno para el contenedor
         
     # 2. Notificación WhatsApp vía Odoo/Acruxlab
     payload_wa = {
@@ -209,11 +217,15 @@ def procesar_oportunidad_backend(nombre_apellidos: str, departamento_municipio: 
         "text": f"🚨 Lead Aprobado: {nombre_apellidos}\nAsunto: {resumen_18_palabras}\nUbicación: {departamento_municipio}\nEquipos:\n{listado_equipos_html}"
     }
     headers_wa = {"Authorization": f"Bearer {APICHAT_TOKEN}", "Content-Type": "application/json"}
+    
     try:
         response_wa = requests.post(APICHAT_ENDPOINT, json=payload_wa, headers=headers_wa, timeout=15)
-        return "¡Excelente! He enviado tu solicitud vía email y WhatsApp al equipo de ingeniería de AISA." if response_wa.status_code in [200, 201] else f"Error WA: {response_wa.status_code}"
+        if response_wa.status_code in [200, 201]:
+            return f"¡Excelente! He enviado tu solicitud vía email y WhatsApp al equipo de ingeniería de AISA. ({status_email})"
+        else:
+            return f"Error WA: {response_wa.status_code}. Info Email: {status_email}"
     except Exception as e:
-        return f"Error general: {str(e)}"
+        return f"Error general en WhatsApp: {str(e)}. Info Email: {status_email}"
 
 # =====================================================================
 # 5. MOTOR COGNITIVO (INTEGRACIÓN PROTOCOLO C & NUEVA DIRECTRIZ)
@@ -297,7 +309,7 @@ def chatbot_node(state: AgentState):
     - EXENCIÓN DE RESPONSABILIDAD: Al presentar la propuesta con los links, DEBES incluir OBLIGATORIAMENTE Y TEXTUALMENTE el siguiente párrafo: 
       "Esta propuesta contempla ÚNICAMENTE el suministro de los equipos principales listados. Los cálculos de materiales de instalación, mano de obra, fletes, viáticos y demás servicios añadidos serán procesados y sumados exclusivamente por el asesor humano en la siguiente fase."
     - CIERRE Y DESPEDIDA: Tras la validación en línea del cliente, despídete agradeciendo e indícale claramente: "Recibirás contacto por WhatsApp de nuestro vendedor a la brevedad. En breve serás procesado y atendido por un operador."
-    - HERRAMIENTA FINAL: Utiliza la herramienta `procesar_oportunidad_backend` para notificar al Controller humano (joseardon@aisa.com.gt). El parámetro `resumen_18_palabras` DEBE SER EXACTAMENTE DE 18 PALABRAS resumiendo la solución técnica que necesita el cliente. 
+    - HERRAMIENTA FINAL: Utiliza la herramienta `procesar_oportunidad_backend` para notificar al Controller humano ({os.getenv("CONTROLLER_EMAIL", "joseardon@aisa.com.gt")}). El parámetro `resumen_18_palabras` DEBE SER EXACTAMENTE DE 18 PALABRAS resumiendo la solución técnica que necesita el cliente. 
 
     POLÍTICA DE MARCA (OBLIGATORIO):
     - NO menciones marcas de la competencia bajo ninguna circunstancia.
