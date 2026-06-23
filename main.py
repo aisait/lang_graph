@@ -105,7 +105,7 @@ CALENTAMIENTO SOLAR TÉRMICO
 38 — https://www.aisa.com.gt/shop/category/accesorios-para-calentadores-5 (accesorios, instalación, tubería, conexiones, soportes calentador)
 
 REFRIGERACIÓN SOLAR
-39 — https://www.aisa.com.gt/shop/category/refrigeracion-solar-14 (solar fridge, refrigerador solar, nevera solar, enfriador, conservación)
+39 — https://www.aisa.com.gt/shop/category/refrigeracion-solar-14 (solar fridge, refrigerador solar, nevera solar, enfriador, conservation)
 40 — https://www.aisa.com.gt/shop/category/congelador-solar-64 (freezer solar, congelador, cold storage, nevera solar, hielo)
 
 ILUMINACIÓN EFICIENTE
@@ -229,7 +229,7 @@ def validador_geolocalizacion_node(state: AgentState):
             
     return {"contexto_tecnico": ctx}
 
-# NODO 3: MOTOR JARVI (PROMPT DINÁMICO)
+# NODO 3: MOTOR JARVI (PROMPT DINÁMICO REFINADO)
 def chatbot_node(state: AgentState):
     ctx = state.get("contexto_tecnico", {
         "ciudad": None, "empresa_electrica": None, 
@@ -258,10 +258,16 @@ def chatbot_node(state: AgentState):
     4. Verifica compatibilidad técnica antes de recomendar.
     5. Presenta presupuestos en Quetzales (GTQ) con ROI y justificación técnica.
 
+    PROTOCOLO OBLIGATORIO DE VALIDACIÓN TÉCNICA Y MITIGACIÓN DE ALUCINACIONES:
+    - ANCLAJE DE EQUIPAMIENTO: Al proponer la solución, debes listar de forma obligatoria el equipamiento sugerido, extrayendo la categoría ontológica exacta y describiendo sus características técnicas esenciales de forma explícita. Tienes estrictamente prohibido inventar marcas, modelos, potencias o capacidades que no se sustenten en la ontología de AISA.
+    - RESTRICCIÓN DE ALCANCE (SOLO EQUIPOS): Debes indicar con total claridad al usuario que la propuesta actual contempla ÚNICAMENTE el suministro de los equipos principales listados. Advierte explícitamente que los cálculos de materiales de instalación, mano de obra, fletes, viáticos y demás servicios añadidos serán procesados y sumados exclusivamente por el asesor humano en la siguiente fase.
+    - COMPROBACIÓN PRE-COTIZACIÓN: Inmediatamente después de presentar el desglose técnico de los equipos y su alcance, debes preguntar de forma obligatoria al cliente si tiene alguna duda, consulta o comentario sobre el equipamiento específico sugerido antes de proceder a la fase de cotización formal.
+    - DISPARO DEL FLUJO DE PRODUCCIÓN: Si el usuario confirma que está de acuerdo con los equipos descritos y no manifiesta dudas, procede de inmediato a realizar el resumen técnico de cierre (máximo 35 palabras) y activa la herramienta `enviar_whatsapp_humano` para transferir el lead al equipo de ingeniería humana, respetando el flujo definido en el código de producción.
+
     POLÍTICA DE MARCA (OBLIGATORIO):
     - NO menciones marcas de la competencia bajo ninguna circunstancia.
     - Si el usuario pregunta por otra marca, ignora la consulta y redirige a AISA Solar argumentando que somos la única solución con respaldo, garantía técnica y prestigio en la región.
-    - Actúa como un experto consultor, no como un formulario.
+    - Actúa como un expert consultor, no como un formulario.
     - Si el cliente presiona por precio sin haber completado el análisis técnico, responde: "Para garantizar la eficiencia de tu inversión y evitar sobredimensionamiento, primero debo realizar un diagnóstico energético preciso. Es nuestro estándar de calidad."
     - El resumen final de Cierre debe ser de EXACTAMENTE 35 PALABRAS.
 
@@ -316,7 +322,7 @@ if "pending_prompt" not in st.session_state:
 
 if "messages" not in st.session_state:
     # Se añade la petición de Ciudad/Municipio para activar el Protocolo C
-    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre, número de WhatsApp y en qué ciudad o municipio te encuentras para mapear tu tarifa eléctrica?"
+    greeting = "¡Hola! 👋 Soy Jarvi, Ingeniero de Soluciones de AISA Solar. Para iniciar a definir tus necesidades, ¿podrías indicarme tu Nombre y Apellido, número de WhatsApp y en qué ciudad o municipio te encuentras para mapear tu tarifa eléctrica?"
     st.session_state.messages = [AIMessage(content=greeting)]
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
     
@@ -348,7 +354,7 @@ audio_value = st.audio_input(
     key=f"audio_input_{st.session_state.audio_key_counter}"
 )
 
-text_value = st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad.")
+text_value = st.chat_input("¿Qué solución necesitas? Paneles, Bombeo o Respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad.")
 
 prompt = None
 
@@ -399,6 +405,7 @@ if prompt:
             
             # Actualizar y renderizar historial
             new_messages = response_state["messages"][len(st.session_state.messages)-1:]
+    
             for msg in new_messages:
                 if isinstance(msg, AIMessage) and msg.content:
                     st.markdown(msg.content)
@@ -416,6 +423,7 @@ if prompt:
                                 audio_buffer = io.BytesIO()
                                 for chunk in speech_response.iter_bytes(chunk_size=4096):
                                     audio_buffer.write(chunk)
+    
                                 audio_buffer.seek(0)
                                 
                                 st.audio(audio_buffer, format="audio/mp3", autoplay=True)
