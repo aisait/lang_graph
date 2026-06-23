@@ -5,6 +5,8 @@ import uuid
 import io
 import json
 import smtplib
+import traceback
+import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Annotated, TypedDict, Optional
@@ -192,7 +194,8 @@ Equipos Sugeridos (Solo equipos principales):
 {listado_equipos_html}
 
 Observaciones:
-El cliente ha validado los links. Pendiente de cotizar materiales de instalación, mano de obra, fletes y viáticos por el Controller.
+El cliente ha validado los links.
+Pendiente de cotizar materiales de instalación, mano de obra, fletes y viáticos por el Controller.
 """
         msg.attach(MIMEText(cuerpo_correo, 'plain'))
         
@@ -228,7 +231,61 @@ El cliente ha validado los links. Pendiente de cotizar materiales de instalació
         return f"Error general en WhatsApp: {str(e)}. Info Email: {status_email}"
 
 # =====================================================================
-# 5. MOTOR COGNITIVO (INTEGRACIÓN PROTOCOLO C & NUEVA DIRECTRIZ)
+# 5. MANEJADOR GLOBAL DE ERRORES EN TIEMPO DE EJECUCIÓN (BOUNDARY)
+# =====================================================================
+def notificar_error_runtime(error_obj, traceback_str, session_data, prompt_fallido):
+    """
+    Captura la traza del error y el contexto de la sesión para enviarlo por correo al Controller.
+    """
+    controller_email = os.getenv("CONTROLLER_EMAIL", "joseardon@aisa.com.gt")
+    
+    msg = MIMEMultipart()
+    msg['From'] = os.getenv("SMTP_USER")
+    msg['To'] = controller_email
+    msg['Subject'] = f"🚨 ERROR CRÍTICO JARVI - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    # Formatear el contexto técnico y la sesión para que sea legible
+    try:
+        session_json = json.dumps(session_data, indent=2, default=str)
+    except Exception:
+        session_json = str(session_data)
+
+    cuerpo_correo = f"""
+Se ha detectado una excepción no controlada en tiempo de ejecución.
+
+TIPO DE ERROR: {type(error_obj).__name__}
+MENSAJE: {str(error_obj)}
+
+ÚLTIMO PROMPT INTENTADO:
+{prompt_fallido}
+
+TRACEBACK COMPLETO:
+--------------------------------------------------
+{traceback_str}
+--------------------------------------------------
+
+CONTEXTO DE LA SESIÓN AL MOMENTO DEL ERROR:
+{session_json}
+"""
+    msg.attach(MIMEText(cuerpo_correo, 'plain'))
+    
+    try:
+        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+        smtp_port = int(os.getenv("SMTP_PORT", 587))
+        
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
+            server.send_message(msg)
+            
+        print("Notificación de error enviada al administrador exitosamente.")
+    except Exception as e_smtp:
+        # Fallback al log estándar del contenedor si el correo también falla
+        print(f"FALLO CRÍTICO: No se pudo enviar el correo de error. Razón: {e_smtp}")
+        print(f"Traza original:\n{traceback_str}")
+
+# =====================================================================
+# 6. MOTOR COGNITIVO (INTEGRACIÓN PROTOCOLO C & NUEVA DIRECTRIZ)
 # =====================================================================
 graph_builder = StateGraph(AgentState)
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
@@ -245,7 +302,7 @@ def clasificador_topologia_node(state: AgentState):
     if not messages: return {"contexto_tecnico": ctx}
     
     ultimo_mensaje = messages[-1].content.lower()
-    
+  
     if not ctx.get("topologia"):
         if any(k in ultimo_mensaje for k in ["red", "atado", "interconectado", "ahorro", "eegsa"]):
             ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
@@ -291,8 +348,8 @@ def chatbot_node(state: AgentState):
     })
     
     prompt_sistema = SystemMessage(content=f"""
-    Eres Jarvi, Ingeniero de Preventa experto de AISA Solar. Tu misión es diagnosticar, diseñar y presupuestar soluciones energéticas utilizando el portafolio de AISA.
-
+    Eres Jarvi, Ingeniero de Preventa experto de AISA Solar.
+    Tu misión es diagnosticar, diseñar y presupuestar soluciones energéticas utilizando el portafolio de AISA.
     [DATOS FIRMADOS Y VALIDADOS EN PRODUCCIÓN (PROTOCOLO C)]:
     - Ubicación del Proyecto: {ctx.get('ciudad') if ctx.get('ciudad') else 'PENDIENTE DE VALIDAR'}
     - Distribuidora del Servicio: {ctx.get('empresa_electrica') if ctx.get('empresa_electrica') else 'PENDIENTE DE VALIDAR'}
@@ -302,20 +359,18 @@ def chatbot_node(state: AgentState):
     REGLA DE CONDUCCIÓN COGNITIVA ESTRICTA:
     1. A lo largo de la conversación, DEBES recopilar sutilmente la siguiente información del cliente antes de cerrar: Nombre y Apellido, Departamento y Municipio, Consumo actual (kWh o gasto mensual), Empresa eléctrica, y Definición exacta de su necesidad.
     2. Al presentar los equipos, es OBLIGATORIO incluir el enlace oficial de la Ontología para que el cliente pueda verlo en línea y validarlo.
-    3. Cada línea de producto sugerido deberá llevar su código de producto (si es inferible), una pequeña descripción, el link oficial y un precio de lista estimado en Quetzales basado en la ontología. 
-    4. NO DEBES calcular totales de proyecto en la cotización. 
-
+    3. Cada línea de producto sugerido deberá llevar su código de producto (si es inferible), una pequeña descripción, el link oficial y un precio de lista estimado en Quetzales basado en la ontología.
+    4. NO DEBES calcular totales de proyecto en la cotización.
     NUEVAS DIRECTRICES DE JUNTA DIRECTIVA (MANDATORIO):
     - EXENCIÓN DE RESPONSABILIDAD: Al presentar la propuesta con los links, DEBES incluir OBLIGATORIAMENTE Y TEXTUALMENTE el siguiente párrafo: 
       "Esta propuesta contempla ÚNICAMENTE el suministro de los equipos principales listados. Los cálculos de materiales de instalación, mano de obra, fletes, viáticos y demás servicios añadidos serán procesados y sumados exclusivamente por el asesor humano en la siguiente fase."
     - CIERRE Y DESPEDIDA: Tras la validación en línea del cliente, despídete agradeciendo e indícale claramente: "Recibirás contacto por WhatsApp de nuestro vendedor a la brevedad. En breve serás procesado y atendido por un operador."
-    - HERRAMIENTA FINAL: Utiliza la herramienta `procesar_oportunidad_backend` para notificar al Controller humano ({os.getenv("CONTROLLER_EMAIL", "joseardon@aisa.com.gt")}). El parámetro `resumen_18_palabras` DEBE SER EXACTAMENTE DE 18 PALABRAS resumiendo la solución técnica que necesita el cliente. 
-
+    - HERRAMIENTA FINAL: Utiliza la herramienta `procesar_oportunidad_backend` para notificar al Controller humano ({os.getenv("CONTROLLER_EMAIL", "joseardon@aisa.com.gt")}).
+    El parámetro `resumen_18_palabras` DEBE SER EXACTAMENTE DE 18 PALABRAS resumiendo la solución técnica que necesita el cliente.
     POLÍTICA DE MARCA (OBLIGATORIO):
     - NO menciones marcas de la competencia bajo ninguna circunstancia.
     - Actúa como un experto consultor, no como un formulario.
     - Tu base de conocimiento está estrictamente limitada EXCLUSIVAMENTE a la ONTOLOGÍA DE AISA SOLAR.
-
     ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR:
     {ONTOLOGIA_AISA}
     """)
@@ -336,7 +391,7 @@ graph_builder.add_edge("tools", "chatbot")
 jarvi_graph = graph_builder.compile(checkpointer=memory)
 
 # =====================================================================
-# 6. TÍTULO E INSTRUCCIONES (UI)
+# 7. TÍTULO E INSTRUCCIONES (UI)
 # =====================================================================
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
@@ -396,7 +451,7 @@ audio_value = st.audio_input(
     key=f"audio_input_{st.session_state.audio_key_counter}"
 )
 
-text_value = st.chat_input("¿Qué solución necesitas? Paneles, Bombeo o Respaldo? Cuéntame ubicación, consumo y si buscas Ahorro, Autonomía o Continuidad.")
+text_value = st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad.")
 
 prompt = None
 
@@ -434,7 +489,7 @@ if st.session_state.pending_prompt:
     st.session_state.pending_prompt = None # Limpiamos para no crear un bucle
 
 # =====================================================================
-# PROCESAMIENTO COGNITIVO DEL AGENTE
+# PROCESAMIENTO COGNITIVO DEL AGENTE CON MANEJO DE ERRORES (BOUNDARY)
 # =====================================================================
 if prompt:
     st.session_state.messages.append(HumanMessage(content=prompt))
@@ -442,35 +497,65 @@ if prompt:
     
     with st.chat_message("assistant"):
         with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada..."):
-            config = {"configurable": {"thread_id": st.session_state.thread_id}}
-            response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
-            
-            # Actualizar y renderizar historial
-            new_messages = response_state["messages"][len(st.session_state.messages)-1:]
-            for msg in new_messages:
-                if isinstance(msg, AIMessage) and msg.content:
-                    st.markdown(msg.content)
-                    
-                    # SI EL USUARIO HABLÓ, LE RESPONDEMOS CON VOZ USANDO OPENAI TTS
-                    if st.session_state.is_voice_mode:
-                        with st.spinner("Generando respuesta de voz..."):
-                            try:
-                                speech_response = client.audio.speech.create(
-                                    model="tts-1",
-                                    voice="alloy",
-                                    input=msg.content
-                                )
-                                # Convertir stream a BytesIO para Streamlit
-                                audio_buffer = io.BytesIO()
-                                for chunk in speech_response.iter_bytes(chunk_size=4096):
-                                    audio_buffer.write(chunk)
-                                audio_buffer.seek(0)
-                                
-                                st.audio(audio_buffer, format="audio/mp3", autoplay=True)
-                            except Exception as e:
-                                st.error(f"Fallo en síntesis de voz: {e}")
-                                
-                elif isinstance(msg, ToolMessage):
-                    st.markdown(f"⚙️ {msg.content}")
-            
-            st.session_state.messages = response_state["messages"]
+            try:
+                config = {"configurable": {"thread_id": st.session_state.thread_id}}
+                response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
+                
+                # Actualizar y renderizar historial
+                new_messages = response_state["messages"][len(st.session_state.messages)-1:]
+        
+                for msg in new_messages:
+                    if isinstance(msg, AIMessage) and msg.content:
+                        st.markdown(msg.content)
+                        
+                        # SI EL USUARIO HABLÓ, LE RESPONDEMOS CON VOZ USANDO OPENAI TTS
+                        if st.session_state.is_voice_mode:
+                            with st.spinner("Generando respuesta de voz..."):
+                                try:
+                                    speech_response = client.audio.speech.create(
+                                        model="tts-1",
+                                        voice="alloy",
+                                        input=msg.content
+                                    )
+                                    # Convertir stream a BytesIO para Streamlit
+                                    audio_buffer = io.BytesIO()
+                                    for chunk in speech_response.iter_bytes(chunk_size=4096):
+                                        audio_buffer.write(chunk)
+        
+                                    audio_buffer.seek(0)
+                                    st.audio(audio_buffer, format="audio/mp3", autoplay=True)
+                                    
+                                except Exception as e:
+                                    st.error(f"Fallo en síntesis de voz: {e}")
+                                    
+                    elif isinstance(msg, ToolMessage):
+                        st.markdown(f"⚙️ {msg.content}")
+                
+                st.session_state.messages = response_state["messages"]
+
+            except Exception as e:
+                # 1. Capturar la traza completa del error
+                tb_str = traceback.format_exc()
+                
+                # 2. Recolectar datos vitales de la sesión
+                estado_actual = {}
+                try:
+                    # Intentamos extraer el contexto técnico de LangGraph
+                    estado_grafo = jarvi_graph.get_state(config)
+                    estado_actual = estado_grafo.values.get("contexto_tecnico", {})
+                except Exception:
+                    estado_actual = "No se pudo recuperar el estado del grafo."
+
+                session_snapshot = {
+                    "thread_id": st.session_state.get("thread_id", "Desconocido"),
+                    "is_voice_mode": st.session_state.get("is_voice_mode", False),
+                    "contexto_tecnico": estado_actual,
+                    "cantidad_mensajes_historial": len(st.session_state.get("messages", []))
+                }
+
+                # 3. Notificar silenciosamente al backend vía correo
+                notificar_error_runtime(e, tb_str, session_snapshot, prompt)
+
+                # 4. Manejo de cara al usuario final para mantener la estabilidad del frontend
+                st.error("Ha ocurrido un problema técnico inesperado procesando tu solicitud.")
+                st.warning("Nuestro equipo de ingeniería ya ha sido notificado con los detalles del error. Por favor, intenta reformular tu pregunta o comunícate vía WhatsApp directamente.")
