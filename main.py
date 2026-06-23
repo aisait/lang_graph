@@ -61,110 +61,93 @@ memory = get_memory()
 # =====================================================================
 # 3. ONTOLOGÍA FRAGMENTADA (OPTIMIZACIÓN DE VENTANA DE CONTEXTO)
 # =====================================================================
-ONTOLOGIA_BLOQUES = {
-    "PANELES": """ENERGÍA SOLAR (CAPTACIÓN FOTOVOLTAICA Y SISTEMAS ON-GRID)
-5 — https://www.aisa.com.gt/shop/category/sistemas-atados-a-la-red-7 (inversor grid‑tie monofásico, microinversor solar, sistema fotovoltaico interconectado, medidor bidireccional, inyección a red BT)
-11 — https://www.aisa.com.gt/shop/category/paneles-solares-18 (panel solar 150W 12V policristalino, módulo fotovoltaico 330W 24V, panel solar monocristalino PERC, célula solar 5BB, panel solar tipo marco de aluminio)
-29 — https://www.aisa.com.gt/shop/category/consumo-basico-on-grid-28 (kit solar básico 1kW on‑grid, 2 paneles 330W + microinversor, sistema interconectado económico, ahorro en factura eléctrica, monitoreo vía web)
-30 — https://www.aisa.com.gt/shop/category/consumo-intermedio-on-grid-29 (kit solar 2.5kW grid‑tie, 6 paneles monocristalinos 400W, inversor string monofásico, estructura de techo inclinado, conexión a tablero principal)
-31 — https://www.aisa.com.gt/shop/category/instalacion-paneles-solares-33 (instalación llave en mano, montaje de paneles en techo, obra civil solar, ingeniería de sistemas fotovoltaicos, trámite de interconexión con EEGSA)
-44 — https://www.aisa.com.gt/shop/category/consumo-alto-on-grid-46 (kit solar 5kW on‑grid, 12 paneles 450W, inversor string de 5kW, optimizadores de potencia, inyección total a red BT)
-59 — https://www.aisa.com.gt/shop/category/consumo-comercial-alto-on-grid-89 (kit solar comercial 10kW, 24 paneles 450W, inversor trifásico 10kW, estructura coplanar, analizador de energía)
-60 — https://www.aisa.com.gt/shop/category/consumo-comercial-industrial-on-grid-90 (sistema solar industrial 30kW, inversor centralizado, transformador BT/MT, monitorización SCADA, 80 paneles 550W)
-61 — https://www.aisa.com.gt/shop/category/consumo-comercial-intermedio-on-grid-88 (kit solar 3kW negocio, 8 paneles 400W, inversor monofásico 3kW, kit anclaje techo plano, medidor de generación)
-76 — https://www.aisa.com.gt/shop/category/consumo-comercial-basico-on-grid-91 (kit solar negocio pequeño 1.5kW, 4 paneles 400W, inversor monofásico, kit estructura para techo liviano, retorno inversión acelerado)""",
-
-    "INVERSORES": """CONVERSIÓN ENERGÉTICA (INVERSORES Y TRANSFORMADORES)
-26 — https://www.aisa.com.gt/shop/category/inversores-22 (inversor de onda senoidal pura 1000W, inversor cargador 24V, inversor de voltaje 12V a 110V, protección de bajo voltaje, inversor con display LCD)
-28 — https://www.aisa.com.gt/shop/category/serie-smart-27 (inversor inteligente WiFi, monitorización remota app, controlador solar con Bluetooth, inversor smart grid interactivo, protección anti isla integrada)
-41 — https://www.aisa.com.gt/shop/category/inv-ongrid-42 (inversor on‑grid 3kW 220V, eficiencia europea 97%, comunicación RS485, inversor sin transformador, refrigeración por convección natural)
-42 — https://www.aisa.com.gt/shop/category/inv-car-43 (inversor para coche 150W, onda modificada con USB, encendedor de cigarro, protección bajo voltaje batería auto, inversor portátil para laptop)
-43 — https://www.aisa.com.gt/shop/category/inv-pro-44 (inversor senoidal puro 2000W 24V, conexión a banco de baterías, ventilación forzada inteligente, protección cortocircuito, arranque de motor inducción)
-62 — https://www.aisa.com.gt/shop/category/inversor-hibrido-67 (inversor híbrido 5kW 48V, entrada para generador, carga de baterías programable, salida 110/220V, pantalla táctil)
-71 — https://www.aisa.com.gt/shop/category/inv-ongrid-trifasico-77 (inversor trifásico 15kW 400V, salida 380V 60Hz, comunicación Modbus, topología sin transformador, seguidor MPP dual)""",
-
-    "CONTROLADORES": """CONTROL Y GESTIÓN DE ENERGÍA
-38 — https://www.aisa.com.gt/shop/category/controlador-mppt-39 (controlador MPPT 40A 12/24V, seguimiento punto máximo potencia, eficiencia 99%, display LCD programable, protección sobrecarga solar)
-39 — https://www.aisa.com.gt/shop/category/controlador-pwm-40 (controlador PWM 10A 12V, carga por modulación de ancho de pulso, indicador LED bicolor, compensación temperatura, salida USB 5V)
-72 — https://www.aisa.com.gt/shop/category/controladores-bombas-82 (controlador de nivel de agua, relé flotador electrónico, variador de frecuencia para bomba, protector contra marcha en seco, arrancador suave 1HP)
-73 — https://www.aisa.com.gt/shop/category/flotadores-84 (flotador interruptor 10A, boya de nivel con contrapeso, flotador de mercurio, pera flotante para tanque, cable flotador 2 metros)""",
-
-    "BATERIAS": """ALMACENAMIENTO ENERGÉTICO
-14 — https://www.aisa.com.gt/shop/category/baterias-solares-21 (batería solar 12V 100Ah AGM, batería estacionaria de plomo‑ácido, acumulador de ciclo profundo OPzS, batería para sistema solar aislado, vida útil 800 ciclos)
-15 — https://www.aisa.com.gt/shop/category/baterias-solares-bateria-de-gel-26 (batería de gel 12V 65Ah, batería gel VRLA profunda, electrolito gelificado tixotrópico, batería sin emisión de gases, batería solar gel libre mantenimiento)
-16 — https://www.aisa.com.gt/shop/category/baterias-solares-bateria-para-ups-97 (batería para UPS 12V 9Ah, batería de respaldo monoblock AGM, batería para SAI de computadora, batería de gel para UPS online, respaldo para central telefónica)
-17 — https://www.aisa.com.gt/shop/category/baterias-solares-baterias-de-acido-plomo-liquido-104 (batería de plomo‑ácido con vasos transparentes, batería de electrolito líquido 12V 150Ah, batería de celdas inundadas, mantenimiento con agua destilada, batería tipo tracción semiabierta)
-18 — https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-backup-105 (batería backup 12V 200Ah AGM, acumulador de respaldo para hogar, batería de emergencia sin derrames, banco de baterías para inversor de respaldo, soporte de carga profunda)
-19 — https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-sistemas-hibridos-y-aislados-106 (batería para sistema híbrido 48V, batería de litio LiFePO4 5kWh, batería de alta descarga para off‑grid, batería compatible con inversor híbrido, celda prismática de litio)
-20 — https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-telecomunicaciones-107 (batería para repetidor 48V, batería de gel telecom, batería estacionaria para radio base, resistencia a descargas largas, batería para gabinete outdoor)
-21 — https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-sistemas-de-alarma-108 (batería alarma 12V 7Ah AGM, batería para central de incendios, acumulador sellado para sensor, respaldo para sirena inalámbrica, batería de plomo‑ácido 12V 4.5Ah)
-22 — https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-sistemas-de-videovigilancia-109 (batería para cámara 12V 12Ah, respaldo para DVR, batería gel para CCTV exterior, acumulador para grabación continua, fuente de poder con batería integrada)
-23 — https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-kits-de-iluminacion-110 (batería 6V 4.5Ah para linterna, acumulador de lámpara solar recargable, pack de baterías AA NiMH, batería para lámpara de emergencia LED, pila recargable para reflector solar)
-24 — https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-vehiculos-electricos-111 (batería de litio 48V para scooter, pack de iones de litio 60V, batería para bicicleta eléctrica, celda cilíndrica 18650, cargador de batería para moto eléctrica)
-25 — https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-otros-usos-112 (batería para pesca eléctrica 12V 35Ah, acumulador para equipo médico portátil, batería de juguete eléctrico, fuente de alimentación DC para campamento, batería AGM de uso general 12V)""",
-
-    "BOMBEO": """BOMBEO SOLAR (CAPTACIÓN Y APLICACIÓN HIDRÁULICA)
-6 — https://www.aisa.com.gt/shop/category/bombas-perifericas-8 (bomba periférica 0.5 HP, bomba autocebante de superficie, bomba centrífuga monofásica 110V, bomba presurizadora para tanque, turbina periférica silenciosa)
-7 — https://www.aisa.com.gt/shop/category/bombas-sumergibles-bajo-caudal-9 (bomba sumergible 4" baja potencia, bomba de pozo profundo 0.5 HP, bomba sumergible 12V DC, bomba de diafragma solar, bomba sumergible para riego por goteo)
-32 — https://www.aisa.com.gt/shop/category/bomba-de-recirculacion-34 (bomba recirculadora silenciosa 110V, bomba de rotor húmedo para calentador solar, impulsor de latón, bajo consumo 25W, circulación forzada de agua caliente)
-33 — https://www.aisa.com.gt/shop/category/bomba-de-recirculacion-bombas-de-recirculacion-individuales-93 (bomba recirculadora individual 3 velocidades, cuerpo en hierro fundido, conexión roscada ½", temporizador integrado, recirculación para calefón solar)
-34 — https://www.aisa.com.gt/shop/category/bomba-de-recirculacion-sistemas-bomba-de-recirculacion-94 (kit recirculación solar con controlador, sistema de lazo cerrado, válvula de retorno termostática, estación de bombeo solar, control diferencial de temperatura)
-35 — https://www.aisa.com.gt/shop/category/bomba-presurizadora-35 (bomba presurizadora automática ½ HP, tanque de presión hidroneumático, sensor de flujo, arranque por demanda, bomba booster para ducha)
-50 — https://www.aisa.com.gt/shop/category/bomba-caudal-no-sumergible-54 (bomba centrífuga 1HP 110V, motobomba gasolina 2", bomba jet autocebante, bomba de riego monoblock, impulsor de hierro)
-51 — https://www.aisa.com.gt/shop/category/sistemas-bombas-sumergibles-56 (kit bomba sumergible solar 1HP, panel solar 300W, controlador bomba MPPT, tubería de polietileno, boya de nivel automática)
-52 — https://www.aisa.com.gt/shop/category/sistemas-de-bombas-perifericas-57 (sistema bombeo periférico solar, bomba 0.5HP DC, módulo 150W, soporte panel inclinado, regulador de presión)
-53 — https://www.aisa.com.gt/shop/category/sistema-bomba-caudal-sumergible-alto-d-59 (bomba sumergible alta caudal 2HP, trituradora, impulsor vortex, descarga 3", sistema solar para achique de pozo séptico)
-54 — https://www.aisa.com.gt/shop/category/sistema-bombas-de-caudal-no-sumergible-60 (kit riego solar superficial, motobomba 2HP 24V, bomba centrífuga acoplada, control por flotador, manguera de succión 2")
-64 — https://www.aisa.com.gt/shop/category/sistema-bomba-caudal-sumergible-alto-69 (bomba sumergible 3HP 4", panel solar 600W, controlador de pozo, cable sumergible 10 AWG, tubería de impulsión galvanizada)
-77 — https://www.aisa.com.gt/shop/category/bombas-de-caudal-sumergible-desechos-92 (bomba fecal 1HP, impulsor turbina abierta, paso de sólidos 2", bomba trituradora WC, drenaje para aguas negras)
-78 — https://www.aisa.com.gt/shop/category/bombas-sumergibles-alto-caudal-95 (bomba sumergible 5HP 8", motor encapsulado, alto caudal 500L/min, carcasa de acero inoxidable, impulsor tipo turbina)""",
-
-    "CALENTAMIENTO": """CALENTAMIENTO SOLAR TÉRMICO
-1 — https://www.aisa.com.gt/shop/category/calentadores-solares-1 (colector solar térmico plano, termotanque solar presurizado, calentador solar de tubos al vacío, sistema termosifónico solar, calentador solar no presurizado)
-8 — https://www.aisa.com.gt/shop/category/bombas-de-calor-10 (bomba de calor aire‑agua, bomba de calor para piscina inverter, sistema aerotérmico residencial, compresor scroll de alta eficiencia, calentador termodinámico)
-12 — https://www.aisa.com.gt/shop/category/resistencias-para-calentadores-19 (resistencia blindada 1500W 110V, resistencia de inmersión para termotanque, resistencia de repuesto para ducha eléctrica, termostato de seguridad, resistencia roscada 1½")
-27 — https://www.aisa.com.gt/shop/category/calentadores-solares-deluxe-25 (calentador solar presurizado doble tanque, colector selectivo de titanio, intercambiador de calor de cobre, calentador solar con serpentín, calentador de acero inoxidable premium)
-40 — https://www.aisa.com.gt/shop/category/repuesto-de-calentador-41 (ánodo de magnesio, empaque de tapa, termostato de repuesto, válvula de alivio de presión, tubos de vacío de repuesto)
-65 — https://www.aisa.com.gt/shop/category/all-calentadores-70 (calentador solar catalogo completo, calentador tubos vacío 200L, calentador presurizado 300L, calefón solar económico, termo solar con respaldo eléctrico)
-70 — https://www.aisa.com.gt/shop/category/marcos-de-calentadores-75 (marco calentador solar 15 tubos, soporte de acero galvanizado, base para termotanque horizontal, patas ajustables, kit de anclaje a losa)""",
-
-    "REFRIGERACION": """REFRIGERACIÓN Y CLIMATIZACIÓN
-9 — https://www.aisa.com.gt/shop/category/refrigeracion-solar-14 (refrigerador solar 12/24V DC, nevera congelador para cabaña, congelador de corriente directa, refrigerador solar portátil, nevera tipo arcón solar)
-37 — https://www.aisa.com.gt/shop/category/congelador-38 (congelador arcón 7 pies 110V, congelador horizontal blanco, control de temperatura mecánico, tapa con bisagra, enfriamiento por compresor)
-57 — https://www.aisa.com.gt/shop/category/congelador-solar-64 (congelador 12/24V 100 litros, arcón solar DC, compresor Danfoss, freezer para vacunas, bajo consumo diario 0.5kWh)
-58 — https://www.aisa.com.gt/shop/category/refrigerador-65 (refrigerador 110V 12 pies, nevera frost, control electrónico, puerta reversible, refrigerante R600a)
-63 — https://www.aisa.com.gt/shop/category/compresor-68 (compresor rotativo 1HP R410a, compresor hermético para nevera, motor monofásico 110V, pie para base, kit de arranque PTC)
-74 — https://www.aisa.com.gt/shop/category/ice-maker-85 (máquina hielo 23kg/día, fabricador de cubitos, bandeja antiadherente, producción ciclo rápido, depósito de hielo integrado)
-75 — https://www.aisa.com.gt/shop/category/ice-maker-maquinas-de-granizados-115 (raspadora de hielo industrial, granizadora 110V, cuchilla de acero inoxidable, tolva de policarbonato, dispensador de granizado)
-86 — https://www.aisa.com.gt/shop/category/hielera-portatil-122 (hielera eléctrica 12V 15L, nevera portátil compresor, enfriador termoeléctrico, hielera camping 24 litros, asa y ruedas integradas)""",
-
-    "ACCESORIOS": """CABLES, PROTECCIONES Y ACCESORIOS
-2 — https://www.aisa.com.gt/shop/category/tuberia-4 (tubería PVC cédula 40, tubo CPVC para agua caliente, poliducto corrugado eléctrico, tubería PEX flexible, manguera reforzada para bomba)
-3 — https://www.aisa.com.gt/shop/category/accesorios-5 (codo PVC 90° presión, tee PVC lisa, unión universal roscable, válvula de bola PVC, adaptador macho hembra PVC)
-4 — https://www.aisa.com.gt/shop/category/iluminacion-dc-6 (foco LED 12V E27, lámpara solar recargable DC, tira LED 24V flexible, reflector LED bajo consumo 12V, bombilla DC para panel solar)
-13 — https://www.aisa.com.gt/shop/category/turbinas-eolicas-20 (aerogenerador 400W 12V, turbina eólica de eje horizontal, controlador de carga eólico, aspas de fibra de vidrio, generador eólico con freno electromagnético)
-36 — https://www.aisa.com.gt/shop/category/bombilla-36 (bombilla LED E27 9W, foco ahorrador rosca gruesa, luz cálida 3000K, LED SMD2835, iluminación interior de larga duración)
-49 — https://www.aisa.com.gt/shop/category/repuestos-y-herrajes-52 (soporte panel solar teja, perfil de aluminio triangular, grapa intermedia panel, tornillo de tierra M8, abrazadera omega para riel)
-55 — https://www.aisa.com.gt/shop/category/flipones-61 (breaker termomagnético 15A, interruptor diferencial, protector de sobrecarga, flipón enchufable 20A, disyuntor 2 polos 30A)
-56 — https://www.aisa.com.gt/shop/category/conectores-mc4-62 (conector MC4 macho, conector MC4 hembra, par de conectores 30A, herramienta crimpadora MC4, tapa impermeable IP67)
-66 — https://www.aisa.com.gt/shop/category/tanques-71 (tanque rotoplas 1100 litros, cisterna plástica tricapa, tinaco vertical, filtro de entrada, tanque de polietileno de alta densidad)
-80 — https://www.aisa.com.gt/shop/category/cables-99 (cable THHN 12 AWG, cable encauchetado 3x12, alambre de cobre desnudo, cable uso rudo 3x10, cordón dúplex 2x16)
-81 — https://www.aisa.com.gt/shop/category/cables-cable-solar-37 (cable solar 6mm² 1.5kV, aislamiento XLPE, doble capa UV, cable negro y rojo, certificación TÜV)
-82 — https://www.aisa.com.gt/shop/category/cables-cable-bateria-100 (cable batería 2/0 AWG, extraflexible clase M, aislamiento PVC 60V, terminal estañado, color rojo y negro)
-83 — https://www.aisa.com.gt/shop/category/cables-cable-sumergible-101 (cable sumergible 4 hilos 10 AWG, aislamiento EPDM, cubierta de polietileno, apto agua potable, cable bomba 200 metros)
-84 — https://www.aisa.com.gt/shop/category/cables-tsj-102 (cable TSJ 3x14, cordón extraflexible, servicio severo, 300V, chaqueta de PVC resistente a la abrasión)
-85 — https://www.aisa.com.gt/shop/category/cables-kit-cable-103 (kit cable solar MC4, par de cables 3m 4mm², conjunto cable extensión, adaptadores ramificación Y, cable de interconexión panel)""",
-
-    "KITS": """KITS Y SOLUCIONES INTEGRADAS
-10 — https://www.aisa.com.gt/shop/category/sistemas-aislados-17 (kit solar off‑grid con inversor, sistema fotovoltaico autónomo 500W, controlador MPPT aislado, batería ciclo profundo AGM, panel solar 200W policristalino)
-45 — https://www.aisa.com.gt/shop/category/mini-kit-48 (mini kit solar 50W 12V, panel plegable, controlador PWM integrado, 2 focos LED 5W, puerto USB carga móvil)
-46 — https://www.aisa.com.gt/shop/category/necesidad-basica-49 (kit solar básico 100W, batería AGM 50Ah, inversor 300W, iluminación LED tres puntos, para cabaña rural)
-47 — https://www.aisa.com.gt/shop/category/basicos-mas-amenidades-50 (kit solar 200W 24V, batería gel 100Ah, inversor 500W, televisor 24" DC, cargador USB múltiple)
-48 — https://www.aisa.com.gt/shop/category/hogar-solar-51 (kit solar vivienda 1kW, inversor cargador 1000W, banco baterías 200Ah 48V, nevera DC, lavadora eficiente)
-67 — https://www.aisa.com.gt/shop/category/sistemas-de-respaldo-cb-72 (respaldo básico solar, inversor cargador 600W, batería AGM 100Ah, panel de transferencia, respaldo para luces y router)
-68 — https://www.aisa.com.gt/shop/category/sistemas-de-respaldo-ci-73 (backup intermedio 2kWh, inversor 1500W, 2 baterías gel 100Ah, cargador inteligente, kit de instalación en tablero)
-69 — https://www.aisa.com.gt/shop/category/sistemas-de-respaldo-ca-74 (respaldo alta capacidad 5kW, batería litio 48V 100Ah, inversor off‑grid puro, conmutación automática, soporte para bomba y refrigerador)
-79 — https://www.aisa.com.gt/shop/category/sistemas-hibridos-96 (kit híbrido 3kW, inversor híbrido 48V, batería litio 2.4kWh, panel 330W x6, cero exportación configurable)"""
+PRODUCT_CATALOG = {
+    "1": {"nombre": "CALENTADORES SOLARES PARA AGUA CALIENTE RESIDENCIAL Y PISCINA", "url": "https://www.aisa.com.gt/shop/category/calentadores-solares-1", "keywords": ["colector solar térmico plano", "termotanque solar presurizado", "calentador solar de tubos al vacío", "sistema termosifónico solar", "calentador solar no presurizado"]},
+    "2": {"nombre": "TUBERÍA Y CONDUCTOS PARA INSTALACIONES HIDROSANITARIAS Y SOLARES", "url": "https://www.aisa.com.gt/shop/category/tuberia-4", "keywords": ["tubería PVC cédula 40", "tubo CPVC agua caliente", "poliducto corrugado", "tubería PEX", "manguera reforzada"]},
+    "3": {"nombre": "ACCESORIOS DE CONEXIÓN Y VÁLVULAS PARA TUBERÍA", "url": "https://www.aisa.com.gt/shop/category/accesorios-5", "keywords": ["codo PVC", "tee PVC", "unión universal", "válvula de bola PVC", "adaptador"]},
+    "4": {"nombre": "ILUMINACIÓN LED DE CORRIENTE DIRECTA 12V Y 24V", "url": "https://www.aisa.com.gt/shop/category/iluminacion-dc-6", "keywords": ["foco LED 12V", "lámpara solar recargable", "tira LED 24V", "reflector LED"]},
+    "5": {"nombre": "SISTEMAS SOLARES CONECTADOS A LA RED ELÉCTRICA ON‑GRID", "url": "https://www.aisa.com.gt/shop/category/sistemas-atados-a-la-red-7", "keywords": ["inversor grid-tie", "microinversor solar", "sistema fotovoltaico", "medidor bidireccional"]},
+    "6": {"nombre": "BOMBAS PERIFÉRICAS PARA AGUA LIMPIA DE SUPERFICIE", "url": "https://www.aisa.com.gt/shop/category/bombas-perifericas-8", "keywords": ["bomba periférica", "bomba autocebante", "bomba centrífuga", "bomba presurizadora"]},
+    "7": {"nombre": "BOMBAS SUMERGIBLES DE BAJO CAUDAL PARA POZOS ESTRECHOS", "url": "https://www.aisa.com.gt/shop/category/bombas-sumergibles-bajo-caudal-9", "keywords": ["bomba sumergible 4\"", "bomba pozo profundo", "bomba 12V DC", "bomba de diafragma"]},
+    "8": {"nombre": "BOMBAS DE CALOR PARA CALEFACCIÓN Y AGUA CALIENTE EFICIENTES", "url": "https://www.aisa.com.gt/shop/category/bombas-de-calor-10", "keywords": ["bomba de calor aire-agua", "bomba de calor piscina", "aerotérmico"]},
+    "9": {"nombre": "REFRIGERACIÓN SOLAR Y NEVERAS PARA SISTEMAS AISLADOS", "url": "https://www.aisa.com.gt/shop/category/refrigeracion-solar-14", "keywords": ["refrigerador solar 12/24V", "nevera congelador cabaña", "nevera solar"]},
+    "10": {"nombre": "SISTEMAS SOLARES AISLADOS COMPLETOS CON BATERÍAS", "url": "https://www.aisa.com.gt/shop/category/sistemas-aislados-17", "keywords": ["kit solar off-grid", "sistema fotovoltaico autónomo", "batería ciclo profundo"]},
+    "11": {"nombre": "PANELES SOLARES FOTOVOLTAICOS MONOCRISTALINOS Y POLICRISTALINOS", "url": "https://www.aisa.com.gt/shop/category/paneles-solares-18", "keywords": ["panel solar policristalino", "panel monocristalino", "módulo fotovoltaico"]},
+    "12": {"nombre": "RESISTENCIAS ELÉCTRICAS PARA CALENTADORES SOLARES Y TERMODUCHAS", "url": "https://www.aisa.com.gt/shop/category/resistencias-para-calentadores-19", "keywords": ["resistencia blindada", "resistencia inmersión", "termostato"]},
+    "13": {"nombre": "TURBINAS EÓLICAS DE PEQUEÑA POTENCIA PARA SISTEMAS HÍBRIDOS", "url": "https://www.aisa.com.gt/shop/category/turbinas-eolicas-20", "keywords": ["aerogenerador", "turbina eólica", "controlador eólico"]},
+    "14": {"nombre": "BATERÍAS SOLARES ESTACIONARIAS DE CICLO PROFUNDO GENERAL", "url": "https://www.aisa.com.gt/shop/category/baterias-solares-21", "keywords": ["batería solar AGM", "batería estacionaria", "acumulador ciclo profundo"]},
+    "15": {"nombre": "BATERÍAS DE GEL SELLADAS LIBRES DE MANTENIMIENTO PARA SOLAR", "url": "https://www.aisa.com.gt/shop/category/baterias-solares-bateria-de-gel-26", "keywords": ["batería de gel", "VRLA", "sin mantenimiento"]},
+    "16": {"nombre": "BATERÍAS PARA UPS Y RESPALDO DE ENERGÍA ININTERRUMPIDA", "url": "https://www.aisa.com.gt/shop/category/baterias-solares-bateria-para-ups-97", "keywords": ["batería UPS", "respaldo SAI"]},
+    "17": {"nombre": "BATERÍAS DE ÁCIDO‑PLOMO LÍQUIDO ABIERTAS ECONÓMICAS", "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-de-acido-plomo-liquido-104", "keywords": ["batería plomo-ácido", "electrolito líquido", "celdas inundadas"]},
+    "18": {"nombre": "BATERÍAS PARA BACKUP Y SISTEMAS DE ENERGÍA DE EMERGENCIA", "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-backup-105", "keywords": ["batería backup", "acumulador emergencia"]},
+    "19": {"nombre": "BATERÍAS PARA SISTEMAS HÍBRIDOS Y AISLADOS CON INVERSOR", "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-sistemas-hibridos-y-aislados-106", "keywords": ["batería híbrida", "litio LiFePO4"]},
+    "20": {"nombre": "BATERÍAS ESPECIALIZADAS PARA TELECOMUNICACIONES Y RADIOENLACES", "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-telecomunicaciones-107", "keywords": ["batería telecom", "estacionaria radio base"]},
+    "21": {"nombre": "BATERÍAS PARA SISTEMAS DE ALARMA Y SEGURIDAD RESIDENCIAL", "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-sistemas-de-alarma-108", "keywords": ["batería alarma", "acumulador seguridad"]},
+    "22": {"nombre": "BATERÍAS PARA SISTEMAS DE VIDEOVIGILANCIA Y CÁMARAS IP", "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-sistemas-de-videovigilancia-109", "keywords": ["batería cámara", "respaldo DVR"]},
+    "23": {"nombre": "BATERÍAS PARA KITS DE ILUMINACIÓN PORTÁTIL Y LINTERNAS SOLARES", "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-kits-de-iluminacion-110", "keywords": ["batería linterna", "pack baterías"]},
+    "24": {"nombre": "BATERÍAS PARA VEHÍCULOS ELÉCTRICOS Y MOVILIDAD ELÉCTRICA LIVIANA", "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-vehiculos-electricos-111", "keywords": ["batería litio scooter", "batería bicicleta eléctrica"]},
+    "25": {"nombre": "BATERÍAS PARA USOS ESPECIALES, ENERGÍA PORTÁTIL Y OTROS EQUIPOS", "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-otros-usos-112", "keywords": ["batería equipo médico", "batería pesca"]},
+    "26": {"nombre": "INVERSORES DE CORRIENTE PARA SISTEMAS SOLARES Y RESPALDO", "url": "https://www.aisa.com.gt/shop/category/inversores-22", "keywords": ["inversor onda pura", "inversor cargador"]},
+    "27": {"nombre": "CALENTADORES SOLARES DELUXE DE ALTA EFICIENCIA Y DISEÑO PREMIUM", "url": "https://www.aisa.com.gt/shop/category/calentadores-solares-deluxe-25", "keywords": ["calentador presurizado premium", "serpentín"]},
+    "28": {"nombre": "SERIE SMART DE INVERSORES Y CONTROL SOLAR INTELIGENTE", "url": "https://www.aisa.com.gt/shop/category/serie-smart-27", "keywords": ["inversor inteligente", "monitorización remota"]},
+    "29": {"nombre": "KITS SOLARES ON‑GRID DE CONSUMO BÁSICO PARA HOGAR PEQUEÑO", "url": "https://www.aisa.com.gt/shop/category/consumo-basico-on-grid-28", "keywords": ["kit solar 1kW on-grid"]},
+    "30": {"nombre": "SISTEMAS ON‑GRID DE CONSUMO INTERMEDIO PARA FAMILIAS MEDIANAS", "url": "https://www.aisa.com.gt/shop/category/consumo-intermedio-on-grid-29", "keywords": ["kit solar 2.5kW grid-tie"]},
+    "31": {"nombre": "SERVICIO DE INSTALACIÓN PROFESIONAL DE PANELES SOLARES", "url": "https://www.aisa.com.gt/shop/category/instalacion-paneles-solares-33", "keywords": ["instalación llave en mano", "ingeniería fotovoltaica"]},
+    "32": {"nombre": "BOMBAS DE RECIRCULACIÓN PARA SISTEMAS DE AGUA CALIENTE SOLAR", "url": "https://www.aisa.com.gt/shop/category/bomba-de-recirculacion-34", "keywords": ["bomba recirculadora", "circulación forzada"]},
+    "33": {"nombre": "UNIDADES INDIVIDUALES DE BOMBA DE RECIRCULACIÓN SILENCIOSA", "url": "https://www.aisa.com.gt/shop/category/bomba-de-recirculacion-bombas-de-recirculacion-individuales-93", "keywords": ["bomba recirculadora 3 velocidades"]},
+    "34": {"nombre": "SISTEMAS COMPLETOS DE BOMBA DE RECIRCULACIÓN Y CONTROL TÉRMICO", "url": "https://www.aisa.com.gt/shop/category/bomba-de-recirculacion-sistemas-bomba-de-recirculacion-94", "keywords": ["kit recirculación solar"]},
+    "35": {"nombre": "BOMBAS PRESURIZADORAS DE AGUA PARA MEJORAR LA PRESIÓN DOMICILIARIA", "url": "https://www.aisa.com.gt/shop/category/bomba-presurizadora-35", "keywords": ["bomba presurizadora automática", "tanque hidroneumático"]},
+    "36": {"nombre": "BOMBILLAS LED DE ALTA EFICIENCIA PARA HOGAR Y COMERCIO", "url": "https://www.aisa.com.gt/shop/category/bombilla-36", "keywords": ["bombilla LED", "iluminación eficiente"]},
+    "37": {"nombre": "CONGELADORES ELÉCTRICOS HORIZONTALES PARA ALMACENAMIENTO DE ALIMENTOS", "url": "https://www.aisa.com.gt/shop/category/congelador-38", "keywords": ["congelador arcón", "congelador horizontal"]},
+    "38": {"nombre": "CONTROLADORES DE CARGA MPPT DE ALTA EFICIENCIA PARA PANELES", "url": "https://www.aisa.com.gt/shop/category/controlador-mppt-39", "keywords": ["controlador MPPT", "eficiencia 99%"]},
+    "39": {"nombre": "CONTROLADORES DE CARGA PWM ECONÓMICOS PARA SISTEMAS PEQUEÑOS", "url": "https://www.aisa.com.gt/shop/category/controlador-pwm-40", "keywords": ["controlador PWM"]},
+    "40": {"nombre": "REPUESTOS ORIGINALES PARA CALENTADORES SOLARES Y TERMOTANQUES", "url": "https://www.aisa.com.gt/shop/category/repuesto-de-calentador-41", "keywords": ["ánodo de magnesio", "tubos de vacío"]},
+    "41": {"nombre": "INVERSORES ON‑GRID MONOFÁSICOS PARA SISTEMAS CONECTADOS A LA RED", "url": "https://www.aisa.com.gt/shop/category/inv-ongrid-42", "keywords": ["inversor on-grid"]},
+    "42": {"nombre": "INVERSORES DE AUTO CON ENTRADA 12V Y SALIDA 110V MODIFICADA", "url": "https://www.aisa.com.gt/shop/category/inv-car-43", "keywords": ["inversor coche", "onda modificada"]},
+    "43": {"nombre": "INVERSORES DE ONDA PURA PROFESIONAL PARA EQUIPOS SENSIBLES", "url": "https://www.aisa.com.gt/shop/category/inv-pro-44", "keywords": ["inversor senoidal puro"]},
+    "44": {"nombre": "SISTEMAS ON‑GRID DE CONSUMO ALTO PARA VIVIENDAS GRANDES Y OFICINAS", "url": "https://www.aisa.com.gt/shop/category/consumo-alto-on-grid-46", "keywords": ["kit solar 5kW on-grid"]},
+    "45": {"nombre": "MINI KITS SOLARES PARA ILUMINACIÓN BÁSICA Y CARGA DE DISPOSITIVOS", "url": "https://www.aisa.com.gt/shop/category/mini-kit-48", "keywords": ["mini kit solar"]},
+    "46": {"nombre": "KITS SOLARES PARA NECESIDAD BÁSICA DE ILUMINACIÓN Y TV PEQUEÑA", "url": "https://www.aisa.com.gt/shop/category/necesidad-basica-49", "keywords": ["kit solar básico 100W"]},
+    "47": {"nombre": "KIT SOLAR BÁSICO MÁS AMENIDADES PARA VIVIENDA DE FIN DE SEMANA", "url": "https://www.aisa.com.gt/shop/category/basicos-mas-amenidades-50", "keywords": ["kit solar 200W"]},
+    "48": {"nombre": "HOGAR SOLAR COMPLETO CON ELECTRODOMÉSTICOS ESENCIALES OFF‑GRID", "url": "https://www.aisa.com.gt/shop/category/hogar-solar-51", "keywords": ["kit solar vivienda 1kW"]},
+    "49": {"nombre": "REPUESTOS Y HERRAJES PARA ESTRUCTURAS DE PANELES SOLARES", "url": "https://www.aisa.com.gt/shop/category/repuestos-y-herrajes-52", "keywords": ["soporte panel solar", "perfil aluminio"]},
+    "50": {"nombre": "BOMBAS DE CAUDAL NO SUMERGIBLES PARA TRASVASE DE AGUA SUPERFICIAL", "url": "https://www.aisa.com.gt/shop/category/bomba-caudal-no-sumergible-54", "keywords": ["bomba centrífuga", "motobomba"]},
+    "51": {"nombre": "SISTEMAS COMPLETOS DE BOMBAS SUMERGIBLES SOLARES PARA POZO", "url": "https://www.aisa.com.gt/shop/category/sistemas-bombas-sumergibles-56", "keywords": ["kit bomba sumergible solar"]},
+    "52": {"nombre": "SISTEMAS DE BOMBAS PERIFÉRICAS CON PANEL SOLAR PARA TANQUES ELEVADOS", "url": "https://www.aisa.com.gt/shop/category/sistemas-de-bombas-perifericas-57", "keywords": ["bombeo periférico solar"]},
+    "53": {"nombre": "SISTEMA DE BOMBA SUMERGIBLE DE CAUDAL ALTO CON DESALOJO DE AGUAS", "url": "https://www.aisa.com.gt/shop/category/sistema-bomba-caudal-sumergible-alto-d-59", "keywords": ["bomba sumergible trituradora"]},
+    "54": {"nombre": "SISTEMA DE BOMBAS DE CAUDAL NO SUMERGIBLE PARA RIEGO DE SUPERFICIE", "url": "https://www.aisa.com.gt/shop/category/sistema-bombas-de-caudal-no-sumergible-60", "keywords": ["kit riego solar superficial"]},
+    "55": {"nombre": "FLIPONES O INTERRUPTORES TERMOMAGNÉTICOS PARA PROTECCIÓN ELÉCTRICA", "url": "https://www.aisa.com.gt/shop/category/flipones-61", "keywords": ["breaker", "interruptor termomagnético"]},
+    "56": {"nombre": "CONECTORES MC4 PARA PANELES SOLARES Y CABLEADO FOTOVOLTAICO", "url": "https://www.aisa.com.gt/shop/category/conectores-mc4-62", "keywords": ["conector MC4"]},
+    "57": {"nombre": "CONGELADORES SOLARES DE CORRIENTE DIRECTA PARA ZONAS SIN RED", "url": "https://www.aisa.com.gt/shop/category/congelador-solar-64", "keywords": ["congelador solar 12/24V"]},
+    "58": {"nombre": "REFRIGERADORES ELÉCTRICOS DOMÉSTICOS Y COMERCIALES EFICIENTES", "url": "https://www.aisa.com.gt/shop/category/refrigerador-65", "keywords": ["refrigerador 110V"]},
+    "59": {"nombre": "SISTEMA ON‑GRID DE CONSUMO COMERCIAL ALTO PARA NEGOCIOS Y TALLERES", "url": "https://www.aisa.com.gt/shop/category/consumo-comercial-alto-on-grid-89", "keywords": ["kit solar comercial 10kW"]},
+    "60": {"nombre": "SISTEMA ON‑GRID INDUSTRIAL PARA GRANDES DEMANDAS DE FÁBRICA", "url": "https://www.aisa.com.gt/shop/category/consumo-comercial-industrial-on-grid-90", "keywords": ["sistema solar industrial 30kW"]},
+    "61": {"nombre": "SISTEMA ON‑GRID DE CONSUMO COMERCIAL INTERMEDIO PARA LOCAL PEQUEÑO", "url": "https://www.aisa.com.gt/shop/category/consumo-comercial-intermedio-on-grid-88", "keywords": ["kit solar 3kW negocio"]},
+    "62": {"nombre": "INVERSORES HÍBRIDOS SOLARES CON RESPALDO DE BATERÍAS Y RED", "url": "https://www.aisa.com.gt/shop/category/inversor-hibrido-67", "keywords": ["inversor híbrido 5kW"]},
+    "63": {"nombre": "COMPRESORES HERMÉTICOS PARA REFRIGERACIÓN Y AIRE ACONDICIONADO", "url": "https://www.aisa.com.gt/shop/category/compresor-68", "keywords": ["compresor hermético"]},
+    "64": {"nombre": "SISTEMA DE BOMBA SUMERGIBLE DE ALTO CAUDAL PARA POZO PROFUNDO", "url": "https://www.aisa.com.gt/shop/category/sistema-bomba-caudal-sumergible-alto-69", "keywords": ["bomba sumergible 3HP"]},
+    "65": {"nombre": "TODOS LOS CALENTADORES SOLARES EN UN SOLO LUGAR", "url": "https://www.aisa.com.gt/shop/category/all-calentadores-70", "keywords": ["catálogo calentadores"]},
+    "66": {"nombre": "TANQUES DE ALMACENAMIENTO DE AGUA PLUVIAL Y RESERVA DOMICILIARIA", "url": "https://www.aisa.com.gt/shop/category/tanques-71", "keywords": ["tanque rotoplas", "cisterna"]},
+    "67": {"nombre": "SISTEMA DE RESPALDO ENERGÉTICO BÁSICO CON BATERÍAS PARA HOGAR", "url": "https://www.aisa.com.gt/shop/category/sistemas-de-respaldo-cb-72", "keywords": ["respaldo básico"]},
+    "68": {"nombre": "SISTEMA DE RESPALDO INTERMEDIO PARA VIVIENDA CON ELECTRODOMÉSTICOS", "url": "https://www.aisa.com.gt/shop/category/sistemas-de-respaldo-ci-73", "keywords": ["backup intermedio"]},
+    "69": {"nombre": "SISTEMA DE RESPALDO AVANZADO PARA CASA COMPLETA ANTE APAGONES", "url": "https://www.aisa.com.gt/shop/category/sistemas-de-respaldo-ca-74", "keywords": ["respaldo 5kW"]},
+    "70": {"nombre": "MARCOS Y SOPORTES EXCLUSIVOS PARA CALENTADORES SOLARES DE TUBOS", "url": "https://www.aisa.com.gt/shop/category/marcos-de-calentadores-75", "keywords": ["marco calentador solar"]},
+    "71": {"nombre": "INVERSORES ON‑GRID TRIFÁSICOS PARA SISTEMAS COMERCIALES E INDUSTRIALES", "url": "https://www.aisa.com.gt/shop/category/inv-ongrid-trifasico-77", "keywords": ["inversor trifásico"]},
+    "72": {"nombre": "CONTROLADORES ELECTRÓNICOS PARA BOMBAS SUMERGIBLES Y DE SUPERFICIE", "url": "https://www.aisa.com.gt/shop/category/controladores-bombas-82", "keywords": ["controlador nivel", "variador frecuencia"]},
+    "73": {"nombre": "FLOTADORES ELÉCTRICOS Y MECÁNICOS PARA CONTROL DE NIVEL DE AGUA", "url": "https://www.aisa.com.gt/shop/category/flotadores-84", "keywords": ["flotador interruptor"]},
+    "74": {"nombre": "MÁQUINAS DE HIELO ELÉCTRICAS COMERCIALES PARA CUBITOS Y ESCAMAS", "url": "https://www.aisa.com.gt/shop/category/ice-maker-85", "keywords": ["máquina hielo"]},
+    "75": {"nombre": "MÁQUINAS DE GRANIZADOS Y RASPAOS COMERCIALES PARA NEGOCIO", "url": "https://www.aisa.com.gt/shop/category/ice-maker-maquinas-de-granizados-115", "keywords": ["raspadora hielo"]},
+    "76": {"nombre": "SISTEMA ON‑GRID COMERCIAL BÁSICO PARA PEQUEÑOS EMPRENDIMIENTOS", "url": "https://www.aisa.com.gt/shop/category/consumo-comercial-basico-on-grid-91", "keywords": ["kit solar negocio pequeño"]},
+    "77": {"nombre": "BOMBAS SUMERGIBLES PARA AGUAS RESIDUALES Y DESECHOS SÓLIDOS", "url": "https://www.aisa.com.gt/shop/category/bombas-de-caudal-sumergible-desechos-92", "keywords": ["bomba fecal"]},
+    "78": {"nombre": "BOMBAS SUMERGIBLES DE ALTO CAUDAL PARA ABASTECIMIENTO Y RIEGO", "url": "https://www.aisa.com.gt/shop/category/bombas-sumergibles-alto-caudal-95", "keywords": ["bomba 5HP"]},
+    "79": {"nombre": "SISTEMAS SOLARES HÍBRIDOS CONECTADOS A RED Y RESPALDO DE BATERÍA", "url": "https://www.aisa.com.gt/shop/category/sistemas-hibridos-96", "keywords": ["kit híbrido 3kW"]},
+    "80": {"nombre": "CABLES ELÉCTRICOS GENERALES PARA INSTALACIONES Y CONEXIONES", "url": "https://www.aisa.com.gt/shop/category/cables-99", "keywords": ["cable THHN", "cable encauchetado"]},
+    "81": {"nombre": "CABLE SOLAR ESPECIALIZADO PARA PANELES FOTOVOLTAICOS", "url": "https://www.aisa.com.gt/shop/category/cables-cable-solar-37", "keywords": ["cable solar 6mm"]},
+    "82": {"nombre": "CABLE PARA BATERÍAS DE ALTA FLEXIBILIDAD Y GRAN SECCIÓN", "url": "https://www.aisa.com.gt/shop/category/cables-cable-bateria-100", "keywords": ["cable batería 2/0"]},
+    "83": {"nombre": "CABLE SUMERGIBLE PLANO PARA BOMBAS DE POZO PROFUNDO", "url": "https://www.aisa.com.gt/shop/category/cables-cable-sumergible-101", "keywords": ["cable sumergible 4 hilos"]},
+    "84": {"nombre": "CABLES TSJ PARA USO RUDO Y EXTENSIONES ELÉCTRICAS FLEXIBLES", "url": "https://www.aisa.com.gt/shop/category/cables-tsj-102", "keywords": ["cable TSJ"]},
+    "85": {"nombre": "KIT DE CABLES PREARMADOS PARA CONEXIÓN DE SISTEMAS SOLARES", "url": "https://www.aisa.com.gt/shop/category/cables-kit-cable-103", "keywords": ["kit cable MC4"]},
+    "86": {"nombre": "HIELERAS PORTÁTILES TERMOELÉCTRICAS Y DE COMPRESOR 12V/110V", "url": "https://www.aisa.com.gt/shop/category/hielera-portatil-122", "keywords": ["hielera eléctrica"]}
 }
 
 def obtener_fragmento_ontologia(topologia: Optional[str]) -> str:
