@@ -396,7 +396,7 @@ audio_value = st.audio_input(
     key=f"audio_input_{st.session_state.audio_key_counter}"
 )
 
-text_value = st.chat_input("¿Qué solución necesitas hoy: paneles, bombeo o respaldo? Cuéntame ubicación, consumo y si buscas ahorro, autonomía o continuidad.")
+text_value = st.chat_input("¿Qué solución necesitas? Paneles, Bombeo o Respaldo? Cuéntame ubicación, consumo y si buscas Ahorro, Autonomía o Continuidad.")
 
 prompt = None
 
