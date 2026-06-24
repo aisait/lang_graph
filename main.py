@@ -240,8 +240,7 @@ Equipos Sugeridos (Solo equipos principales):
 {listado_equipos_html}
 
 Observaciones:
-El cliente ha validado los links.
-Pendiente de cotizar materiales de instalación, mano de obra, fletes y viáticos por el Controller."""
+El cliente ha validado los links. Pendiente de cotizar materiales de instalación, mano de obra, fletes y viáticos por el Controller."""
             msg.attach(MIMEText(cuerpo_correo, 'plain'))
             
             # Usar la nueva función de Gmail API
@@ -415,15 +414,12 @@ def inicializar_motor_jarvi():
         2. Al presentar los equipos, es OBLIGATORIO incluir el enlace oficial de la Ontología para que el cliente pueda verlo en línea y validarlo.
         3. Cada línea de producto sugerido deberá llevar su código de producto (si es inferible), una pequeña descripción, el link oficial y un precio de lista estimado en Quetzales basado en la ontología.
         4. NO DEBES calcular totales de proyecto en la cotización.
-        5. EXCLUSIVIDAD DE INVENTARIO: Tus recomendaciones DEBEN extraerse EXCLUSIVAMENTE de la Ontología proporcionada.
-        ESTÁ ESTRICTAMENTE PROHIBIDO inventar o alucinar productos, categorías o enlaces.
-        Si el cliente solicita un producto que NO está en la Ontología, debes disculparte amablemente desde la primera consulta, indicando que por el momento no manejamos ese producto.
+        5. EXCLUSIVIDAD DE INVENTARIO: Tus recomendaciones DEBEN extraerse EXCLUSIVAMENTE de la Ontología proporcionada. ESTÁ ESTRICTAMENTE PROHIBIDO inventar o alucinar productos, categorías o enlaces. Si el cliente solicita un producto que NO está en la Ontología, debes disculparte amablemente desde la primera consulta, indicando que por el momento no manejamos ese producto.
         NUEVAS DIRECTRICES DE JUNTA DIRECTIVA (MANDATORIO):
         - EXENCIÓN DE RESPONSABILIDAD: Al presentar la propuesta con los links, DEBES incluir OBLIGATORIAMENTE Y TEXTUALMENTE el siguiente párrafo: 
           "Esta propuesta contempla ÚNICAMENTE el suministro de los equipos principales listados. Los cálculos de materiales de instalación, mano de obra, fletes, viáticos y demás servicios añadidos serán procesados y sumados exclusivamente por el asesor humano en la siguiente fase."
         - CIERRE Y DESPEDIDA: Tras la validación en línea del cliente, despídete agradeciendo e indícale claramente: "Recibirás contacto por WhatsApp de nuestro vendedor a la brevedad. En breve serás procesado y atendido por un operador."
-        - HERRAMIENTA FINAL: Utiliza la herramienta `procesar_oportunidad_backend` para notificar al Controller humano.
-        El parámetro `resumen_18_palabras` DEBE SER EXACTAMENTE DE 18 PALABRAS resumiendo la solución técnica que necesita el cliente.
+        - HERRAMIENTA FINAL: Utiliza la herramienta `procesar_oportunidad_backend` para notificar al Controller humano. El parámetro `resumen_18_palabras` DEBE SER EXACTAMENTE DE 18 PALABRAS resumiendo la solución técnica que necesita el cliente.
         POLÍTICA DE MARCA (OBLIGATORIO):
         - NO menciones marcas de la competencia bajo ninguna circunstancia.
         - Actúa como un experto consultor, no como un formulario.
@@ -590,6 +586,7 @@ if prompt:
         with st.spinner("Consultando en tiempo real con nuestro equipo de ingeniería especializada..."):
             try:
                 config = {"configurable": {"thread_id": st.session_state.thread_id}}
+        
                 response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config)
                 
                 new_messages = response_state["messages"][len(st.session_state.messages)-1:]
@@ -618,21 +615,30 @@ if prompt:
                 st.session_state.messages = response_state["messages"]
 
             except Exception as e:
+                error_msg = str(e).lower()
                 tb_str = traceback.format_exc()
-                estado_actual = {}
-                try:
-                    estado_grafo = jarvi_graph.get_state(config)
-                    estado_actual = estado_grafo.values.get("contexto_tecnico", {})
-                except Exception:
-                    estado_actual = "No se pudo recuperar el estado del grafo."
+                
+                # Resiliencia ante fallos de memoria del checkpointer (Errores mostrados en Railway)
+                if "checkpoint" in error_msg or "thread" in error_msg:
+                    st.warning("🔄 Optimizando la memoria de la sesión técnica. Por favor, repite tu último mensaje.")
+                    st.session_state.thread_id = str(uuid.uuid4())
+                    st.rerun()
+                else:
+                    # Lógica original de reporte de fallos no relacionados a memoria
+                    estado_actual = {}
+                    try:
+                        estado_grafo = jarvi_graph.get_state(config)
+                        estado_actual = estado_grafo.values.get("contexto_tecnico", {})
+                    except Exception:
+                        estado_actual = "No se pudo recuperar el estado del grafo."
 
-                session_snapshot = {
-                    "thread_id": st.session_state.get("thread_id", "Desconocido"),
-                    "is_voice_mode": st.session_state.get("is_voice_mode", False),
-                    "contexto_tecnico": estado_actual,
-                    "cantidad_mensajes_historial": len(st.session_state.get("messages", []))
-                }
+                    session_snapshot = {
+                        "thread_id": st.session_state.get("thread_id", "Desconocido"),
+                        "is_voice_mode": st.session_state.get("is_voice_mode", False),
+                        "contexto_tecnico": estado_actual,
+                        "cantidad_mensajes_historial": len(st.session_state.get("messages", []))
+                    }
 
-                notificar_error_runtime(e, tb_str, session_snapshot, prompt)
-                st.error("Ha ocurrido un problema técnico inesperado procesando tu solicitud.")
-                st.warning("Nuestro equipo de ingeniería ya ha sido notificado con los detalles del error. Por favor, intenta reformular tu pregunta o comunícate vía WhatsApp directamente.")
+                    notificar_error_runtime(e, tb_str, session_snapshot, prompt)
+                    st.error("Ha ocurrido un problema técnico inesperado procesando tu solicitud.")
+                    st.warning("Nuestro equipo de ingeniería ya ha sido notificado con los detalles del error. Por favor, intenta reformular tu pregunta o comunícate vía WhatsApp directamente.")
