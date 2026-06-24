@@ -7,6 +7,7 @@ import json
 import smtplib
 import traceback
 import datetime
+import threading
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Annotated, TypedDict, Optional
@@ -32,7 +33,7 @@ class InferenciaEnergetica(TypedDict):
     tarifa_base_gtq: Optional[float]
     topologia: Optional[str]
     calculo_carga_completado: bool
-    requiere_auditoria_electrica: bool # NUEVO: Control de adquisición de datos
+    requiere_auditoria_electrica: bool 
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -51,12 +52,6 @@ APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
-
-@st.cache_resource
-def get_memory():
-    return MemorySaver()
-
-memory = get_memory()
 
 # =====================================================================
 # 3. ONTOLOGÍA FRAGMENTADA (OPTIMIZACIÓN DE VENTANA DE CONTEXTO)
@@ -153,44 +148,44 @@ ONTOLOGIA_BLOQUES = {
 def obtener_fragmento_ontologia(topologia: Optional[str]) -> str:
     """Inyecta solo los bloques de la ontología necesarios para el contexto actual."""
     if not topologia:
-        return "\n\n".join([ONTOLOGIA_BLOQUES["PANELES"], ONTOLOGIA_BLOQUES["BOMBEO"], ONTOLOGIA_BLOQUES["CALENTAMIENTO"], ONTOLOGIA_BLOQUES["KITS"]])
+        return "\n\n".join([ONTOLOGIA_BLOQUES.get("11", ""), ONTOLOGIA_BLOQUES.get("6", ""), ONTOLOGIA_BLOQUES.get("1", ""), ONTOLOGIA_BLOQUES.get("29", "")])
     
     bloques_requeridos = []
     if "On-Grid" in topologia:
-        bloques_requeridos = ["PANELES", "INVERSORES", "CONTROLADORES", "ACCESORIOS", "KITS"]
+        bloques_requeridos = ["11", "41", "38", "3", "29"]
     elif "Off-Grid" in topologia:
-        bloques_requeridos = ["PANELES", "INVERSORES", "CONTROLADORES", "BATERIAS", "ACCESORIOS", "KITS"]
+        bloques_requeridos = ["11", "26", "38", "14", "3", "46"]
     elif "Bombeo" in topologia:
-        bloques_requeridos = ["BOMBEO", "PANELES", "ACCESORIOS", "KITS"]
+        bloques_requeridos = ["6", "11", "3", "51"]
     elif "Calentamiento" in topologia:
-        bloques_requeridos = ["CALENTAMIENTO", "ACCESORIOS"]
+        bloques_requeridos = ["1", "3"]
     elif "Refrigeración" in topologia or "Hielo" in topologia:
-        bloques_requeridos = ["REFRIGERACION", "PANELES", "BATERIAS", "INVERSORES"]
+        bloques_requeridos = ["9", "11", "14", "26"]
     else:
-        bloques_requeridos = list(ONTOLOGIA_BLOQUES.keys()) # Fallback: Enviar todo
+        bloques_requeridos = list(ONTOLOGIA_BLOQUES.keys())
         
-    return "\n\n".join([ONTOLOGIA_BLOQUES[b] for b in bloques_requeridos])
+    return "\n\n".join([ONTOLOGIA_BLOQUES.get(b, str(b)) for b in bloques_requeridos])
 
 # =====================================================================
-# 4. HERRAMIENTAS
+# 4. HERRAMIENTAS (ASÍNCRONAS PARA SERVERLESS)
 # =====================================================================
 @tool
 def procesar_oportunidad_backend(nombre_apellidos: str, departamento_municipio: str, consumo_actual: str, empresa_electrica: str, definicion_necesidad: str, listado_equipos_html: str, numero_whatsapp: str, resumen_18_palabras: str) -> str:
     """
     Ejecuta esta herramienta SOLO cuando el cliente acepte el pre-cálculo y el listado de equipos con links.
-    Se encarga de enviar el WhatsApp y el Email al Controller a través de SMTP y AcruxLab.
+    Se encarga de enviar el WhatsApp y el Email al Controller a través de SMTP y AcruxLab sin bloquear la UI.
     """
-    num_limpio = ''.join(filter(str.isdigit, numero_whatsapp))
-    controller_email = os.getenv("CONTROLLER_EMAIL", "joseardon@aisa.com.gt")
-    
-    status_email = "Pendiente"
-    try:
-        msg = MIMEMultipart()
-        msg['From'] = os.getenv("SMTP_USER")
-        msg['To'] = controller_email
-        msg['Subject'] = resumen_18_palabras
+    def tarea_background():
+        num_limpio = ''.join(filter(str.isdigit, numero_whatsapp))
+        controller_email = os.getenv("CONTROLLER_EMAIL", "joseardon@aisa.com.gt")
         
-        cuerpo_correo = f"""Oportunidad Generada:
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = os.getenv("SMTP_USER")
+            msg['To'] = controller_email
+            msg['Subject'] = resumen_18_palabras
+            
+            cuerpo_correo = f"""Oportunidad Generada:
 - Cliente: {nombre_apellidos}
 - Ubicación: {departamento_municipio}
 - Consumo Actual: {consumo_actual}
@@ -201,55 +196,52 @@ Equipos Sugeridos (Solo equipos principales):
 {listado_equipos_html}
 
 Observaciones:
-El cliente ha validado los links. Pendiente de cotizar materiales de instalación, mano de obra, fletes y viáticos por el Controller.
-"""
-        msg.attach(MIMEText(cuerpo_correo, 'plain'))
-        
-        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", 587))
-        
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
-            server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
-            server.send_message(msg)
+El cliente ha validado los links. Pendiente de cotizar materiales de instalación, mano de obra, fletes y viáticos por el Controller."""
+            msg.attach(MIMEText(cuerpo_correo, 'plain'))
             
-        status_email = "Email SMTP enviado correctamente."
-    except Exception as e:
-        status_email = f"Error en Email SMTP: {str(e)}"
-        print(status_email) 
+            smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+            smtp_port = int(os.getenv("SMTP_PORT", 587))
+            
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
+                server.send_message(msg)
+        except Exception as e:
+            print(f"Error asíncrono en SMTP: {str(e)}") 
+            
+        payload_wa = {
+            "instance_id": APICHAT_INSTANCE,
+            "number": num_limpio,
+            "text": f"🚨 Lead Aprobado: {nombre_apellidos}\nAsunto: {resumen_18_palabras}\nUbicación: {departamento_municipio}\nEquipos:\n{listado_equipos_html}"
+        }
+        headers_wa = {"Authorization": f"Bearer {APICHAT_TOKEN}", "Content-Type": "application/json"}
         
-    payload_wa = {
-        "instance_id": APICHAT_INSTANCE,
-        "number": num_limpio,
-        "text": f"🚨 Lead Aprobado: {nombre_apellidos}\nAsunto: {resumen_18_palabras}\nUbicación: {departamento_municipio}\nEquipos:\n{listado_equipos_html}"
-    }
-    headers_wa = {"Authorization": f"Bearer {APICHAT_TOKEN}", "Content-Type": "application/json"}
-    
-    try:
-        response_wa = requests.post(APICHAT_ENDPOINT, json=payload_wa, headers=headers_wa, timeout=15)
-        if response_wa.status_code in [200, 201]:
-            return f"¡Excelente! He enviado tu solicitud vía email y WhatsApp al equipo de ingeniería de AISA. ({status_email})"
-        else:
-            return f"Error WA: {response_wa.status_code}. Info Email: {status_email}"
-    except Exception as e:
-        return f"Error general en WhatsApp: {str(e)}. Info Email: {status_email}"
+        try:
+            requests.post(APICHAT_ENDPOINT, json=payload_wa, headers=headers_wa, timeout=15)
+        except Exception as e:
+            print(f"Error asíncrono en WhatsApp: {str(e)}")
+
+    # Despachamos el hilo y retornamos inmediatamente al LLM
+    threading.Thread(target=tarea_background).start()
+    return "¡Excelente! He enviado tu solicitud vía email y WhatsApp al equipo de ingeniería de AISA. El proceso de asignación se está ejecutando."
 
 # =====================================================================
-# 5. MANEJADOR GLOBAL DE ERRORES EN TIEMPO DE EJECUCIÓN (BOUNDARY)
+# 5. MANEJADOR GLOBAL DE ERRORES EN TIEMPO DE EJECUCIÓN (ASÍNCRONO)
 # =====================================================================
 def notificar_error_runtime(error_obj, traceback_str, session_data, prompt_fallido):
-    controller_email = os.getenv("CONTROLLER_EMAIL", "joseardon@aisa.com.gt")
-    msg = MIMEMultipart()
-    msg['From'] = os.getenv("SMTP_USER")
-    msg['To'] = controller_email
-    msg['Subject'] = f"🚨 ERROR CRÍTICO JARVI - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    
-    try:
-        session_json = json.dumps(session_data, indent=2, default=str)
-    except Exception:
-        session_json = str(session_data)
+    def tarea_error_background():
+        controller_email = os.getenv("CONTROLLER_EMAIL", "joseardon@aisa.com.gt")
+        msg = MIMEMultipart()
+        msg['From'] = os.getenv("SMTP_USER")
+        msg['To'] = controller_email
+        msg['Subject'] = f"🚨 ERROR CRÍTICO JARVI - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        
+        try:
+            session_json = json.dumps(session_data, indent=2, default=str)
+        except Exception:
+            session_json = str(session_data)
 
-    cuerpo_correo = f"""Se ha detectado una excepción no controlada en tiempo de ejecución.
+        cuerpo_correo = f"""Se ha detectado una excepción no controlada en tiempo de ejecución.
 TIPO DE ERROR: {type(error_obj).__name__}
 MENSAJE: {str(error_obj)}
 ÚLTIMO PROMPT INTENTADO:
@@ -260,148 +252,148 @@ TRACEBACK COMPLETO:
 --------------------------------------------------
 CONTEXTO DE LA SESIÓN AL MOMENTO DEL ERROR:
 {session_json}"""
-    msg.attach(MIMEText(cuerpo_correo, 'plain'))
-    
-    try:
-        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", 587))
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
-            server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
-            server.send_message(msg)
-        print("Notificación de error enviada al administrador exitosamente.")
-    except Exception as e_smtp:
-        print(f"FALLO CRÍTICO: No se pudo enviar el correo de error. Razón: {e_smtp}")
-        print(f"Traza original:\n{traceback_str}")
-
-# =====================================================================
-# 6. MOTOR COGNITIVO (INTEGRACIÓN PROTOCOLO C & NUEVA DIRECTRIZ)
-# =====================================================================
-graph_builder = StateGraph(AgentState)
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
-
-# NODO 1: CLASIFICADOR EPITEMOLÓGICO
-def clasificador_topologia_node(state: AgentState):
-    messages = state.get("messages", [])
-    ctx = state.get("contexto_tecnico", {
-        "ciudad": None, "empresa_electrica": None, 
-        "tarifa_base_gtq": None, "topologia": None, 
-        "calculo_carga_completado": False, "requiere_auditoria_electrica": False
-    })
-    
-    if not messages: return {"contexto_tecnico": ctx}
-    
-    ultimo_mensaje = messages[-1].content.lower()
-  
-    if not ctx.get("topologia"):
-        if any(k in ultimo_mensaje for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
-            ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
-            ctx["requiere_auditoria_electrica"] = True
-        elif any(k in ultimo_mensaje for k in ["aislado", "batería", "bateria", "finca", "autónomo", "off-grid"]):
-            ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
-            ctx["requiere_auditoria_electrica"] = True
-        elif any(k in ultimo_mensaje for k in ["bomba", "pozo", "caudal", "riego", "sumergible"]):
-            ctx["topologia"] = "Bombeo Solar"
-            ctx["requiere_auditoria_electrica"] = False
-        elif any(k in ultimo_mensaje for k in ["calentador", "boiler", "agua caliente", "tubo", "termo"]):
-            ctx["topologia"] = "Calentamiento Solar Térmico"
-            ctx["requiere_auditoria_electrica"] = False
-        elif any(k in ultimo_mensaje for k in ["hielo", "ice maker", "hielera", "refrigeración"]):
-            ctx["topologia"] = "Refrigeración y Hielo"
-            ctx["requiere_auditoria_electrica"] = False
-
-    return {"contexto_tecnico": ctx}
-
-# NODO 2: VALIDADOR DE DOMINIO DE MERCADO
-def validador_geolocalizacion_node(state: AgentState):
-    ctx = state.get("contexto_tecnico", {
-        "ciudad": None, "empresa_electrica": None, 
-        "tarifa_base_gtq": None, "topologia": None, 
-        "calculo_carga_completado": False, "requiere_auditoria_electrica": False
-    })
-    messages = state.get("messages", [])
-    if not messages: return {"contexto_tecnico": ctx}
-    
-    ultimo_mensaje = messages[-1].content.lower()
-    
-    if not ctx.get("ciudad"):
-        if any(k in ultimo_mensaje for k in ["guatemala", "mixco", "capital", "ciudad", "villa nueva", "petapa"]):
-            ctx["ciudad"] = "Guatemala Metropolitana"
-            # Asignación condicionada a la topología
-            if ctx.get("requiere_auditoria_electrica"):
-                ctx["empresa_electrica"] = "EEGSA"
-                ctx["tarifa_base_gtq"] = 1.45
-        elif any(k in ultimo_mensaje for k in ["quetzaltenango", "xela", "coban", "escuintla", "petén", "peten", "zacapa", "chiquimula", "jutiapa", "izabal"]):
-            ctx["ciudad"] = "Departamentos (Interior)"
-            if ctx.get("requiere_auditoria_electrica"):
-                ctx["empresa_electrica"] = "ENERGUATE (DEOCSA/DEORSA)"
-                ctx["tarifa_base_gtq"] = 1.95
+        msg.attach(MIMEText(cuerpo_correo, 'plain'))
+        
+        try:
+            smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+            smtp_port = int(os.getenv("SMTP_PORT", 587))
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
+                server.send_message(msg)
+            print("Notificación de error enviada asíncronamente.")
+        except Exception as e_smtp:
+            print(f"FALLO CRÍTICO: No se pudo enviar el correo de error. Razón: {e_smtp}")
             
-    return {"contexto_tecnico": ctx}
+    threading.Thread(target=tarea_error_background).start()
 
-# NODO 3: MOTOR JARVI (PROMPT DINÁMICO REFINADO)
-def chatbot_node(state: AgentState):
-    ctx = state.get("contexto_tecnico", {
-        "ciudad": None, "empresa_electrica": None, 
-        "tarifa_base_gtq": None, "topologia": None, 
-        "calculo_carga_completado": False, "requiere_auditoria_electrica": False
-    })
-    
-    # Ruteo Epistemológico: Qué datos exigir según la topología
-    if ctx.get("requiere_auditoria_electrica"):
-        regla_datos = "1. DEBES recopilar sutilmente: Nombre y Apellido, Departamento y Municipio, Consumo actual (kWh o gasto mensual), Empresa eléctrica, y Definición exacta de su necesidad."
-    else:
-        regla_datos = "1. DEBES recopilar sutilmente: Nombre y Apellido, Departamento y Municipio, y Definición exacta de su necesidad. OMITIR POR COMPLETO Y NO PREGUNTAR sobre consumo actual en kWh ni empresa eléctrica, ya que es irrelevante para este tipo de producto. (Si llamas a la herramienta final, envía 'N/A' en estos campos)."
+# =====================================================================
+# 6. MOTOR COGNITIVO (SINGLETON PATTERN)
+# =====================================================================
+@st.cache_resource
+def inicializar_motor_jarvi():
+    """Compila el grafo y su memoria solo una vez por ciclo de contenedor."""
+    memory = MemorySaver()
+    graph_builder = StateGraph(AgentState)
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
 
-    # Optimización de Ventana de Contexto
-    ontologia_dinamica = obtener_fragmento_ontologia(ctx.get('topologia'))
-    
-    prompt_sistema = SystemMessage(content=f"""
-    Eres Jarvi, Ingeniero de Preventa experto de AISA Solar.
-    Tu misión es diagnosticar, diseñar y presupuestar soluciones energéticas utilizando el portafolio de AISA.
-    [DATOS FIRMADOS Y VALIDADOS EN PRODUCCIÓN (PROTOCOLO C)]:
-    - Ubicación del Proyecto: {ctx.get('ciudad') if ctx.get('ciudad') else 'PENDIENTE DE VALIDAR'}
-    - Distribuidora del Servicio: {ctx.get('empresa_electrica') if ctx.get('empresa_electrica') else ('N/A' if not ctx.get('requiere_auditoria_electrica') else 'PENDIENTE DE VALIDAR')}
-    - Tarifa indexada al sistema: GTQ {ctx.get('tarifa_base_gtq') if ctx.get('tarifa_base_gtq') else ('N/A' if not ctx.get('requiere_auditoria_electrica') else 'PENDIENTE')} /kWh
-    - Topología Tecnológica Solicitada: {ctx.get('topologia') if ctx.get('topologia') else 'PENDIENTE DE DETECTAR'}
+    # NODO 1: CLASIFICADOR EPITEMOLÓGICO
+    def clasificador_topologia_node(state: AgentState):
+        messages = state.get("messages", [])
+        ctx = state.get("contexto_tecnico", {
+            "ciudad": None, "empresa_electrica": None, 
+            "tarifa_base_gtq": None, "topologia": None, 
+            "calculo_carga_completado": False, "requiere_auditoria_electrica": False
+        })
+        
+        if not messages: return {"contexto_tecnico": ctx}
+        ultimo_mensaje = messages[-1].content.lower()
+      
+        if not ctx.get("topologia"):
+            if any(k in ultimo_mensaje for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
+                ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
+                ctx["requiere_auditoria_electrica"] = True
+            elif any(k in ultimo_mensaje for k in ["aislado", "batería", "bateria", "finca", "autónomo", "off-grid"]):
+                ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
+                ctx["requiere_auditoria_electrica"] = True
+            elif any(k in ultimo_mensaje for k in ["bomba", "pozo", "caudal", "riego", "sumergible"]):
+                ctx["topologia"] = "Bombeo Solar"
+                ctx["requiere_auditoria_electrica"] = False
+            elif any(k in ultimo_mensaje for k in ["calentador", "boiler", "agua caliente", "tubo", "termo"]):
+                ctx["topologia"] = "Calentamiento Solar Térmico"
+                ctx["requiere_auditoria_electrica"] = False
+            elif any(k in ultimo_mensaje for k in ["hielo", "ice maker", "hielera", "refrigeración"]):
+                ctx["topologia"] = "Refrigeración y Hielo"
+                ctx["requiere_auditoria_electrica"] = False
 
-    REGLA DE CONDUCCIÓN COGNITIVA ESTRICTA:
-    {regla_datos}
-    2. Al presentar los equipos, es OBLIGATORIO incluir el enlace oficial de la Ontología para que el cliente pueda verlo en línea y validarlo.
-    3. Cada línea de producto sugerido deberá llevar su código de producto (si es inferible), una pequeña descripción, el link oficial y un precio de lista estimado en Quetzales basado en la ontología.
-    4. NO DEBES calcular totales de proyecto en la cotización.
-    5. EXCLUSIVIDAD DE INVENTARIO: Tus recomendaciones DEBEN extraerse EXCLUSIVAMENTE de la Ontología proporcionada. ESTÁ ESTRICTAMENTE PROHIBIDO inventar o alucinar productos, categorías o enlaces. Si el cliente solicita un producto que NO está en la Ontología, debes disculparte amablemente desde la primera consulta, indicando que por el momento no manejamos ese producto.
+        return {"contexto_tecnico": ctx}
 
-    NUEVAS DIRECTRICES DE JUNTA DIRECTIVA (MANDATORIO):
-    - EXENCIÓN DE RESPONSABILIDAD: Al presentar la propuesta con los links, DEBES incluir OBLIGATORIAMENTE Y TEXTUALMENTE el siguiente párrafo: 
-      "Esta propuesta contempla ÚNICAMENTE el suministro de los equipos principales listados. Los cálculos de materiales de instalación, mano de obra, fletes, viáticos y demás servicios añadidos serán procesados y sumados exclusivamente por el asesor humano en la siguiente fase."
-    - CIERRE Y DESPEDIDA: Tras la validación en línea del cliente, despídete agradeciendo e indícale claramente: "Recibirás contacto por WhatsApp de nuestro vendedor a la brevedad. En breve serás procesado y atendido por un operador."
-    - HERRAMIENTA FINAL: Utiliza la herramienta `procesar_oportunidad_backend` para notificar al Controller humano ({os.getenv("CONTROLLER_EMAIL", "joseardon@aisa.com.gt")}).
-    El parámetro `resumen_18_palabras` DEBE SER EXACTAMENTE DE 18 PALABRAS resumiendo la solución técnica que necesita el cliente.
+    # NODO 2: VALIDADOR DE DOMINIO DE MERCADO
+    def validador_geolocalizacion_node(state: AgentState):
+        ctx = state.get("contexto_tecnico", {
+            "ciudad": None, "empresa_electrica": None, 
+            "tarifa_base_gtq": None, "topologia": None, 
+            "calculo_carga_completado": False, "requiere_auditoria_electrica": False
+        })
+        messages = state.get("messages", [])
+        if not messages: return {"contexto_tecnico": ctx}
+        ultimo_mensaje = messages[-1].content.lower()
+       
+        if not ctx.get("ciudad"):
+            if any(k in ultimo_mensaje for k in ["guatemala", "mixco", "capital", "ciudad", "villa nueva", "petapa"]):
+                ctx["ciudad"] = "Guatemala Metropolitana"
+                if ctx.get("requiere_auditoria_electrica"):
+                    ctx["empresa_electrica"] = "EEGSA"
+                    ctx["tarifa_base_gtq"] = 1.45
+            elif any(k in ultimo_mensaje for k in ["quetzaltenango", "xela", "coban", "escuintla", "petén", "peten", "zacapa", "chiquimula", "jutiapa", "izabal"]):
+                ctx["ciudad"] = "Departamentos (Interior)"
+                if ctx.get("requiere_auditoria_electrica"):
+                    ctx["empresa_electrica"] = "ENERGUATE (DEOCSA/DEORSA)"
+                    ctx["tarifa_base_gtq"] = 1.95
+        return {"contexto_tecnico": ctx}
 
-    POLÍTICA DE MARCA (OBLIGATORIO):
-    - NO menciones marcas de la competencia bajo ninguna circunstancia.
-    - Actúa como un experto consultor, no como un formulario.
-    - Tu base de conocimiento está estrictamente limitada EXCLUSIVAMENTE a la siguiente Ontología.
+    # NODO 3: MOTOR JARVI (PROMPT DINÁMICO REFINADO)
+    def chatbot_node(state: AgentState):
+        ctx = state.get("contexto_tecnico", {
+            "ciudad": None, "empresa_electrica": None, 
+            "tarifa_base_gtq": None, "topologia": None, 
+            "calculo_carga_completado": False, "requiere_auditoria_electrica": False
+        })
+        
+        if ctx.get("requiere_auditoria_electrica"):
+            regla_datos = "1. DEBES recopilar sutilmente: Nombre y Apellido, Departamento y Municipio, Consumo actual (kWh o gasto mensual), Empresa eléctrica, y Definición exacta de su necesidad."
+        else:
+            regla_datos = "1. DEBES recopilar sutilmente: Nombre y Apellido, Departamento y Municipio, y Definición exacta de su necesidad. OMITIR POR COMPLETO Y NO PREGUNTAR sobre consumo actual en kWh ni empresa eléctrica, ya que es irrelevante para este tipo de producto. (Si llamas a la herramienta final, envía 'N/A' en estos campos)."
 
-    ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR (FILTRADA PARA ESTA SESIÓN):
-    {ontologia_dinamica}
-    """)
-    return {"messages": [llm.invoke([prompt_sistema] + state["messages"])]}
+        ontologia_dinamica = obtener_fragmento_ontologia(ctx.get('topologia'))
+        
+        prompt_sistema = SystemMessage(content=f"""
+        Eres Jarvi, Ingeniero de Preventa experto de AISA Solar.
+        Tu misión es diagnosticar, diseñar y presupuestar soluciones energéticas utilizando el portafolio de AISA.
+        [DATOS FIRMADOS Y VALIDADOS EN PRODUCCIÓN (PROTOCOLO C)]:
+        - Ubicación del Proyecto: {ctx.get('ciudad') if ctx.get('ciudad') else 'PENDIENTE DE VALIDAR'}
+        - Distribuidora del Servicio: {ctx.get('empresa_electrica') if ctx.get('empresa_electrica') else ('N/A' if not ctx.get('requiere_auditoria_electrica') else 'PENDIENTE DE VALIDAR')}
+        - Tarifa indexada al sistema: GTQ {ctx.get('tarifa_base_gtq') if ctx.get('tarifa_base_gtq') else ('N/A' if not ctx.get('requiere_auditoria_electrica') else 'PENDIENTE')} /kWh
+        - Topología Tecnológica Solicitada: {ctx.get('topologia') if ctx.get('topologia') else 'PENDIENTE DE DETECTAR'}
 
-# ENSAMBLAJE DEL GRAFO DIRIGIDO
-graph_builder.add_node("clasificador", clasificador_topologia_node)
-graph_builder.add_node("validador", validador_geolocalizacion_node)
-graph_builder.add_node("chatbot", chatbot_node)
-graph_builder.add_node("tools", ToolNode([procesar_oportunidad_backend]))
+        REGLA DE CONDUCCIÓN COGNITIVA ESTRICTA:
+        {regla_datos}
+        2. Al presentar los equipos, es OBLIGATORIO incluir el enlace oficial de la Ontología para que el cliente pueda verlo en línea y validarlo.
+        3. Cada línea de producto sugerido deberá llevar su código de producto (si es inferible), una pequeña descripción, el link oficial y un precio de lista estimado en Quetzales basado en la ontología.
+        4. NO DEBES calcular totales de proyecto en la cotización.
+        5. EXCLUSIVIDAD DE INVENTARIO: Tus recomendaciones DEBEN extraerse EXCLUSIVAMENTE de la Ontología proporcionada. ESTÁ ESTRICTAMENTE PROHIBIDO inventar o alucinar productos, categorías o enlaces. Si el cliente solicita un producto que NO está en la Ontología, debes disculparte amablemente desde la primera consulta, indicando que por el momento no manejamos ese producto.
+        
+        NUEVAS DIRECTRICES DE JUNTA DIRECTIVA (MANDATORIO):
+        - EXENCIÓN DE RESPONSABILIDAD: Al presentar la propuesta con los links, DEBES incluir OBLIGATORIAMENTE Y TEXTUALMENTE el siguiente párrafo: 
+          "Esta propuesta contempla ÚNICAMENTE el suministro de los equipos principales listados. Los cálculos de materiales de instalación, mano de obra, fletes, viáticos y demás servicios añadidos serán procesados y sumados exclusivamente por el asesor humano en la siguiente fase."
+        - CIERRE Y DESPEDIDA: Tras la validación en línea del cliente, despídete agradeciendo e indícale claramente: "Recibirás contacto por WhatsApp de nuestro vendedor a la brevedad. En breve serás procesado y atendido por un operador."
+        - HERRAMIENTA FINAL: Utiliza la herramienta `procesar_oportunidad_backend` para notificar al Controller humano. El parámetro `resumen_18_palabras` DEBE SER EXACTAMENTE DE 18 PALABRAS resumiendo la solución técnica que necesita el cliente.
+        
+        POLÍTICA DE MARCA (OBLIGATORIO):
+        - NO menciones marcas de la competencia bajo ninguna circunstancia.
+        - Actúa como un experto consultor, no como un formulario.
+        - Tu base de conocimiento está estrictamente limitada EXCLUSIVAMENTE a la siguiente Ontología.
+        
+        ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR (FILTRADA PARA ESTA SESIÓN):
+        {ontologia_dinamica}
+        """)
+        return {"messages": [llm.invoke([prompt_sistema] + state["messages"])]}
 
-graph_builder.add_edge(START, "clasificador")
-graph_builder.add_edge("clasificador", "validador")
-graph_builder.add_edge("validador", "chatbot")
-graph_builder.add_conditional_edges("chatbot", tools_condition)
-graph_builder.add_edge("tools", "chatbot")
+    # ENSAMBLAJE DEL GRAFO DIRIGIDO
+    graph_builder.add_node("clasificador", clasificador_topologia_node)
+    graph_builder.add_node("validador", validador_geolocalizacion_node)
+    graph_builder.add_node("chatbot", chatbot_node)
+    graph_builder.add_node("tools", ToolNode([procesar_oportunidad_backend]))
 
-jarvi_graph = graph_builder.compile(checkpointer=memory)
+    graph_builder.add_edge(START, "clasificador")
+    graph_builder.add_edge("clasificador", "validador")
+    graph_builder.add_edge("validador", "chatbot")
+    graph_builder.add_conditional_edges("chatbot", tools_condition)
+    graph_builder.add_edge("tools", "chatbot")
+
+    return graph_builder.compile(checkpointer=memory)
+
+jarvi_graph = inicializar_motor_jarvi()
 
 # =====================================================================
 # 7. TÍTULO E INSTRUCCIONES (UI)
