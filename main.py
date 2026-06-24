@@ -4,14 +4,18 @@ import requests
 import uuid
 import io
 import json
-import smtplib
 import traceback
 import datetime
 import threading
+import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Annotated, TypedDict, Optional
 from dotenv import load_dotenv
+
+# Nuevas importaciones para Gmail API
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -21,7 +25,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 
-# IMPORTACIÓN Y CLIENTE PARA OPENAI (Whisper + TTS)
+# IMPORTACIÓN Y CLIENTE PARA OPENAI (Whisper + TTS + Vision)
 from openai import OpenAI
 
 # =====================================================================
@@ -52,6 +56,46 @@ APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
+
+# =====================================================================
+# HELPER GMAIL API (OAUTH2)
+# =====================================================================
+def enviar_correo_gmail_api(msg_multipart):
+    """Envia correos utilizando la API de Gmail con Refresh Token"""
+    creds = Credentials(
+        token=None,
+        refresh_token=os.getenv("GMAIL_REFRESH_TOKEN"),
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=os.getenv("GMAIL_CLIENT_ID"),
+        client_secret=os.getenv("GMAIL_CLIENT_SECRET")
+    )
+    try:
+        service = build('gmail', 'v1', credentials=creds)
+        raw_msg = base64.urlsafe_b64encode(msg_multipart.as_bytes()).decode('utf-8')
+        service.users().messages().send(userId="me", body={'raw': raw_msg}).execute()
+    except Exception as e:
+        print(f"Error al enviar correo vía Gmail API: {e}")
+
+# =====================================================================
+# HELPER VISION API (ANÁLISIS DE FACTURA)
+# =====================================================================
+def procesar_imagen_factura(image_bytes):
+    """Utiliza GPT-4o-mini para extraer datos estructurados de la fotografía de la factura"""
+    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Analiza esta factura de electricidad de Guatemala. Extrae la siguiente información en formato JSON estricto: 1. 'empresa_electrica' (Busca EEGSA o ENERGUATE), 2. 'consumo_kwh' (sólo el número), 3. 'monto_factura' (sólo el número en Quetzales). Si no detectas un dato, asigna null."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]
+            }
+        ],
+        response_format={ "type": "json_object" }
+    )
+    return json.loads(response.choices[0].message.content)
 
 # =====================================================================
 # 3. ONTOLOGÍA FRAGMENTADA (OPTIMIZACIÓN DE VENTANA DE CONTEXTO)
@@ -173,7 +217,7 @@ def obtener_fragmento_ontologia(topologia: Optional[str]) -> str:
 def procesar_oportunidad_backend(nombre_apellidos: str, departamento_municipio: str, consumo_actual: str, empresa_electrica: str, definicion_necesidad: str, listado_equipos_html: str, numero_whatsapp: str, resumen_18_palabras: str) -> str:
     """
     Ejecuta esta herramienta SOLO cuando el cliente acepte el pre-cálculo y el listado de equipos con links.
-    Se encarga de enviar el WhatsApp y el Email al Controller a través de SMTP y AcruxLab sin bloquear la UI.
+    Se encarga de enviar el WhatsApp y el Email al Controller a través de Gmail API y AcruxLab sin bloquear la UI.
     """
     def tarea_background():
         num_limpio = ''.join(filter(str.isdigit, numero_whatsapp))
@@ -181,8 +225,8 @@ def procesar_oportunidad_backend(nombre_apellidos: str, departamento_municipio: 
         
         try:
             msg = MIMEMultipart()
-            msg['From'] = os.getenv("SMTP_USER")
             msg['To'] = controller_email
+            msg['From'] = os.getenv("SMTP_USER", "AISA Bot")
             msg['Subject'] = resumen_18_palabras
             
             cuerpo_correo = f"""Oportunidad Generada:
@@ -196,18 +240,15 @@ Equipos Sugeridos (Solo equipos principales):
 {listado_equipos_html}
 
 Observaciones:
-El cliente ha validado los links. Pendiente de cotizar materiales de instalación, mano de obra, fletes y viáticos por el Controller."""
+El cliente ha validado los links.
+Pendiente de cotizar materiales de instalación, mano de obra, fletes y viáticos por el Controller."""
             msg.attach(MIMEText(cuerpo_correo, 'plain'))
             
-            smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-            smtp_port = int(os.getenv("SMTP_PORT", 587))
+            # Usar la nueva función de Gmail API
+            enviar_correo_gmail_api(msg)
             
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
-                server.send_message(msg)
         except Exception as e:
-            print(f"Error asíncrono en SMTP: {str(e)}") 
+            print(f"Error asíncrono en Gmail API: {str(e)}") 
             
         payload_wa = {
             "instance_id": APICHAT_INSTANCE,
@@ -232,8 +273,8 @@ def notificar_error_runtime(error_obj, traceback_str, session_data, prompt_falli
     def tarea_error_background():
         controller_email = os.getenv("CONTROLLER_EMAIL", "joseardon@aisa.com.gt")
         msg = MIMEMultipart()
-        msg['From'] = os.getenv("SMTP_USER")
         msg['To'] = controller_email
+        msg['From'] = os.getenv("SMTP_USER", "AISA Bot")
         msg['Subject'] = f"🚨 ERROR CRÍTICO JARVI - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
         try:
@@ -255,15 +296,10 @@ CONTEXTO DE LA SESIÓN AL MOMENTO DEL ERROR:
         msg.attach(MIMEText(cuerpo_correo, 'plain'))
         
         try:
-            smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-            smtp_port = int(os.getenv("SMTP_PORT", 587))
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
-                server.send_message(msg)
+            enviar_correo_gmail_api(msg)
             print("Notificación de error enviada asíncronamente.")
-        except Exception as e_smtp:
-            print(f"FALLO CRÍTICO: No se pudo enviar el correo de error. Razón: {e_smtp}")
+        except Exception as e_api:
+            print(f"FALLO CRÍTICO: No se pudo enviar el correo de error. Razón: {e_api}")
             
     threading.Thread(target=tarea_error_background).start()
 
@@ -343,7 +379,7 @@ def inicializar_motor_jarvi():
         if ctx.get("requiere_auditoria_electrica"):
             regla_datos = "1. DEBES recopilar sutilmente: Nombre y Apellido, Departamento y Municipio, Consumo actual (kWh o gasto mensual), Empresa eléctrica, y Definición exacta de su necesidad."
         else:
-            regla_datos = "1. DEBES recopilar sutilmente: Nombre y Apellido, Departamento y Municipio, y Definición exacta de su necesidad. OMITIR POR COMPLETO Y NO PREGUNTAR sobre consumo actual en kWh ni empresa eléctrica, ya que es irrelevante para este tipo de producto. (Si llamas a la herramienta final, envía 'N/A' en estos campos)."
+            regla_datos = "1. DEBES recopilar sutilmente: Nombre y Apellido, Departamento y Municipio, y Definición exacta de su necesidad.\nOMITIR POR COMPLETO Y NO PREGUNTAR sobre consumo actual en kWh ni empresa eléctrica, ya que es irrelevante para este tipo de producto.\n(Si llamas a la herramienta final, envía 'N/A' en estos campos)."
 
         ontologia_dinamica = obtener_fragmento_ontologia(ctx.get('topologia'))
         
@@ -361,19 +397,19 @@ def inicializar_motor_jarvi():
         2. Al presentar los equipos, es OBLIGATORIO incluir el enlace oficial de la Ontología para que el cliente pueda verlo en línea y validarlo.
         3. Cada línea de producto sugerido deberá llevar su código de producto (si es inferible), una pequeña descripción, el link oficial y un precio de lista estimado en Quetzales basado en la ontología.
         4. NO DEBES calcular totales de proyecto en la cotización.
-        5. EXCLUSIVIDAD DE INVENTARIO: Tus recomendaciones DEBEN extraerse EXCLUSIVAMENTE de la Ontología proporcionada. ESTÁ ESTRICTAMENTE PROHIBIDO inventar o alucinar productos, categorías o enlaces. Si el cliente solicita un producto que NO está en la Ontología, debes disculparte amablemente desde la primera consulta, indicando que por el momento no manejamos ese producto.
-        
+        5. EXCLUSIVIDAD DE INVENTARIO: Tus recomendaciones DEBEN extraerse EXCLUSIVAMENTE de la Ontología proporcionada.
+        ESTÁ ESTRICTAMENTE PROHIBIDO inventar o alucinar productos, categorías o enlaces.
+        Si el cliente solicita un producto que NO está en la Ontología, debes disculparte amablemente desde la primera consulta, indicando que por el momento no manejamos ese producto.
         NUEVAS DIRECTRICES DE JUNTA DIRECTIVA (MANDATORIO):
         - EXENCIÓN DE RESPONSABILIDAD: Al presentar la propuesta con los links, DEBES incluir OBLIGATORIAMENTE Y TEXTUALMENTE el siguiente párrafo: 
           "Esta propuesta contempla ÚNICAMENTE el suministro de los equipos principales listados. Los cálculos de materiales de instalación, mano de obra, fletes, viáticos y demás servicios añadidos serán procesados y sumados exclusivamente por el asesor humano en la siguiente fase."
         - CIERRE Y DESPEDIDA: Tras la validación en línea del cliente, despídete agradeciendo e indícale claramente: "Recibirás contacto por WhatsApp de nuestro vendedor a la brevedad. En breve serás procesado y atendido por un operador."
-        - HERRAMIENTA FINAL: Utiliza la herramienta `procesar_oportunidad_backend` para notificar al Controller humano. El parámetro `resumen_18_palabras` DEBE SER EXACTAMENTE DE 18 PALABRAS resumiendo la solución técnica que necesita el cliente.
-        
+        - HERRAMIENTA FINAL: Utiliza la herramienta `procesar_oportunidad_backend` para notificar al Controller humano.
+        El parámetro `resumen_18_palabras` DEBE SER EXACTAMENTE DE 18 PALABRAS resumiendo la solución técnica que necesita el cliente.
         POLÍTICA DE MARCA (OBLIGATORIO):
         - NO menciones marcas de la competencia bajo ninguna circunstancia.
         - Actúa como un experto consultor, no como un formulario.
         - Tu base de conocimiento está estrictamente limitada EXCLUSIVAMENTE a la siguiente Ontología.
-        
         ONTOLOGÍA DEL ECOSISTEMA AISA SOLAR (FILTRADA PARA ESTA SESIÓN):
         {ontologia_dinamica}
         """)
@@ -419,6 +455,8 @@ if "audio_key_counter" not in st.session_state:
     st.session_state.audio_key_counter = 0
 if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
+if "factura_procesada" not in st.session_state:
+    st.session_state.factura_procesada = False
 
 if "messages" not in st.session_state:
     greeting = """¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. Estamos para ayudarte a encontrar la mejor solución energética. ¿Sobre qué producto necesitas información hoy?
@@ -456,9 +494,41 @@ for msg in st.session_state.messages:
     elif isinstance(msg, HumanMessage): st.chat_message("user").markdown(msg.content)
     elif isinstance(msg, ToolMessage): st.chat_message("system").markdown(f"⚙️ Operación: {msg.content}")
 
+
 # =====================================================================
-# LÓGICA DE CAPTURA DUAL: AUDIO Y TEXTO
+# LÓGICA DE CAPTURA DUAL Y MULTIMODAL (FOTO, AUDIO Y TEXTO)
 # =====================================================================
+st.markdown("---")
+st.write("📸 **Cargar Factura Eléctrica (Opcional - Sólo para cálculo de Paneles)**")
+col_img, col_cam = st.columns(2)
+
+with col_img:
+    factura_img = st.file_uploader("Sube una foto de tu factura", type=["jpg", "jpeg", "png"], key="file_factura")
+with col_cam:
+    factura_cam = st.camera_input("O toma una foto a la factura", key="cam_factura")
+
+img_a_procesar = factura_img if factura_img else factura_cam
+
+if img_a_procesar and not st.session_state.factura_procesada:
+    with st.spinner("🔍 Analizando tu factura con visión artificial..."):
+        try:
+            datos_factura = procesar_imagen_factura(img_a_procesar.getvalue())
+            st.session_state.factura_procesada = True
+            
+            # Armamos el prompt automático con los datos extraídos
+            empresa = datos_factura.get("empresa_electrica", "Desconocida")
+            consumo = datos_factura.get("consumo_kwh", "Desconocido")
+            monto = datos_factura.get("monto_factura", "Desconocido")
+            
+            prompt_factura = f"He subido mi factura eléctrica. Los datos detectados por el sistema de visión son: Empresa: {empresa}, Consumo: {consumo} kWh, Monto a pagar: Q{monto}. Por favor, tómalo en cuenta para mi requerimiento."
+            st.session_state.pending_prompt = prompt_factura
+            st.success("✅ Factura analizada correctamente. Los datos se han añadido a tu sesión.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error analizando la factura: {e}")
+
+st.markdown("---")
+
 audio_value = st.audio_input(
     "🎤 Grabar mensaje de voz", 
     key=f"audio_input_{st.session_state.audio_key_counter}"
