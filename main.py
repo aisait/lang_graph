@@ -13,7 +13,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Annotated, TypedDict, Optional
 from dotenv import load_dotenv
-from httpx import Client as HttpxClient
+import httpx
 # Nuevas importaciones para Gmail API
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -90,9 +90,15 @@ APICHAT_TOKEN = os.getenv("APICHAT_TOKEN")
 APICHAT_ENDPOINT = os.getenv("APICHAT_ENDPOINT", "https://api.acruxlab.net/prod/v2/odoo")
 APICHAT_INSTANCE = os.getenv("APICHAT_INSTANCE", "aisa_816")
 
+transport = httpx.HTTPTransport(local_address=None)
+
 client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
-    http_client=HttpxClient(proxies=None) # Desactiva explícitamente el uso de proxies
+    http_client=httpx.Client(
+        transport=transport,
+        proxies=None,
+        verify=True
+    )
 )
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
