@@ -313,7 +313,24 @@ def inicializar_motor_jarvi():
     graph_builder = StateGraph(AgentState)
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
 
-    # NODO 1: CLASIFICADOR EPITEMOLÓGICO
+    def extraer_intencion_humana(messages: list) -> str:
+        """
+        Garantiza epistemológicamente que solo evaluamos la intención del usuario.
+        Resuelve la ontología multimodal y previene excepciones de NoneType.
+        """
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                if not msg.content:
+                    return ""
+                if isinstance(msg.content, str):
+                    return msg.content.lower()
+                if isinstance(msg.content, list):
+                    # Manejo seguro para inputs multimodales (Visión Artificial)
+                    textos = [str(bloque.get("text", "")).lower() for bloque in msg.content if isinstance(bloque, dict) and "text" in bloque]
+                    return " ".join(textos)
+        return ""
+
+    # NODO 1: CLASIFICADOR EPISTEMOLÓGICO
     def clasificador_topologia_node(state: AgentState):
         messages = state.get("messages", [])
         ctx = state.get("contexto_tecnico", {
@@ -322,8 +339,8 @@ def inicializar_motor_jarvi():
             "calculo_carga_completado": False, "requiere_auditoria_electrica": False
         })
         
-        if not messages: return {"contexto_tecnico": ctx}
-        ultimo_mensaje = messages[-1].content.lower()
+        ultimo_mensaje = extraer_intencion_humana(messages)
+        if not ultimo_mensaje: return {"contexto_tecnico": ctx}
       
         if not ctx.get("topologia"):
             if any(k in ultimo_mensaje for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
@@ -352,8 +369,9 @@ def inicializar_motor_jarvi():
             "calculo_carga_completado": False, "requiere_auditoria_electrica": False
         })
         messages = state.get("messages", [])
-        if not messages: return {"contexto_tecnico": ctx}
-        ultimo_mensaje = messages[-1].content.lower()
+        
+        ultimo_mensaje = extraer_intencion_humana(messages)
+        if not ultimo_mensaje: return {"contexto_tecnico": ctx}
        
         if not ctx.get("ciudad"):
             if any(k in ultimo_mensaje for k in ["guatemala", "mixco", "capital", "ciudad", "villa nueva", "petapa"]):
