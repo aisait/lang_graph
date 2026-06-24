@@ -8,6 +8,7 @@ import traceback
 import datetime
 import threading
 import base64
+import functools # Añadido para el modelo de auditoría
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Annotated, TypedDict, Optional
@@ -27,6 +28,42 @@ from langgraph.checkpoint.memory import MemorySaver
 
 # IMPORTACIÓN Y CLIENTE PARA OPENAI (Whisper + TTS + Vision)
 from openai import OpenAI
+
+# =====================================================================
+# MODELO DE AUDITORÍA TÉCNICA (SERVERLESS)
+# =====================================================================
+def auditar_fase(nombre_fase: str, criticidad: str = "ALTA"):
+    """
+    Decorador de auditoría para trazabilidad en arquitecturas serverless.
+    Captura el contexto, variables y excepciones con formato ISO/Técnico.
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                # Ejecución normal de la subfase
+                return func(*args, **kwargs)
+            except Exception as e:
+                # Intercepción en tiempo de ejecución
+                st.error(f"❌ Error Crítico Interceptado en Fase: {nombre_fase} (Criticidad: {criticidad})")
+                tb_str = traceback.format_exc()
+                timestamp_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                
+                with st.expander("🛠️ Detalles Técnicos de Auditoría (Logs Serverless)", expanded=True):
+                    st.markdown("### Contexto de Ejecución")
+                    st.text(f"Timestamp (UTC): {timestamp_iso}")
+                    st.text(f"Función Fallida: {func.__name__}")
+                    
+                    st.markdown("### Estado de Variables (Inputs)")
+                    st.write(f"**Args posicionales:** {args}")
+                    st.write(f"**Kwargs:** {kwargs}")
+                    
+                    st.markdown("### Trazado de Pila (Traceback)")
+                    st.code(tb_str, language="python")
+                
+                raise e # Relanzamos para que LangGraph maneje el estado de memoria correctamente
+        return wrapper
+    return decorator
 
 # =====================================================================
 # 1. DEFINICIÓN DEL ESTADO (ACTUALIZADO - RUTEO EPISTEMOLÓGICO)
@@ -208,12 +245,13 @@ def obtener_fragmento_ontologia(topologia: Optional[str]) -> str:
     else:
         bloques_requeridos = list(ONTOLOGIA_BLOQUES.keys())
         
-    return "\n\n".join([ONTOLOGIA_BLOQUES.get(b, str(b)) for b in bloques_requeridos])
+    return "\n\n".join([str(ONTOLOGIA_BLOQUES.get(b, str(b))) for b in bloques_requeridos])
 
 # =====================================================================
 # 4. HERRAMIENTAS (ASÍNCRONAS PARA SERVERLESS)
 # =====================================================================
 @tool
+@auditar_fase(nombre_fase="Herramienta Backend (Envío Correo/WA)", criticidad="ALTA")
 def procesar_oportunidad_backend(nombre_apellidos: str, departamento_municipio: str, consumo_actual: str, empresa_electrica: str, definicion_necesidad: str, listado_equipos_html: str, numero_whatsapp: str, resumen_18_palabras: str) -> str:
     """
     Ejecuta esta herramienta SOLO cuando el cliente acepte el pre-cálculo y el listado de equipos con links.
@@ -330,6 +368,7 @@ def inicializar_motor_jarvi():
         return ""
 
     # NODO 1: CLASIFICADOR EPISTEMOLÓGICO
+    @auditar_fase(nombre_fase="Clasificador Epistemológico", criticidad="MEDIA")
     def clasificador_topologia_node(state: AgentState):
         messages = state.get("messages", [])
         ctx = state.get("contexto_tecnico", {
@@ -361,6 +400,7 @@ def inicializar_motor_jarvi():
         return {"contexto_tecnico": ctx}
 
     # NODO 2: VALIDADOR DE DOMINIO DE MERCADO
+    @auditar_fase(nombre_fase="Validador Geolocalización", criticidad="MEDIA")
     def validador_geolocalizacion_node(state: AgentState):
         ctx = state.get("contexto_tecnico", {
             "ciudad": None, "empresa_electrica": None, 
@@ -370,6 +410,7 @@ def inicializar_motor_jarvi():
         messages = state.get("messages", [])
         
         ultimo_mensaje = extraer_intencion_humana(messages)
+        
         if not ultimo_mensaje: return {"contexto_tecnico": ctx}
        
         if not ctx.get("ciudad"):
@@ -386,6 +427,7 @@ def inicializar_motor_jarvi():
         return {"contexto_tecnico": ctx}
 
     # NODO 3: MOTOR JARVI (PROMPT DINÁMICO REFINADO)
+    @auditar_fase(nombre_fase="Motor Cognitivo (Chatbot LangGraph)", criticidad="ALTA")
     def chatbot_node(state: AgentState):
         ctx = state.get("contexto_tecnico", {
             "ciudad": None, "empresa_electrica": None, 
