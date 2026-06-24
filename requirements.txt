@@ -1,9 +1,10 @@
-streamlit>=1.35.0
-langchain-openai>=0.1.0
-langgraph>=0.0.30
-python-dotenv>=1.0.1
-requests>=2.31.0
-openai>=1.20.0
-elevenlabs>=1.0.0
+streamlit
+openai
+langchain
+langchain-openai
+langgraph
+langchain-core
 google-api-python-client
 google-auth
+python-dotenv
+requests
