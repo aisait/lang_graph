@@ -97,7 +97,7 @@ if prompt:
     st.chat_message("user").markdown(prompt)
     
     with st.chat_message("assistant"):
-        with st.spinner("Ejecutando ruteo epistémico..."):
+        with st.spinner("Consultado en tiempo real a equipo de Ingeniería especializado de AISA Solar..."):
             try:
                 config_graph = {"configurable": {"thread_id": st.session_state.thread_id}}
                 response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config_graph)
