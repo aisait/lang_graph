@@ -5,6 +5,7 @@ import uuid
 import traceback
 import re  # CORRECCIÓN: Importación requerida para evitar fallo en auditoría por NameError
 import time  # CORRECCIÓN: Requerido para la ventana de espera de 60 segundos
+import requests # INTEGRACIÓN: Requerido para arquitectura desacoplada en producción
 
 from openai import OpenAI
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
@@ -135,7 +136,20 @@ if prompt:
             }
             
             with st.spinner("Consultando en tiempo real a equipo de Ingeniería especializado de AISA Solar..."):
-                response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config=config_ejecucion)
+                # INTEGRACIÓN QUIRÚRGICA: Arquitectura Desacoplada con Fallback
+                if getattr(config, "BACKEND_URL", None):
+                    # Llamada a la API externa (FastAPI en producción)
+                    api_res = requests.post(
+                        f"{config.BACKEND_URL}/chat", 
+                        json={"thread_id": st.session_state.thread_id, "message": prompt}, 
+                        timeout=120
+                    )
+                    api_res.raise_for_status()
+                    # Sincronización del estado leyendo la base de datos compartida para preservar la lógica de new_messages
+                    response_state = jarvi_graph.get_state(config_graph).values
+                else:
+                    # Ejecución local original intacta (Propiedad Intelectual Preservada)
+                    response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config=config_ejecucion)
             
             new_messages = response_state["messages"][len(st.session_state.messages)-1:]
             for msg in new_messages:
