@@ -44,7 +44,7 @@ if "messages" not in st.session_state:
         "5.\tBombas de calor para piscinas\n"
         "6.\tMáquinas de hacer hielo (Ice Maker)\n"
         "7.\tHieleras, refrigeradores y congeladores\n\n"
-        "¿Sobre cuál de estos productos necesita información o cuál es su necesidad actual? Por favor, indíqueme su Nombre y Departamento."
+        "¿Sobre cuál de estos productos necesita información o cuál es su necesidad actual? Por favor, indíqueme su Nombre, WhatsApp y Departamento para enviarle una cotización."
     )
     st.session_state.messages = [AIMessage(content=greeting)]
     
