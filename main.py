@@ -3,6 +3,9 @@ import streamlit as st
 import io
 import uuid
 import traceback
+import re  # CORRECCIÓN: Importación requerida para evitar fallo en auditoría por NameError
+import time  # CORRECCIÓN: Requerido para la ventana de espera de 60 segundos
+
 from openai import OpenAI
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
@@ -30,18 +33,18 @@ if "factura_procesada" not in st.session_state:
 config_graph = {"configurable": {"thread_id": st.session_state.thread_id}}
 
 if "messages" not in st.session_state:
+    # CORRECCIÓN: Formato exacto solicitado para el mensaje de bienvenida y listado numérico
     greeting = (
-        "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. "
-        "¿Sobre qué sistema necesitas ingeniería hoy?\n\n"
-        "Contamos con:\n"
-        "• *Paneles solares Atados a la Red* para ahorro en su factura\n"
-        "• *Calentadores solares*\n"
-        "• *Sistemas de paneles solares aislados* (para lugares sin energía eléctrica)\n"
-        "• *Bombas de agua solares*\n"
-        "• *Bombas de calor para piscinas*\n"
-        "• *Máquinas de hacer hielo (Ice Maker)*\n"
-        "• *Hieleras*\n\n"
-        "Por favor, indícame tu nombre y departamento."
+        "¡Hola! 👋 Soy Jarvi, su asesor técnico de AISA Solar. Muchas gracias por contactarnos!\n\n"
+        "Nos ponemos a su disposicon con nuestros productos.\n\n"
+        "1.\tCalentadores solares\n"
+        "2.\tPaneles solares Atados a la Red para ahorro en su factura\n"
+        "3.\tSistemas de paneles solares aislados (para lugares sin energía eléctrica)\n"
+        "4.\tBombas de agua solares\n"
+        "5.\tBombas de calor para piscinas\n"
+        "6.\tMáquinas de hacer hielo (Ice Maker)\n"
+        "7.\tHieleras, refrigeradores y congeladores\n\n"
+        "¿Sobre cuál de estos productos necesita información o cuál es su necesidad actual? Por favor, indíqueme su Nombre y Departamento."
     )
     st.session_state.messages = [AIMessage(content=greeting)]
     
@@ -107,51 +110,54 @@ if prompt:
     st.chat_message("user").markdown(prompt)
     
     with st.chat_message("assistant"):
-        with st.spinner("Consultado en tiempo real a equipo de Ingeniería especializado de AISA Solar..."):
-            try:
-                # Recuperación del estado técnico previo
-                estado_previo = jarvi_graph.get_state(config_graph).values
-                ctx_actual = estado_previo.get("contexto_tecnico", {})
-                
-                nombre_lead = ctx_actual.get("nombre_usuario", "Prospecto Nuevo")
-                
-                # Interceptación heurística preventiva para mitigar el Naming Lag en la primera traza
-                if nombre_lead == "Prospecto Nuevo":
-                    # Si el mensaje actual contiene patrones de presentación comunes
-                    match = re.search(r"(?:soy|llamo|nombre es)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", prompt, re.IGNORECASE)
-                    if match:
-                        nombre_lead = match.group(1).title()
+        try:
+            # Recuperación del estado técnico previo
+            estado_previo = jarvi_graph.get_state(config_graph).values
+            ctx_actual = estado_previo.get("contexto_tecnico", {})
+            
+            nombre_lead = ctx_actual.get("nombre_usuario", "Prospecto Nuevo")
+            
+            # Interceptación heurística preventiva para mitigar el Naming Lag en la primera traza
+            if nombre_lead == "Prospecto Nuevo":
+                match = re.search(r"(?:soy|llamo|nombre es)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", prompt, re.IGNORECASE)
+                if match:
+                    nombre_lead = match.group(1).title()
 
-                # Configuración de observabilidad inyectada dinámicamente
-                config_ejecucion = {
-                    "configurable": {"thread_id": st.session_state.thread_id},
-                    "run_name": f"Lead: {nombre_lead}",
-                    "tags": ["aisa-produccion-solar"]
-                }
-                
+                # CORRECCIÓN: Ventana de espera exacta de 60 segundos antes de generar la respuesta inicial de Jarvi
+                with st.spinner("Estabilizando canal de entrada... Concediendo 60 segundos para consolidar sus datos multimodales técnicos..."):
+                    time.sleep(60)
+
+            # Configuración de observabilidad inyectada dinámicamente
+            config_ejecucion = {
+                "configurable": {"thread_id": st.session_state.thread_id},
+                "run_name": f"Lead: {nombre_lead}",
+                "tags": ["aisa-produccion-solar"]
+            }
+            
+            with st.spinner("Consultando en tiempo real a equipo de Ingeniería especializado de AISA Solar..."):
                 response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config=config_ejecucion)
-                
-                new_messages = response_state["messages"][len(st.session_state.messages)-1:]
-                for msg in new_messages:
-                    if isinstance(msg, AIMessage) and msg.content:
-                        st.markdown(msg.content)
-                        if st.session_state.is_voice_mode:
-                            speech = client_openai.audio.speech.create(model="tts-1", voice="alloy", input=msg.content)
-                            audio_buffer = io.BytesIO()
-                            for chunk in speech.iter_bytes(chunk_size=4096): audio_buffer.write(chunk)
-                            audio_buffer.seek(0)
-                            st.audio(audio_buffer, format="audio/mp3", autoplay=True)
-                    elif isinstance(msg, ToolMessage):
-                        st.markdown(f"⚙️ {msg.content}")
-                        
-                st.session_state.messages = response_state["messages"]
-            except Exception as e:
-                tb_str = traceback.format_exc()
-                try:
-                    estado_error = jarvi_graph.get_state(config_graph).values.get("contexto_tecnico", {})
-                except:
-                    estado_error = "Error crítico de lectura de estado"
-                
-                snapshot = {"thread_id": st.session_state.thread_id, "contexto": estado_error}
-                notificar_error_runtime(e, tb_str, snapshot, prompt)
-                st.error("🚨 Interrupción en el procesamiento de su solicitud. El equipo técnico ya fue notificado.")
+            
+            new_messages = response_state["messages"][len(st.session_state.messages)-1:]
+            for msg in new_messages:
+                if isinstance(msg, AIMessage) and msg.content:
+                    st.markdown(msg.content)
+                    if st.session_state.is_voice_mode:
+                        speech = client_openai.audio.speech.create(model="tts-1", voice="alloy", input=msg.content)
+                        audio_buffer = io.BytesIO()
+                        for chunk in speech.iter_bytes(chunk_size=4096): audio_buffer.write(chunk)
+                        audio_buffer.seek(0)
+                        st.audio(audio_buffer, format="audio/mp3", autoplay=True)
+                elif isinstance(msg, ToolMessage):
+                    st.markdown(f"⚙️ {msg.content}")
+                    
+            st.session_state.messages = response_state["messages"]
+        except Exception as e:
+            tb_str = traceback.format_exc()
+            try:
+                estado_error = jarvi_graph.get_state(config_graph).values.get("contexto_tecnico", {})
+            except:
+                estado_error = "Error crítico de lectura de estado"
+            
+            snapshot = {"thread_id": st.session_state.thread_id, "contexto": estado_error}
+            notificar_error_runtime(e, tb_str, snapshot, prompt)
+            st.error("🚨 Interrupción en el procesamiento de su solicitud. El equipo técnico ya fue notificado.")
