@@ -44,7 +44,7 @@ if "messages" not in st.session_state:
         "5.\tBombas de calor para piscinas\n"
         "6.\tMáquinas de hacer hielo (Ice Maker)\n"
         "7.\tHieleras, refrigeradores y congeladores\n\n"
-        "¿Sobre cuál de estos productos necesita información o cuál es su necesidad actual?"
+        "¿Sobre cuál de estos productos necesita información? Favor indicar Nombre y WhatsApp para cotizarle..."
     )
     st.session_state.messages = [AIMessage(content=greeting)]
     
@@ -115,7 +115,7 @@ if prompt:
             estado_previo = jarvi_graph.get_state(config_graph).values
             ctx_actual = estado_previo.get("contexto_tecnico", {})
             
-            nombre_lead = ctx_actual.get("nombre_usuario", "Prospecto Nuevo")
+            nombre_lead = ctx_actual.get("nombre_usuario", "Nuevo Lead")
             
             # Interceptación heurística preventiva para mitigar el Naming Lag en la primera traza
             if nombre_lead == "Prospecto Nuevo":
@@ -123,9 +123,9 @@ if prompt:
                 if match:
                     nombre_lead = match.group(1).title()
 
-                # CORRECCIÓN: Ventana de espera exacta de 60 segundos antes de generar la respuesta inicial de Jarvi
-                with st.spinner("Por favor, indíqueme su Nombre, WhatsApp y Departamento para enviarle una cotización...."):
-                    time.sleep(60)
+                # CORRECCIÓN: Ventana de espera exacta de 20 segundos antes de generar la respuesta inicial de Jarvi
+                with st.spinner("Por favor, espere un momento se esta procesando su solicitud...."):
+                    time.sleep(20)
 
             # Configuración de observabilidad inyectada dinámicamente
             config_ejecucion = {
