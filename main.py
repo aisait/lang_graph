@@ -123,9 +123,9 @@ if prompt:
                 if match:
                     nombre_lead = match.group(1).title()
 
-                # CORRECCIÓN: Ventana de espera exacta de 20 segundos antes de generar la respuesta inicial de Jarvi
+                # CORRECCIÓN: Ventana de espera exacta en segundos antes de generar la respuesta inicial de Jarvi
                 with st.spinner("Por favor, espere un momento se esta procesando su solicitud...."):
-                    time.sleep(20)
+                    time.sleep(0)
 
             # Configuración de observabilidad inyectada dinámicamente
             config_ejecucion = {
