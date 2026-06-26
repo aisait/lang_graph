@@ -9,6 +9,7 @@ from email.mime.multipart import MIMEMultipart
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 import base64
+from pydantic import BaseModel, Field
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
@@ -71,6 +72,11 @@ def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) 
             whatsapp_formateado = f"{codigo_area} {base}"
             
     return nombre_normalizado, whatsapp_formateado
+
+# Esquema Estructurado Pydantic para Telemetría Exclusiva
+class ExtractorContacto(BaseModel):
+    nombre: Optional[str] = Field(None, description="Nombre de pila y apellidos del cliente.")
+    telefono: Optional[str] = Field(None, description="Número telefónico o celular provisto.")
 
 # Estructuras de Datos Clínicas para Auditoría de Sistemas
 class InferenciaEnergetica(TypedDict):
@@ -146,6 +152,7 @@ def inicializar_motor_jarvi():
     memory = MemorySaver()
     graph_builder = StateGraph(AgentState)
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
+    extractor_llm = llm.with_structured_output(ExtractorContacto)
 
     @auditar_fase(nombre_fase="Clasificador Topológico", criticidad="MEDIA")
     def clasificador_topologia_node(state: AgentState):
@@ -177,6 +184,19 @@ def inicializar_motor_jarvi():
     @auditar_fase(nombre_fase="Inferencia del Chatbot", criticidad="ALTA")
     def chatbot_node(state: AgentState, config: RunnableConfig):
         ctx = state.get("contexto_tecnico", {})
+        ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
+        
+        # EXTRACCIÓN SEMÁNTICA INYECTADA: Actualiza el estado antes del renderizado de LangSmith
+        if ultimo_mensaje and (not ctx.get("nombre") or ctx.get("nombre") == "Usuario" or not ctx.get("whatsapp")):
+            try:
+                extraccion = extractor_llm.invoke(f"Identifica si el mensaje contiene el nombre o teléfono del usuario. Mensaje: {ultimo_mensaje}")
+                if extraccion.nombre and (not ctx.get("nombre") or ctx["nombre"] == "Usuario"):
+                    ctx["nombre"] = extraccion.nombre
+                if extraccion.telefono and (not ctx.get("whatsapp") or ctx["whatsapp"] == "Pendiente"):
+                    ctx["whatsapp"] = extraccion.telefono
+            except Exception:
+                pass
+
         regla_datos = "1. DEBES recopilar sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta de equipos." if ctx.get("requiere_auditoria_electrica") else "1. DEBES recopilar sutilmente: Nombre, Ubicación y Necesidad exacta (Omitir consumo)."
         ontologia_dinamica = obtener_fragmento_ontologia(ctx.get('topologia'))
         
@@ -206,8 +226,8 @@ REGLAS OBLIGATORIAS:
 ONTOLOGÍA INTEGRAL ACCESIBLE:
 {ontologia_dinamica}
 """)
-        # Enviamos la config alterada para que impacte los traces de LangSmith
-        return {"messages": [llm.invoke([prompt_sistema] + state["messages"], config=config)]}
+        # Retornamos el estado mutando los mensajes y persistiendo el contexto técnico actualizado
+        return {"messages": [llm.invoke([prompt_sistema] + state["messages"], config=config)], "contexto_tecnico": ctx}
 
     # Construcción de la Topología de Red Conversacional
     graph_builder.add_node("clasificador", clasificador_topologia_node)
