@@ -4,22 +4,18 @@ import io
 import uuid
 import traceback
 from openai import OpenAI
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
-# Importación de la Arquitectura Fragmentada
 import config
 from audit import notificar_error_runtime
 from agent_graph import inicializar_motor_jarvi
 
-# Cliente de Inferencia Exclusivo de Media (Voz/Facturas)
 client_openai = OpenAI(api_key=config.os.getenv("OPENAI_API_KEY"))
 
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
-
-# Inicialización Asíncrona del Grafo Compilado
 jarvi_graph = inicializar_motor_jarvi()
 
-# Gestión Segura del Estado de la Sesión en Streamlit
+# Capa de Aislamiento del Session State de Streamlit
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "is_voice_mode" not in st.session_state:
@@ -31,19 +27,35 @@ if "pending_prompt" not in st.session_state:
 if "factura_procesada" not in st.session_state:
     st.session_state.factura_procesada = False
 
+config_graph = {"configurable": {"thread_id": st.session_state.thread_id}}
+
 if "messages" not in st.session_state:
-    greeting = "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. ¿Sobre qué sistema necesitas ingeniería hoy?\n1. Calentadores\n2. Sistemas Aislados\n3. Sistemas On-Grid / Ahorro\n\nPor favor, indícame tu nombre y departamento."
+    greeting = (
+        "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. "
+        "¿Sobre qué sistema necesitas ingeniería hoy?\n\n"
+        "Contamos con:\n"
+        "• *Paneles solares Atados a la Red* para ahorro en su factura\n"
+        "• *Calentadores solares*\n"
+        "• *Sistemas de paneles solares aislados* (para lugares sin energía eléctrica)\n"
+        "• *Bombas de agua solares*\n"
+        "• *Bombas de calor para piscinas*\n"
+        "• *Máquinas de hacer hielo (Ice Maker)*\n"
+        "• *Hieleras*\n\n"
+        "Por favor, indícame tu nombre y departamento."
+    )
     st.session_state.messages = [AIMessage(content=greeting)]
     
-    config_graph = {"configurable": {"thread_id": st.session_state.thread_id}}
     jarvi_graph.update_state(config_graph, {
         "messages": [AIMessage(content=greeting)],
-        "contexto_tecnico": {"ciudad": None, "empresa_electrica": None, "tarifa_base_gtq": None, "topologia": None, "calculo_carga_completado": False, "requiere_auditoria_electrica": False, "nombre": "Prospecto Nuevo"}
+        "contexto_tecnico": {
+            "ciudad": None, "empresa_electrica": None, "tarifa_base_gtq": None, "topologia": None, 
+            "calculo_carga_completado": False, "requiere_auditoria_electrica": False,
+            "nombre_usuario": "Prospecto Nuevo", "whatsapp_normalizado": "No Provisto"
+        }
     })
 
 st.title("Jarvi ⚡ Asesor Técnico de Ingeniería - AISA Solar")
 
-# Renderizado de Historial Conversacional Estático de Alta Velocidad
 for msg in st.session_state.messages:
     if isinstance(msg, AIMessage):
         st.chat_message("assistant").markdown(msg.content)
@@ -52,7 +64,6 @@ for msg in st.session_state.messages:
     elif isinstance(msg, ToolMessage):
         st.chat_message("system").markdown(f"⚙️ Log de Auditoría: {msg.content}")
 
-# Captura de Eventos Multimodales (Entrada de Facturas)
 st.markdown("---")
 factura_img = st.file_uploader("📸 Carga de Factura de Distribución Eléctrica", type=["jpg", "jpeg", "png"])
 if factura_img and not st.session_state.factura_procesada:
@@ -72,7 +83,6 @@ if factura_img and not st.session_state.factura_procesada:
         except Exception as e:
             st.error(f"Fallo en la lectura del archivo de imagen: {e}")
 
-# Captura de Flujo Conversacional
 audio_value = st.audio_input("🎤 Mensaje de Voz Comercial", key=f"audio_input_{st.session_state.audio_key_counter}")
 text_value = st.chat_input("Consulte con el ingeniero de preventa aquí...")
 
@@ -99,26 +109,27 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("Consultado en tiempo real a equipo de Ingeniería especializado de AISA Solar..."):
             try:
-                # --- INICIO DE INYECCIÓN LANGSMITH ---
-                config_graph = {"configurable": {"thread_id": st.session_state.thread_id}}
+                # Recuperación del estado técnico previo
+                estado_previo = jarvi_graph.get_state(config_graph).values
+                ctx_actual = estado_previo.get("contexto_tecnico", {})
                 
-                # Leemos el estado de forma segura sin romper la app si está vacío
-                try:
-                    estado_actual = jarvi_graph.get_state(config_graph).values.get("contexto_tecnico", {})
-                    nombre_lead = estado_actual.get("nombre", "Prospecto Nuevo")
-                except Exception:
-                    nombre_lead = "Prospecto Nuevo"
+                nombre_lead = ctx_actual.get("nombre_usuario", "Prospecto Nuevo")
                 
-                # Pasamos el run_name para arreglar la vista de LangSmith
+                # Interceptación heurística preventiva para mitigar el Naming Lag en la primera traza
+                if nombre_lead == "Prospecto Nuevo":
+                    # Si el mensaje actual contiene patrones de presentación comunes
+                    match = re.search(r"(?:soy|llamo|nombre es)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", prompt, re.IGNORECASE)
+                    if match:
+                        nombre_lead = match.group(1).title()
+
+                # Configuración de observabilidad inyectada dinámicamente
                 config_ejecucion = {
                     "configurable": {"thread_id": st.session_state.thread_id},
                     "run_name": f"Lead: {nombre_lead}",
-                    "tags": ["aisa-produccion"]
+                    "tags": ["aisa-produccion-solar"]
                 }
                 
-                # Invocamos usando nuestra nueva configuración
                 response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config=config_ejecucion)
-                # --- FIN DE INYECCIÓN LANGSMITH ---
                 
                 new_messages = response_state["messages"][len(st.session_state.messages)-1:]
                 for msg in new_messages:
@@ -132,14 +143,15 @@ if prompt:
                             st.audio(audio_buffer, format="audio/mp3", autoplay=True)
                     elif isinstance(msg, ToolMessage):
                         st.markdown(f"⚙️ {msg.content}")
+                        
                 st.session_state.messages = response_state["messages"]
             except Exception as e:
                 tb_str = traceback.format_exc()
                 try:
-                    estado_actual = jarvi_graph.get_state(config_graph).values.get("contexto_tecnico", {})
+                    estado_error = jarvi_graph.get_state(config_graph).values.get("contexto_tecnico", {})
                 except:
-                    estado_actual = "Error al leer estado"
+                    estado_error = "Error crítico de lectura de estado"
                 
-                snapshot = {"thread_id": st.session_state.thread_id, "contexto": estado_actual}
+                snapshot = {"thread_id": st.session_state.thread_id, "contexto": estado_error}
                 notificar_error_runtime(e, tb_str, snapshot, prompt)
                 st.error("🚨 Interrupción en el procesamiento de su solicitud. El equipo técnico ya fue notificado.")
