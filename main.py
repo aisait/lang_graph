@@ -44,7 +44,7 @@ if "messages" not in st.session_state:
         "5.\tBombas de calor para piscinas\n"
         "6.\tMáquinas de hacer hielo (Ice Maker)\n"
         "7.\tHieleras, refrigeradores y congeladores\n\n"
-        "¿Sobre cuál de estos productos necesita información o cuál es su necesidad actual? Por favor, indíqueme su Nombre, WhatsApp y Departamento para enviarle una cotización."
+        "¿Sobre cuál de estos productos necesita información o cuál es su necesidad actual?"
     )
     st.session_state.messages = [AIMessage(content=greeting)]
     
@@ -86,7 +86,7 @@ if factura_img and not st.session_state.factura_procesada:
         except Exception as e:
             st.error(f"Fallo en la lectura del archivo de imagen: {e}")
 
-audio_value = st.audio_input("🎤 Mensaje de Voz Comercial", key=f"audio_input_{st.session_state.audio_key_counter}")
+audio_value = st.audio_input("🎤 Enviar nota de voz", key=f"audio_input_{st.session_state.audio_key_counter}")
 text_value = st.chat_input("Consulte con el ingeniero de preventa aquí...")
 
 prompt = text_value
@@ -124,7 +124,7 @@ if prompt:
                     nombre_lead = match.group(1).title()
 
                 # CORRECCIÓN: Ventana de espera exacta de 60 segundos antes de generar la respuesta inicial de Jarvi
-                with st.spinner("Estabilizando canal de entrada... Concediendo 60 segundos para consolidar sus datos multimodales técnicos..."):
+                with st.spinner("Por favor, indíqueme su Nombre, WhatsApp y Departamento para enviarle una cotización...."):
                     time.sleep(60)
 
             # Configuración de observabilidad inyectada dinámicamente
