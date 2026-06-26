@@ -12,3 +12,6 @@ uvicorn
 gunicorn
 psycopg2-binary
 asyncpg
+requests
+openai
+langchain_core
