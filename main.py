@@ -38,7 +38,7 @@ if "messages" not in st.session_state:
     config_graph = {"configurable": {"thread_id": st.session_state.thread_id}}
     jarvi_graph.update_state(config_graph, {
         "messages": [AIMessage(content=greeting)],
-        "contexto_tecnico": {"ciudad": None, "empresa_electrica": None, "tarifa_base_gtq": None, "topologia": None, "calculo_carga_completado": False, "requiere_auditoria_electrica": False}
+        "contexto_tecnico": {"ciudad": None, "empresa_electrica": None, "tarifa_base_gtq": None, "topologia": None, "calculo_carga_completado": False, "requiere_auditoria_electrica": False, "nombre": "Prospecto Nuevo"}
     })
 
 st.title("Jarvi ⚡ Asesor Técnico de Ingeniería - AISA Solar")
@@ -99,8 +99,26 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("Consultado en tiempo real a equipo de Ingeniería especializado de AISA Solar..."):
             try:
+                # --- INICIO DE INYECCIÓN LANGSMITH ---
                 config_graph = {"configurable": {"thread_id": st.session_state.thread_id}}
-                response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config_graph)
+                
+                # Leemos el estado de forma segura sin romper la app si está vacío
+                try:
+                    estado_actual = jarvi_graph.get_state(config_graph).values.get("contexto_tecnico", {})
+                    nombre_lead = estado_actual.get("nombre", "Prospecto Nuevo")
+                except Exception:
+                    nombre_lead = "Prospecto Nuevo"
+                
+                # Pasamos el run_name para arreglar la vista de LangSmith
+                config_ejecucion = {
+                    "configurable": {"thread_id": st.session_state.thread_id},
+                    "run_name": f"Lead: {nombre_lead}",
+                    "tags": ["aisa-produccion"]
+                }
+                
+                # Invocamos usando nuestra nueva configuración
+                response_state = jarvi_graph.invoke({"messages": [HumanMessage(content=prompt)]}, config=config_ejecucion)
+                # --- FIN DE INYECCIÓN LANGSMITH ---
                 
                 new_messages = response_state["messages"][len(st.session_state.messages)-1:]
                 for msg in new_messages:
