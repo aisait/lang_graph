@@ -31,8 +31,10 @@ async def lifespan(app: FastAPI):
     global graph
     # Inicialización centralizada y segura del Checkpointer en Postgres
     checkpointer = AsyncPostgresSaver.from_conn_string(os.getenv("DATABASE_URL"))
-    await checkpointer.setup()
-    graph = await create_graph(checkpointer)
+    
+    # ARQUITECTURA SECO: Se remueve 'await checkpointer.setup()' de esta capa.
+    # El esquema DDL se delega exclusivamente a db_migrate.py para evitar deadlocks concurrentes en Railway.
+    graph = create_graph(checkpointer)
     yield
     # Cleanup si fuera necesario
 
