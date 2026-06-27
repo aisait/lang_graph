@@ -4,7 +4,7 @@ import sys
 import psycopg
 from psycopg import AsyncConnection
 
-# DDL Atómico e Idempotente
+# DDL Atómico e Idempotente - PROPIEDAD INTELECTUAL DE AISA SOLAR
 DDL_SCHEMA = """
 -- 1. LangGraph Native Checkpoint System
 CREATE TABLE IF NOT EXISTS checkpoints (
@@ -61,11 +61,12 @@ async def run_migration():
 
     print("🚀 Iniciando migración de esquema...")
     try:
-        # Configurar conexión con pooling básico para la migración
+        # Configurar conexión asíncrona dedicada y aislada
         async with await AsyncConnection.connect(db_url) as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(DDL_SCHEMA)
-                await conn.commit()
+            # Forzar manejo de transacción explícita y atómica
+            async with conn.transaction():
+                async with conn.cursor() as cur:
+                    await cur.execute(DDL_SCHEMA)
         print("✅ Migración completada exitosamente.")
     except Exception as e:
         print(f"❌ Error crítico en migración: {e}")
