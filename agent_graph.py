@@ -1,4 +1,3 @@
-import streamlit as st
 import threading
 import requests
 import re
@@ -164,6 +163,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         config["run_name"] = f"Lead: {nombre_run}"
         if "metadata" not in config: config["metadata"] = {}
         config["metadata"]["whatsapp"] = whatsapp_run
+        config["metadata"]["metadata"] = {} # Mantiene la estructura robusta por si config no viene inicializada
         config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
         prompt_sistema = SystemMessage(content=f"Eres Jarvi, Ingeniero de Preventa de AISA Solar. Responde con los datos auditados:\n- Ubicación: {ctx.get('ciudad', 'PENDIENTE')}\n- Distribuidora: {ctx.get('empresa_electrica', 'PENDIENTE')}\n- Tarifa: GTQ {ctx.get('tarifa_base_gtq', 'PENDIENTE')} /kWh\nREGLAS: {regla_datos}\nONTOLOGÍA: {ontologia_dinamica}")
         return {"messages": [llm.invoke([prompt_sistema] + state["messages"], config=config)], "contexto_tecnico": ctx}
