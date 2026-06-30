@@ -91,7 +91,7 @@ if img_a_procesar and not st.session_state.factura_procesada:
                 f"{BACKEND_URL}/vision/analyze", 
                 json={"thread_id": st.session_state.thread_id, "image_base64": base64_img},
                 headers=headers_api,
-                timeout=05
+                timeout=5
             )
             
             if res.status_code == 200:
