@@ -35,3 +35,8 @@ ODOO_ONGRID_DOMAIN = os.getenv("ODOO_ONGRID_DOMAIN", '[["sale_ok","=",True],["ty
 
 CONTROLLER_EMAIL = os.getenv("CONTROLLER_EMAIL", "joseardon@aisa.com.gt")
 SMTP_USER = os.getenv("SMTP_USER", "AISA Bot")
+
+# --- Sanitización de Red (Frontend -> Backend) ---
+# Capturamos la URL del backend y la purificamos de comillas, espacios o slashes finales
+_raw_api_url = os.getenv("API_URL", "http://localhost:8080")
+API_URL = _raw_api_url.strip(" \"'").rstrip("/")
