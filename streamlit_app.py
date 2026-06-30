@@ -147,7 +147,7 @@ if prompt:
         with st.spinner("Consultando con el core de ingeniería..."):
             try:
                 payload = {"thread_id": st.session_state.thread_id, "message": prompt}
-                response = requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers_api, timeout=05)
+                response = requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers_api, timeout=5)
                 
                 if response.status_code == 200:
                     respuesta_ia = response.json().get("response", "Respuesta recibida.")
