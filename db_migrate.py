@@ -3,6 +3,7 @@ import os
 import sys
 import psycopg
 from psycopg import AsyncConnection
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 # DDL Atómico e Idempotente - PROPIEDAD INTELECTUAL DE AISA SOLAR
 DDL_SCHEMA = """
@@ -58,6 +59,14 @@ async def run_migration():
     if not db_url:
         print("❌ Error: DATABASE_URL no encontrada en el entorno.")
         sys.exit(1)
+
+    # 🛡️ FILTRO DE INMUNIDAD SINTÁCTICA (Evita el colapso por parámetros del ORM)
+    if "pool_size" in db_url:
+        parsed_url = urlparse(db_url)
+        query_params = parse_qsl(parsed_url.query)
+        # Filtrar parámetros no nativos que rompen psycopg v3
+        filtered_params = [(k, v) for k, v in query_params if k != "pool_size"]
+        db_url = urlunparse(parsed_url._replace(query=urlencode(filtered_params)))
 
     print("🚀 Iniciando migración de esquema...")
     try:
