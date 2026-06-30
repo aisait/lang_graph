@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import os
 import uuid
+from config import API_URL
 
 # Configuración de la página
 st.set_page_config(page_title="Jarvi - AISA Solar", page_icon="☀️", layout="centered")
