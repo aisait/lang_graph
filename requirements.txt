@@ -12,9 +12,9 @@ openai==1.35.3
 langchain-community==0.2.6
 
 # --- Persistencia y Base de Datos ---
-# Crucial: Si falta psycopg2-binary, la app crashea al conectar con Cloud SQL/Postgres
-psycopg[binary]>=3.1.0
+# Coexistencia simétrica de Drivers para ORM (v2) y LangGraph Async (v3)
 psycopg2-binary==2.9.9
+psycopg[binary]>=3.1.0
 sqlalchemy==2.0.31
 
 # --- Utilidades ---
