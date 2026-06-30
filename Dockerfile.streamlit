@@ -1,12 +1,18 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+
+# Optimización de Capas (Cache Layer) para agilizar futuros deploys
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copiado del espacio de trabajo
 COPY . .
 
-# Expone el puerto que la plataforma asigna automáticamente
+# Documentación formal de la frontera de red interna
 EXPOSE 8080
 
-CMD ["streamlit", "run", "main.py", "--server.port", "8080", "--server.address", "0.0.0.0"]
+# REFACTORIZACIÓN CRÍTICA:
+# 1. Se cambia 'main.py' por 'streamlit_app.py' (Punto de entrada real de la UI).
+# 2. Se invoca 'sh -c' para permitir que Streamlit escuche dinámicamente el $PORT de Railway.
+CMD ["sh", "-c", "streamlit run streamlit_app.py --server.port=$PORT --server.address=0.0.0.0"]
