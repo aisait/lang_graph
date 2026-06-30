@@ -12,8 +12,6 @@ BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") # Usada aquí solo para Whisper y TTS
 
-client = OpenAI(api_key=OPENAI_API_KEY)
-
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
 # --- 1. Variables de Estado ---
