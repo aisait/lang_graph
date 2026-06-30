@@ -2,14 +2,13 @@ import streamlit as st
 import requests
 import os
 import uuid
+# Importamos la variable saneada desde tu configuración centralizada
 from config import API_URL
 
 # Configuración de la página
 st.set_page_config(page_title="Jarvi - AISA Solar", page_icon="☀️", layout="centered")
 
 # --- Variables de Entorno Seguras ---
-# En Railway, esta variable debe apuntar al dominio público de tu API (ej. https://api-aisa.up.railway.app)
-API_URL = os.getenv("API_URL", "http://localhost:8000")
 # INYECCIÓN QUIRÚRGICA: Recuperación del Bearer Token maestro para interoperabilidad segura
 API_KEY = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
 
@@ -48,8 +47,8 @@ if prompt := st.chat_input("Ingresa tu consulta sobre energía solar..."):
                     "Content-Type": "application/json"
                 }
                 
-                # Timeout alto porque el Agente puede estar buscando en RAG o ejecutando Tools
-                # MODIFICACIÓN: Inclusión explícita del diccionario de cabeceras seguras
+                # Timeout alto para procesos RAG/Tools
+                # Usamos la API_URL purificada importada desde config.py
                 response = requests.post(f"{API_URL}/chat", json=payload, headers=headers, timeout=60)
                 response.raise_for_status() # Lanza excepción si el status no es 200
                 
@@ -59,7 +58,7 @@ if prompt := st.chat_input("Ingresa tu consulta sobre energía solar..."):
                 st.markdown(respuesta_ia)
                 st.session_state.messages.append({"role": "assistant", "content": respuesta_ia})
                 
-            # MEJORA DE RESILIENCIA: Captura específica de errores de autenticación del API Gateway
+            # MEJORA DE RESILIENCIA: Captura específica de errores
             except requests.exceptions.HTTPError as http_err:
                 if response.status_code in [401, 403]:
                     st.error("Error 401/403 (Unauthorized): La llave maestra del Cliente Humano no coincide o caducó. Sincroniza CHATBOT_MASTER_API_KEY en Railway.")
