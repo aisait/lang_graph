@@ -5,6 +5,7 @@ import uuid
 import base64
 import io
 import json
+import time
 from openai import OpenAI
 
 # --- 0. Configuración de Entorno (Railway - Producción) ---
@@ -15,27 +16,22 @@ if BACKEND_URL.endswith('/'):
 API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") 
 
-# Inicialización de Cliente de OpenAI (Configuración explícita)
 if OPENAI_API_KEY:
     client = OpenAI(api_key=OPENAI_API_KEY)
 else:
     client = None
-    st.error("Error crítico: OPENAI_API_KEY no configurada en el entorno.")
+    st.error("Error crítico: OPENAI_API_KEY no configurada.")
 
 # --- 1. Configuración de Interfaz ---
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
-# --- 2. Variables de Estado (Persistencia Completa) ---
+# --- 2. Variables de Estado (Persistencia y Ventana Debounce) ---
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "is_voice_mode" not in st.session_state:
     st.session_state.is_voice_mode = False
 if "audio_key_counter" not in st.session_state:
     st.session_state.audio_key_counter = 0
-if "pending_prompt" not in st.session_state:
-    st.session_state.pending_prompt = None
-if "factura_procesada" not in st.session_state:
-    st.session_state.factura_procesada = False
 if "messages" not in st.session_state:
     greeting = """¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. Estamos para ayudarte a encontrar la mejor solución energética. ¿Sobre qué producto necesitas información hoy?
     
@@ -50,7 +46,12 @@ if "messages" not in st.session_state:
 Cuéntame qué te interesa y, para darte una atención personalizada, ¿podrías indicarme tu nombre y en qué zona te encuentras?"""
     st.session_state.messages = [{"role": "assistant", "content": greeting}]
 
-# --- 3. Título e Instrucciones UI ---
+# Búfer dinámico para la acumulación multitoma de entradas consecutivas (Debounce de 3 segundos)
+if "input_buffer" not in st.session_state:
+    st.session_state.input_buffer = []
+if "last_input_timestamp" not in st.session_state:
+    st.session_state.last_input_timestamp = 0.0
+
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
 with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
@@ -61,12 +62,11 @@ with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     * **4. Presupuesto:** Generamos la lista base.
     * **5. Contacto directo:** Gestión vía WhatsApp.""")
 
-# Renderizado de historial
+# Renderizado de historial existente
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# --- 4. Lógica Multimodal (Captura de Factura) ---
 st.markdown("---")
 st.write("📸 **Cargar Factura Eléctrica (Opcional)**")
 col_img, col_cam = st.columns(2)
@@ -79,7 +79,7 @@ with col_cam:
 img_a_procesar = factura_img if factura_img else factura_cam
 headers_api = {"Authorization": f"Bearer {API_KEY_SECRET}", "Content-Type": "application/json"}
 
-if img_a_procesar and not st.session_state.factura_procesada:
+if img_a_procesar:
     with st.spinner("🔍 Analizando factura con visión artificial..."):
         try:
             base64_img = base64.b64encode(img_a_procesar.getvalue()).decode('utf-8')
@@ -87,55 +87,60 @@ if img_a_procesar and not st.session_state.factura_procesada:
                 f"{BACKEND_URL}/vision/analyze", 
                 json={"thread_id": st.session_state.thread_id, "image_base64": base64_img},
                 headers=headers_api,
-                timeout=(3.0, 30.0) # 3 segundos enlace inicial, 30 segundos tiempo máximo de ejecución de visión
+                timeout=60
             )
-            
             if res.status_code == 200:
                 datos = res.json().get("extracted_data", {})
-                st.session_state.factura_procesada = True
-                prompt_factura = f"He subido mi factura eléctrica. Datos detectados: Empresa: {datos.get('empresa_electrica', 'N/A')}, Consumo: {datos.get('consumo_kwh', 'N/A')} kWh, Monto: Q{datos.get('monto_factura', 'N/A')}."
-                st.session_state.pending_prompt = prompt_factura
-                st.success("✅ Factura analizada correctamente.")
-                st.rerun()
-            else:
-                st.error(f"Fallo al procesar la factura en el servidor (Código {res.status_code}).")
+                prompt_factura = f"[Sistema: Factura Eléctrica Procesada - Empresa: {datos.get('empresa_electrica', 'N/A')}, Consumo: {datos.get('consumo_kwh', 'N/A')} kWh, Monto: Q{datos.get('monto_factura', 'N/A')}]."
+                st.session_state.input_buffer.append(prompt_factura)
+                st.session_state.last_input_timestamp = time.time()
+                st.success("✅ Factura inyectada en el buffer de Jarvi.")
         except Exception as e:
             st.error(f"Error técnico analizando la factura: {e}")
 
 st.markdown("---")
 
-# --- 5. Entrada de Usuario (Voz y Texto) ---
+# --- 5. Captura y Acumulación de Múltiples Entradas Consecutivas (Voz / Texto) ---
 audio_value = st.audio_input("🎤 Grabar mensaje de voz", key=f"audio_input_{st.session_state.audio_key_counter}")
 text_value = st.chat_input("¿Qué solución necesitas hoy?")
 
-prompt = None
 if text_value:
     st.session_state.is_voice_mode = False
-    prompt = text_value
-elif audio_value is not None:
+    st.session_state.input_buffer.append(text_value)
+    st.session_state.last_input_timestamp = time.time()
+
+if audio_value is not None:
     st.session_state.is_voice_mode = True
     if client:
-        with st.spinner("Transcribiendo mensaje de voz..."):
+        with st.spinner("Transcribiendo entrada de voz..."):
             try:
                 audio_value.name = "audio.wav"
                 transcript = client.audio.transcriptions.create(model="whisper-1", file=audio_value)
-                st.session_state.pending_prompt = transcript.text
+                st.session_state.input_buffer.append(transcript.text)
+                st.session_state.last_input_timestamp = time.time()
                 st.session_state.audio_key_counter += 1
-                st.rerun()
             except Exception as e:
                 st.error(f"Error al transcribir audio: {e}")
+
+# --- Ventana de Gracia Técnica (3 Segundos para segundas entradas antes de llamar a Jarvi) ---
+prompt_consolidado = None
+if st.session_state.input_buffer:
+    tiempo_transcurrido = time.time() - st.session_state.last_input_timestamp
+    if tiempo_transcurrido < 3.0:
+        # Ventana activa: Espera que el usuario ingrese otra entrada consecutiva si lo desea
+        st.info(f"⏳ Consolidando datos de entrada de AISA... Esperando 3 segundos por si deseas añadir otro texto o imagen ({3.0 - tiempo_transcurrido:.1f}s)")
+        time.sleep(0.5)
+        st.rerun()
     else:
-        st.error("Error: Cliente OpenAI no inicializado.")
+        # Expiraron los 3 segundos de inactividad: se extrae y unifica todo el buffer acumulado
+        prompt_consolidado = " | ".join(st.session_state.input_buffer)
+        st.session_state.input_buffer = []
 
-if st.session_state.pending_prompt:
-    prompt = st.session_state.pending_prompt
-    st.session_state.pending_prompt = None 
-
-# --- 6. Comunicación Streaming con el Backend (Lógica de Chat Activa) ---
-if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
+# --- 6. Comunicación Streaming con el Backend (Timeout Completo de 60 Segundos Reestablecido) ---
+if prompt_consolidado:
+    st.session_state.messages.append({"role": "user", "content": prompt_consolidado})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(prompt_consolidado)
     
     with st.chat_message("assistant"):
         placeholder = st.empty()
@@ -143,37 +148,30 @@ if prompt:
         contexto_tecnico = {}
         
         try:
-            payload = {"thread_id": st.session_state.thread_id, "message": prompt}
+            payload = {"thread_id": st.session_state.thread_id, "message": prompt_consolidado}
             
-            # Control estricto de timeout de ingeniería: 3 segundos para el handshake inicial, 15 de lectura completa
-            with requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers_api, stream=True, timeout=(3.0, 15.0)) as response:
+            # Se respetan los 60 segundos de timeout para permitir cómputos densos y extensos de los nodos del grafo
+            with requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers_api, stream=True, timeout=60) as response:
                 if response.status_code == 200:
-                    # El iterador de líneas se procesa bajo un búfer inmediato sin acumulación oculta
                     for line in response.iter_lines(decode_unicode=True):
                         if line:
                             cleaned_line = line.strip()
                             if cleaned_line.startswith("data: "):
                                 try:
                                     data_json = json.loads(cleaned_line[6:])
-                                    
-                                    # Inyección inmediata del token en la UI eliminando el estado colgado/mudo
                                     if "token" in data_json:
                                         respuesta_completa += data_json["token"]
                                         placeholder.markdown(respuesta_completa + "▌")
-                                    
                                     if "contexto_tecnico" in data_json:
                                         contexto_tecnico = data_json["contexto_tecnico"]
-                                    
                                     if "error" in data_json:
                                         st.error(data_json["error"])
                                 except json.JSONDecodeError:
-                                    continue # Resiliencia ante fragmentación parcial de paquetes de red
+                                    continue
                                     
-                    # Fijación de texto finalizado
                     placeholder.markdown(respuesta_completa)
                     st.session_state.messages.append({"role": "assistant", "content": respuesta_completa})
                     
-                    # Ejecución del sintetizador de audio sobre el bloque unificado
                     if st.session_state.is_voice_mode and client and respuesta_completa:
                         with st.spinner("Generando síntesis de voz..."):
                             speech_response = client.audio.speech.create(
@@ -185,8 +183,6 @@ if prompt:
                             audio_buffer.seek(0)
                             st.audio(audio_buffer.getvalue(), format="audio/mp3", autoplay=True)
                 else:
-                    st.error(f"Error del servidor backend (Código: {response.status_code}). Verifica los logs de la API.")
-        except requests.exceptions.Timeout:
-            st.error("⏱️ Error de Red: Excedido el límite de conexión de 3 segundos con el Core de Ingeniería.")
+                    st.error(f"Error del servidor backend (Código: {response.status_code}).")
         except Exception as e:
             st.error(f"Error fatal de conexión con la API: {str(e)}")
