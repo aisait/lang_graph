@@ -25,7 +25,7 @@ else:
 # --- 1. Configuración de Interfaz ---
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
-# --- 2. Variables de Estado (Persistencia y Ventana Debounce) ---
+# --- 2. Variables de Estado ---
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 if "is_voice_mode" not in st.session_state:
@@ -46,7 +46,6 @@ if "messages" not in st.session_state:
 Cuéntame qué te interesa y, para darte una atención personalizada, ¿podrías indicarme tu nombre y en qué zona te encuentras?"""
     st.session_state.messages = [{"role": "assistant", "content": greeting}]
 
-# Búfer dinámico para la acumulación multitoma de entradas consecutivas (Debounce de 3 segundos)
 if "input_buffer" not in st.session_state:
     st.session_state.input_buffer = []
 if "last_input_timestamp" not in st.session_state:
@@ -62,7 +61,6 @@ with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     * **4. Presupuesto:** Generamos la lista base.
     * **5. Contacto directo:** Gestión vía WhatsApp.""")
 
-# Renderizado de historial existente
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -100,7 +98,7 @@ if img_a_procesar:
 
 st.markdown("---")
 
-# --- 5. Captura y Acumulación de Múltiples Entradas Consecutivas (Voz / Texto) ---
+# --- 5. Captura y Acumulación ---
 audio_value = st.audio_input("🎤 Grabar mensaje de voz", key=f"audio_input_{st.session_state.audio_key_counter}")
 text_value = st.chat_input("¿Qué solución necesitas hoy?")
 
@@ -122,21 +120,18 @@ if audio_value is not None:
             except Exception as e:
                 st.error(f"Error al transcribir audio: {e}")
 
-# --- Ventana de Gracia Técnica (3 Segundos para segundas entradas antes de llamar a Jarvi) ---
 prompt_consolidado = None
 if st.session_state.input_buffer:
     tiempo_transcurrido = time.time() - st.session_state.last_input_timestamp
     if tiempo_transcurrido < 3.0:
-        # Ventana activa: Espera que el usuario ingrese otra entrada consecutiva si lo desea
         st.info(f"⏳ Consolidando datos de entrada de AISA... Esperando 3 segundos por si deseas añadir otro texto o imagen ({3.0 - tiempo_transcurrido:.1f}s)")
         time.sleep(0.5)
         st.rerun()
     else:
-        # Expiraron los 3 segundos de inactividad: se extrae y unifica todo el buffer acumulado
         prompt_consolidado = " | ".join(st.session_state.input_buffer)
         st.session_state.input_buffer = []
 
-# --- 6. Comunicación Streaming con el Backend (Timeout Completo de 60 Segundos Reestablecido) ---
+# --- 6. Comunicación Streaming ---
 if prompt_consolidado:
     st.session_state.messages.append({"role": "user", "content": prompt_consolidado})
     with st.chat_message("user"):
@@ -145,12 +140,9 @@ if prompt_consolidado:
     with st.chat_message("assistant"):
         placeholder = st.empty()
         respuesta_completa = ""
-        contexto_tecnico = {}
         
         try:
             payload = {"thread_id": st.session_state.thread_id, "message": prompt_consolidado}
-            
-            # Se respetan los 60 segundos de timeout para permitir cómputos densos y extensos de los nodos del grafo
             with requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers_api, stream=True, timeout=60) as response:
                 if response.status_code == 200:
                     for line in response.iter_lines(decode_unicode=True):
@@ -162,8 +154,6 @@ if prompt_consolidado:
                                     if "token" in data_json:
                                         respuesta_completa += data_json["token"]
                                         placeholder.markdown(respuesta_completa + "▌")
-                                    if "contexto_tecnico" in data_json:
-                                        contexto_tecnico = data_json["contexto_tecnico"]
                                     if "error" in data_json:
                                         st.error(data_json["error"])
                                 except json.JSONDecodeError:
