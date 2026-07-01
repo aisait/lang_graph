@@ -239,13 +239,13 @@ def despachar_y_recibir_streaming(prompt: str) -> Optional[str]:
     acumulador_respuesta = ""
     
     try:
-        # Petición HTTP con timeout estricto de 30 segundos para evitar colgar la UI
+        # Petición HTTP con timeout estricto de 5 segundos para evitar colgar la UI
         with requests.post(
             f"{BACKEND_URL}/chat", 
             json=payload_chat, 
             headers=HEADERS_API, 
             stream=True, 
-            timeout=30 
+            timeout=5 
         ) as respuesta_stream:
             
             # Verificación de estado antes de iterar
