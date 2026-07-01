@@ -2,6 +2,9 @@
 
 > Arquitectura de agente cognitivo con persistencia de estado serializable, orquestación mediante grafos deterministas, gobernanza forense de eventos auditables y canales de consumo desacoplados.
 
+![Python](https://img.shields.io/badge/python-3.11-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-backend-green)
+![LangGraph](https://img.shields.io/badge/LangGraph-agent-purple)
 ---
 
 ## Tabla de Contenidos
