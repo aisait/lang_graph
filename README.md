@@ -1,86 +1,118 @@
-JARVI 2.0.02 – Agente de Preventa Técnica para AISA Solar
-Arquitectura de Agente Cognitivo con Persistencia de Estado Seriable, Orquestación de Grafo Determinista y Gobernanza Forense de Eventos Auditables
+# JARVI 2.0.03 – Agente Cognitivo de Preventa Técnica para AISA Solar
 
-graph TD
-    S[Streamlit UI] -->|HTTP/SSE| API
-    L[LangSmith] -->|HTTP| API
-    N[n8n] -->|Webhook| API
-    API -->|Graph| AGENT[Grafo LangGraph]
-    AGENT -->|Tool Call| Odoo
-    AGENT -->|Read| Ontologia(JSON Catálogo)
-    AGENT -->|Persist| DB[(PostgreSQL)]
-    API -->|Whisper/TTS| OpenAI
-    API -->|Vision| OpenAI
-    API -->|Audit| AuditLogger
-    AuditLogger -->|Gmail API| Controller
----
-
- Tabla de Contenidos
-
-1. Resumen Ejecutivo
-2. Evolución Arquitectónica: Estructura Modular y Desacoplamiento
-3. Arquitectura en Producción
- Orquestación y Concurrencia (FastAPI/Lifespan)
- Persistencia Distribuida (AsyncPostgresSaver)
- Grafo de Estados (LangGraph)
- Auditoría Asíncrona (BackgroundTasks)
-
-
-4. Análisis Ontológico y Epistemológico
-5. Referencias Técnicas (APA 8)
-6. Conclusión y Roadmap
+**Arquitectura de Agente Cognitivo con Persistencia de Estado Serializable, Orquestación de Grafo Determinista, Gobernanza Forense de Eventos Auditables y Canales de Consumo Desacoplados.**
 
 ---
 
- 1. Resumen Ejecutivo
+## Tabla de Contenidos
 
-JARVI 2.0.02 es la arquitectura de razonamiento agéntico de AISA Solar para la preventa técnica fotovoltaica. El sistema implementa un motor de grafos dirigidos con persistencias ACID en PostgreSQL, diseñado para entornos de alta concurrencia. A diferencia de las versiones previas, esta arquitectura garantiza la integridad de la sesión mediante un modelo de bloqueo serializado, cumpliendo estrictamente con los marcos de gobernanza de IA (ISO/IEC 42001) y seguridad de la información (ISO/IEC 27001).
+1.  [Resumen Ejecutivo](#1-resumen-ejecutivo)
+2.  [Arquitectura Modular y Funcionalidad de Archivos (Enfoque Caja Negra)](#2-arquitectura-modular-y-funcionalidad-de-archivos-enfoque-caja-negra)
+3.  [Variables de Entorno y Configuración en Railway](#3-variables-de-entorno-y-configuración-en-railway)
+4.  [Métodos de Implementación por Canal de Consumo](#4-métodos-de-implementación-por-canal-de-consumo)
+    -   [4.1 Canal Web Humano (Streamlit)](#41-canal-web-humano-streamlit)
+    -   [4.2 Canal de Automatización (n8n)](#42-canal-de-automatización-n8n)
+    -   [4.3 Canal de Evaluación y Trazabilidad (LangSmith)](#43-canal-de-evaluación-y-trazabilidad-langsmith)
+5.  [Pruebas Integrales de Caja Negra (ISO/IEC 29119)](#5-pruebas-integrales-de-caja-negra-isoiec-29119)
+6.  [Análisis Ontológico y Epistemológico del Sistema](#6-análisis-ontológico-y-epistemológico-del-sistema)
+7.  [Referencias Técnicas (APA 8ª ed.)](#7-referencias-técnicas-apa-8ª-ed)
+8.  [Conclusión y Roadmap](#8-conclusión-y-roadmap)
 
- 2. Evolución Arquitectónica
+---
 
-La transición del monolito (`main.py`) a la estructura actual en `/app` permite una separación clara de responsabilidades bajo los principios de Clean Architecture. La nueva disposición jerárquica es:
+## 1. Resumen Ejecutivo
 
-| Directorio | Propósito Técnico |
-| --- | --- |
-| `/app/api/` | Endpoints de entrada, gestión de `lifespan` y contratos de validación (Pydantic). |
-| `/app/core/` | Lógica de negocio, configuración de variables de entorno y validadores. |
-| `/app/database/` | Gestión de pool de conexiones y persistencia mediante `AsyncPostgresSaver`. |
-| `/app/services/` | Abstracción de clientes externos (Odoo XML-RPC, WhatsApp, Gmail). |
-| `/app/graph/` | Definición de nodos, bordes y estado compartido (`AgentState`). |
-| `/app/utils/` | Decoradores de auditoría y utilidades de registro forense (`audit.py`). |
+**JARVI 2.0.03** es la evolución de la arquitectura de razonamiento agéntico de AISA Solar, diseñada para la preventa técnica fotovoltaica. El sistema se ha refactorizado completamente para independizar los canales de consumo (Web Humano, n8n y LangSmith) de la lógica de negocio, centralizando toda la inteligencia, validación ontológica y auditoría en un servidor API único.
 
- 3. Arquitectura en Producción
+El núcleo del sistema es un motor de grafos dirigidos (LangGraph) con persistencia ACID en PostgreSQL. Esta versión garantiza que cualquier interfaz (un chat web, un flujo automatizado en n8n o un entorno de pruebas en LangSmith) ejecute exactamente la misma lógica de preventa, eliminando silos de información y cuellos de botella. El diseño desacoplado permite una escalabilidad horizontal y un tiempo de ejecución mínimo en plataformas serverless como Railway.
 
- Orquestación y Concurrencia
+Esta guía está estructurada para que un profesional con conocimientos básicos de tecnología pueda comprender, desplegar y validar la solución, apoyándose en los estándares internacionales de calidad (ISO/IEC 25010), documentación (ISO/IEC 26514), pruebas (ISO/IEC 29119) y gobernanza de IA (ISO/IEC 42001).
 
-La capa de API implementa una válvula de seguridad utilizando `asyncio.Lock` en un `defaultdict`. Al asociar cada Lock a un `thread_id`, se garantiza que, aunque el sistema sea serverless y asíncrono, nunca existan operaciones de escritura concurrentes sobre el mismo checkpoint en la base de datos. El `lifespan` de FastAPI asegura que el grafo sea compilado una sola vez al inicio, optimizando los recursos de cómputo.
+## 2. Arquitectura Modular y Funcionalidad de Archivos (Enfoque Caja Negra)
 
- Persistencia Distribuida
+A continuación se describe la función de cada componente del sistema como una "caja negra", detallando qué hace y cómo se puede probar sin necesidad de inspeccionar el código interno.
 
-El sistema utiliza `PostgresSaver` para externalizar la memoria del agente. Esto resuelve la volatilidad de los contenedores efímeros: cada transición del grafo (`StateUpdate`) es un commit atómico en Postgres. Si el servicio de Railway se reinicia, el agente retoma exactamente desde el último nodo ejecutado, recuperando el contexto técnico (distribuidora, tarifa) sin fricción.
+| Archivo / Componente | Función Principal | Prueba de Caja Negra Sugerida (¿Cómo verifico que funciona?) |
+| :--- | :--- | :--- |
+| `api.py` | **Servidor Central de Lógica de Negocio.** Es el único punto de entrada para todas las operaciones inteligentes. Recibe mensajes, coordina el grafo de IA, aplica reglas de negocio y devuelve respuestas. | Enviar una petición HTTP POST a su dirección (ej. `/chat`) con un JSON de prueba. Debe devolver una respuesta del agente o un stream de tokens. |
+| `agent_graph.py` | **El Cerebro del Agente.** Define la máquina de estados que modela una conversación de preventa. Contiene los nodos que clasifican la necesidad (ej. si es un sistema solar aislado o conectado a la red), validan la ubicación y generan la respuesta con el LLM. | Inyectar un mensaje como "Quiero un sistema para mi finca sin electricidad". El estado del grafo debe reflejar `topologia = "Off-Grid"`. La respuesta final debe incluir enlaces a kits aislados. |
+| `streamlit_app.py` | **Interfaz de Usuario Web (Canal Humano).** Es una "cáscara ligera" que pinta la conversación. No tiene inteligencia propia; envía todo el input (texto, voz, imágenes) a la API central y muestra la respuesta. | Abrir la URL pública en un navegador. Escribir un mensaje y verificar que la respuesta del asistente aparece token por token. Grabar un mensaje de voz y ver que se transcribe y se responde. |
+| `ontology.py` | **Módulo de Ruteo Epistemológico.** Carga el catálogo de productos y selecciona el fragmento relevante según la topología detectada. Esto le da al agente el "conocimiento" necesario sin saturarlo con todo el catálogo. | Preguntar al agente por un "sistema conectado a la red". Las respuestas deben incluir enlaces a productos On-Grid. Preguntar por "bombas de agua solares" y verificar que los enlaces son de la categoría de bombeo. |
+| `catalog_ontology.json` | **Fuente de Verdad Referencial.** Contiene las 86 categorías de productos de AISA Solar, con sus nombres, URLs y palabras clave. Es leído por `ontology.py`. | Abrir el archivo y verificar que la URL `https://www.aisa.com.gt/shop/category/sistemas-atados-a-la-red-7` carga correctamente en un navegador. |
+| `odoo_client.py` | **Conector al ERP Odoo.** Se comunica con el sistema de inventario y precios para obtener datos maestros de productos. La API central lo utiliza para enriquecer las respuestas con información de Odoo. | Realizar una consulta a la API que requiera datos de Odoo (si está implementado el endpoint). Verificar que la API no se bloquea si Odoo no está disponible (debe fallar con gracia). |
+| `audit.py` | **Sistema de Auditoría y Alerta.** Envuelve funciones críticas para registrar automáticamente cualquier fallo (trazas, argumentos) y notifica al equipo de ingeniería por correo electrónico si ocurre un error grave. | Provocar un error en la API (ej. enviando datos incorrectos). Verificar que en los logs de Railway aparece un mensaje de error con el prefijo `[AUDITORÍA]`. Si el error es muy grave, el Controller recibirá un correo. |
+| `config.py` | **Centro de Configuración.** Lee todas las variables de entorno de Railway (API keys, URLs) y las valida al iniciar. Asegura que el backend no arranque sin las credenciales mínimas. | Iniciar la API sin la variable `OPENAI_API_KEY`. El servicio debe fallar inmediatamente con un mensaje claro de "Falla de Seguridad ISO 27001". |
+| `db_migrate.py` | **Herramienta de Preparación de Base de Datos.** Crea las tablas necesarias en PostgreSQL para guardar el estado de las conversaciones y los eventos de auditoría. | Ejecutar el script manualmente o ver los logs de la API al desplegar. Debe aparecer el mensaje "Migración completada exitosamente". Conectarse a la base de datos y verificar que las tablas `checkpoints` y `audit_events` existen. |
+| `schemas.py` | **Contratos de Datos (Validación).** Define la estructura exacta que deben tener los mensajes de entrada y salida de la API. Garantiza que todos los canales "hablen el mismo idioma". | Enviar una petición a la API con un JSON que no tenga el campo `message`. La API debe rechazarla con un error 422 "Unprocessable Entity". |
+| `vision.py` | **Servicio de Visión Artificial.** Procesa imágenes de facturas de electricidad y extrae el nombre de la empresa, el consumo y el monto. Solo se activa bajo demanda. | Usar la interfaz web para subir una foto de una factura real. La API debe responder con los datos extraídos. Subir una foto de un paisaje; los campos deben devolverse en blanco o nulos. |
+| `Dockerfile.api` | **Receta de Empaquetado del Backend.** Define cómo se construye el contenedor de la API para que se ejecute en Railway. | Desplegarlo en Railway. El servicio `cliente-api` debe arrancar y mostrar logs de Uvicorn sin errores de importación. |
+| `Dockerfile.streamlit` | **Receta de Empaquetado de la Interfaz Web.** Define cómo se construye el contenedor de la UI. | Desplegarlo en Railway. El servicio `cliente-humano` debe arrancar y ser accesible desde un navegador. |
+| `langgraph.json` | **Punto de Entrada para LangGraph.** Define los grafos disponibles. Permite a LangSmith o herramientas de desarrollo conectar directamente con el cerebro del agente. | Ejecutar `langgraph dev` en un entorno local. La interfaz de LangGraph Studio debe cargar y permitir ejecutar el grafo `aisa_chatbot`. |
 
- Grafo de Estados (LangGraph)
+## 3. Variables de Entorno y Configuración en Railway
 
-El motor de razonamiento se define en `graph/agent.py`. La arquitectura separa los nodos de "razonamiento" (LLM) de los nodos de "acción" (Tools). Esta separación permite que el auditor examine los logs de ejecución de LangSmith para validar si las herramientas fueron invocadas bajo los parámetros correctos o si existió una desviación en la lógica de preventa.
+JARVI 2.0.03 se despliega en dos servicios de Railway que comparten una base de datos PostgreSQL. Es crucial que las variables de entorno estén correctamente asignadas.
 
- Auditoría Asíncrona
+**Servicio: `cliente-api` (Backend)**
+*Contiene el archivo `api.py`.*
+Requiere todas las credenciales para operar.
 
-La integración del decorador `auditar_fase` en conjunto con `BackgroundTasks` permite el registro de telemetría sin incrementar el Time-to-First-Token (TTFT). Mientras el usuario recibe su respuesta, el sistema escribe en `audit_logs` la traza completa de la ejecución, permitiendo una trazabilidad total exigida por el Comité de Auditoría.
+| Variable de Entorno | Descripción y Propósito |
+| :--- | :--- |
+| `CHATBOT_MASTER_API_KEY` | La "contraseña" que deben usar todos los clientes (UI, n8n) para hablar con la API. |
+| `OPENAI_API_KEY` | Clave para usar los modelos de OpenAI (GPT, Whisper, TTS). |
+| `DATABASE_URL` | Dirección de la base de datos PostgreSQL proporcionada por Railway. |
+| `LANGCHAIN_API_KEY` | Clave para enviar las trazas de cada conversación a LangSmith (para auditoría y depuración). |
+| `LANGCHAIN_PROJECT` | Nombre del proyecto en LangSmith donde se agrupan las trazas. |
+| `LANGCHAIN_TRACING_V2` | Debe estar en `true` para activar la trazabilidad. |
+| `GMAIL_REFRESH_TOKEN`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` | Credenciales OAuth2 para que el sistema envíe correos de alerta o los leads al Controller. |
+| `CONTROLLER_EMAIL` | Dirección de correo del responsable que recibe los leads y las alertas de error. |
+| `ODOO_HOST`, `ODOO_DB`, `ODOO_USER`, `ODOO_PASSWORD`, `ODOO_PRODUCT_MODEL`, `ODOO_ONGRID_DOMAIN` | Parámetros de conexión al sistema ERP Odoo para consultar datos maestros de productos. |
 
- 4. Análisis Ontológico y Epistemológico
+**Servicio: `cliente-humano` (Frontend Web Streamlit)**
+*Contiene el archivo `streamlit_app.py`.*
+Es un cliente tonto; solo necesita saber dónde está la API y la contraseña.
 
-Ontológicamente, JARVI ha pasado de ser un "script que responde" a una "máquina de estado persistente". La distinción entre el estado del grafo (persistido en tablas relacionales) y el estado del chat (historial en memoria de corto plazo) es la barrera que garantiza la veracidad técnica.
+| Variable de Entorno | Descripción y Propósito |
+| :--- | :--- |
+| `BACKEND_URL` | La URL pública del servicio `cliente-api` en Railway (ej. `https://cliente-api.up.railway.app`). |
+| `CHATBOT_MASTER_API_KEY` | Debe ser exactamente la misma clave que se configuró en el servicio de la API. |
+| `OPENAI_API_KEY` | **Ya no es necesaria** en esta versión (la interfaz no usa IA directamente). |
+| `ONTOLOGY_JSON_PATH` | **Ya no es necesaria** en la interfaz. |
 
-Epistemológicamente, el sistema soluciona el problema de la "memoria fragmentada". Al delegar la verdad institucional a Odoo y la verdad lógica al Grafo, el agente no "cree" información, sino que "consulta" estados. Cualquier alucinación es ahora un fallo auditable que puede ser rastreado mediante el `run_id` y corregido mediante la inyección de metadatos más estrictos en el `AgentState`.
+## 4. Métodos de Implementación por Canal de Consumo
 
- 5. Referencias Técnicas (APA 8)
+Este capítulo es una guía práctica para desplegar y utilizar JARVI en sus tres modalidades.
 
-1. International Organization for Standardization. (2023). ISO/IEC 42001:2023 Management system.
-2. LangChain Inc. (2025). LangGraph: Persistence and Multi-threading Guide.
-3. PostgreSQL Development. (2025). Asynchronous Database Drivers.
-4. FastAPI Documentation. (2025). Background Tasks and Concurrency Control.
-5. Martin, R. C. (2017). Clean Architecture.
+### 4.1 Canal Web Humano (Streamlit)
 
- 6. Conclusión y Roadmap
+**Objetivo:** Un usuario final (cliente potencial o vendedor) interactúa con Jarvi mediante un chat en un navegador web.
 
-JARVI 2.0.02 es una arquitectura diseñada para la escalabilidad. La transición a esta estructura modular permite que el equipo de desarrollo extienda el sistema (añadiendo nuevos nodos al grafo) sin alterar la capa de transporte o la persistencia. El siguiente paso evolutivo es la centralización total de la ontología en el ERP y la implementación de una capa de memoria semántica mediante `pgvector`, consolidando a JARVI como la herramienta de preventa más auditable y robusta del sector solar.
+1.  **Despliegue en Railway:**
+    *   Asegúrese de que el servicio `cliente-humano` esté configurado con las variables de entorno (`BACKEND_URL`, `CHATBOT_MASTER_API_KEY`).
+    *   La URL de acceso es la que proporciona Railway para este servicio.
+2.  **Uso de la Interfaz:**
+    *   **Inicio:** Al abrir la web, Jarvi se presenta y ofrece un menú de opciones (1-7). Se genera automáticamente un `thread_id` único para esta conversación.
+    *   **Conversación por Texto:** Escriba su consulta en el campo de chat inferior ("¿Qué solución necesitas hoy?") y presione Enter. Observará cómo la respuesta se escribe letra por letra.
+    *   **Entrada de Voz:** Presione el botón del micrófono 🎤, hable y suelte. Verá un indicador de "Transcribiendo mensaje...". Automáticamente, su voz se convertirá en un mensaje de texto que Jarvi responderá.
+    *   **Respuesta por Voz:** Tras recibir una respuesta textual, y si el modo voz estaba activo, el sistema generará un audio que se reproducirá automáticamente.
+    *   **Análisis de Factura:** En la sección "Cargar Factura Eléctrica", suba una foto de su recibo. La interfaz la enviará a la API para extraer los datos y los inyectará en la conversación.
+
+### 4.2 Canal de Automatización (n8n)
+
+**Objetivo:** Integrar a Jarvi en un flujo de trabajo automatizado, por ejemplo, cuando un cliente escribe a un número de WhatsApp, n8n recibe el mensaje, consulta a Jarvi y envía la respuesta.
+
+1.  **Configuración del Webhook de n8n:**
+    *   Cree un flujo en n8n que reciba el mensaje de entrada.
+    *   Añada un nodo "HTTP Request".
+    *   **Método:** `POST`
+    *   **URL:** `https://[URL-DE-TU-SERVICIO-CLIENTE-API]/chat`
+    *   **Headers:**
+        *   `Authorization: Bearer [TU CHATBOT_MASTER_API_KEY]`
+        *   `Content-Type: application/json`
+    *   **Cuerpo (JSON):**
+        ```json
+        {
+          "thread_id": "{{ $('Nodo-Anterior').item.json.thread_id }}",
+          "message": "{{ $('Nodo-Anterior').item.json.mensaje_del_cliente }}"
+        }
