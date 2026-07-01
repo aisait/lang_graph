@@ -1,8 +1,10 @@
 import os
+import json
 import secrets
 import traceback
 import logging
 from fastapi import FastAPI, Depends, HTTPException, Security, status, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -87,38 +89,37 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks)
         "tags": ["aisa-produccion-solar"]
     }
     
-    try:
-        # Invoca el grafo con la estructura de entrada homologada
-        response_state = jarvi_graph.invoke(
-            {"messages": [HumanMessage(content=payload.message)]}, 
-            config=config_ejecucion
-        )
-        
-        ultima_respuesta = response_state["messages"][-1].content
-        contexto_actual = response_state.get("contexto_tecnico", {})
-        
-        return {
-            "response": ultima_respuesta,
-            "contexto_tecnico": contexto_actual
-        }
-        
-    except Exception as e:
-        tb_str = traceback.format_exc()
-        logger.error(f"Error en chat_endpoint (Thread: {payload.thread_id}): {str(e)}")
-        
-        session_snapshot = {
-            "thread_id": payload.thread_id,
-            "fase_actual": "API_SERVER_CHAT_RUNTIME",
-            "tags_ejecucion": config_ejecucion["tags"]
-        }
-        
-        # Disparo asíncrono a auditoría ISO
-        background_tasks.add_task(notificar_error_runtime, e, tb_str, session_snapshot, payload.message)
-        
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Ha ocurrido un problema técnico inesperado procesando tu solicitud en el core cognitivo."
-        )
+    async def event_generator():
+        try:
+            # Consumo asíncrono token por token mediante el stream de eventos del grafo
+            async for event in jarvi_graph.astream_events(
+                {"messages": [HumanMessage(content=payload.message)]}, 
+                config=config_ejecucion,
+                version="v2"
+            ):
+                if event["event"] == "on_chat_model_stream":
+                    token = event["data"]["chunk"].content
+                    if token:
+                        yield f"data: {json.dumps({'token': token})}\n\n"
+            
+            # Al finalizar la generación, extraemos quirúrgicamente el estado persistido
+            state_snapshot = jarvi_graph.get_state(config_ejecucion)
+            contexto_actual = state_snapshot.values.get("contexto_tecnico", {})
+            yield f"data: {json.dumps({'contexto_tecnico': contexto_actual})}\n\n"
+            
+        except Exception as e:
+            tb_str = traceback.format_exc()
+            logger.error(f"Error en stream de chat_endpoint (Thread: {payload.thread_id}): {str(e)}")
+            
+            session_snapshot = {
+                "thread_id": payload.thread_id,
+                "fase_actual": "API_SERVER_CHAT_STREAM_RUNTIME",
+                "tags_ejecucion": config_ejecucion["tags"]
+            }
+            background_tasks.add_task(notificar_error_runtime, e, tb_str, session_snapshot, payload.message)
+            yield f"data: {json.dumps({'error': 'Error interno en el procesamiento del flujo.'})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.post("/vision/analyze", dependencies=[Depends(verify_api_key)], tags=["Multimodal"])
 async def vision_endpoint(payload: VisionRequest, background_tasks: BackgroundTasks):
