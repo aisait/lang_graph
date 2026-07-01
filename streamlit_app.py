@@ -4,10 +4,10 @@ import os
 import uuid
 import base64
 import io
+import json
 from openai import OpenAI
 
 # --- 0. Configuración de Entorno (Railway - Producción) ---
-# Se mantiene la carga explícita de variables para asegurar trazabilidad
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 if BACKEND_URL.endswith('/'):
     BACKEND_URL = BACKEND_URL[:-1]
@@ -37,7 +37,6 @@ if "pending_prompt" not in st.session_state:
 if "factura_procesada" not in st.session_state:
     st.session_state.factura_procesada = False
 if "messages" not in st.session_state:
-    # Mensaje inicial definido explícitamente
     greeting = """¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. Estamos para ayudarte a encontrar la mejor solución energética. ¿Sobre qué producto necesitas información hoy?
     
 1. Calentadores Solares
@@ -83,10 +82,7 @@ headers_api = {"Authorization": f"Bearer {API_KEY_SECRET}", "Content-Type": "app
 if img_a_procesar and not st.session_state.factura_procesada:
     with st.spinner("🔍 Analizando factura con visión artificial..."):
         try:
-            # Procesamiento de imagen a base64
             base64_img = base64.b64encode(img_a_procesar.getvalue()).decode('utf-8')
-            
-            # Llamada al endpoint de visión
             res = requests.post(
                 f"{BACKEND_URL}/vision/analyze", 
                 json={"thread_id": st.session_state.thread_id, "image_base64": base64_img},
@@ -97,8 +93,6 @@ if img_a_procesar and not st.session_state.factura_procesada:
             if res.status_code == 200:
                 datos = res.json().get("extracted_data", {})
                 st.session_state.factura_procesada = True
-                
-                # Armado del prompt técnico
                 prompt_factura = f"He subido mi factura eléctrica. Datos detectados: Empresa: {datos.get('empresa_electrica', 'N/A')}, Consumo: {datos.get('consumo_kwh', 'N/A')} kWh, Monto: Q{datos.get('monto_factura', 'N/A')}."
                 st.session_state.pending_prompt = prompt_factura
                 st.success("✅ Factura analizada correctamente.")
@@ -137,28 +131,52 @@ if st.session_state.pending_prompt:
     prompt = st.session_state.pending_prompt
     st.session_state.pending_prompt = None 
 
-# --- 6. Comunicación con el Backend (Lógica de Chat) ---
+# --- 6. Comunicación Streaming con el Backend (Lógica de Chat Activa) ---
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
     
     with st.chat_message("assistant"):
-        with st.spinner("Consultando con el core de ingeniería..."):
-            try:
-                payload = {"thread_id": st.session_state.thread_id, "message": prompt}
-                response = requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers_api, timeout=60)
-                
+        # Contenedor dinámico vacío para renderizar en tiempo real por flujo
+        placeholder = st.empty()
+        respuesta_completa = ""
+        contexto_tecnico = {}
+        
+        try:
+            payload = {"thread_id": st.session_state.thread_id, "message": prompt}
+            
+            # Activación del contexto stream=True sobre la red interna de Railway
+            with requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers_api, stream=True, timeout=60) as response:
                 if response.status_code == 200:
-                    respuesta_ia = response.json().get("response", "Respuesta recibida.")
-                    st.markdown(respuesta_ia)
-                    st.session_state.messages.append({"role": "assistant", "content": respuesta_ia})
+                    for line in response.iter_lines():
+                        if line:
+                            decoded_line = line.decode('utf-8')
+                            if decoded_line.startswith("data: "):
+                                data_json = json.loads(decoded_line[6:])
+                                
+                                # Acumulación inmediata de tokens
+                                if "token" in data_json:
+                                    respuesta_completa += data_json["token"]
+                                    placeholder.markdown(respuesta_completa + "▌")
+                                
+                                # Absorción silenciosa del contexto técnico al final del stream
+                                if "contexto_tecnico" in data_json:
+                                    contexto_tecnico = data_json["contexto_tecnico"]
+                                
+                                # Captura de excepciones controladas desde la API
+                                if "error" in data_json:
+                                    st.error(data_json["error"])
+                                    
+                    # Render final sin el cursor simulado
+                    placeholder.markdown(respuesta_completa)
+                    st.session_state.messages.append({"role": "assistant", "content": respuesta_completa})
                     
-                    # TTS Lógica explícita
-                    if st.session_state.is_voice_mode and client:
+                    # TTS Lógica explícita sobre el buffer completo finalizado
+                    if st.session_state.is_voice_mode and client and respuesta_completa:
                         with st.spinner("Generando síntesis de voz..."):
                             speech_response = client.audio.speech.create(
-                                model="tts-1", voice="alloy", input=respuesta_ia
+                                model="tts-1", voice="alloy", input=respuesta_completa
                             )
                             audio_buffer = io.BytesIO()
                             for chunk in speech_response.iter_bytes(chunk_size=4096):
@@ -167,5 +185,5 @@ if prompt:
                             st.audio(audio_buffer.getvalue(), format="audio/mp3", autoplay=True)
                 else:
                     st.error(f"Error del servidor backend (Código: {response.status_code}). Verifica los logs de la API.")
-            except Exception as e:
-                st.error(f"Error fatal de conexión con la API: {str(e)}")
+        except Exception as e:
+            st.error(f"Error fatal de conexión con la API: {str(e)}")
