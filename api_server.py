@@ -91,16 +91,19 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks)
     
     async def event_generator():
         try:
-            # Consumo asíncrono token por token mediante el stream de eventos del grafo
+            # Captura polimórfica para robustecer la extracción de tokens intermedios
             async for event in jarvi_graph.astream_events(
                 {"messages": [HumanMessage(content=payload.message)]}, 
                 config=config_ejecucion,
                 version="v2"
             ):
-                if event["event"] == "on_chat_model_stream":
-                    token = event["data"]["chunk"].content
-                    if token:
-                        yield f"data: {json.dumps({'token': token})}\n\n"
+                if event["event"] in ["on_chat_model_stream", "on_llm_stream"]:
+                    data_chunk = event.get("data", {})
+                    chunk_obj = data_chunk.get("chunk")
+                    if chunk_obj and hasattr(chunk_obj, "content"):
+                        token = chunk_obj.content
+                        if token:
+                            yield f"data: {json.dumps({'token': token})}\n\n"
             
             # Al finalizar la generación, extraemos quirúrgicamente el estado persistido
             state_snapshot = jarvi_graph.get_state(config_ejecucion)
