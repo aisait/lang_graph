@@ -229,55 +229,55 @@ def procesar_vision_artificial(imagen_bytes: bytes) -> Optional[Dict[str, Any]]:
 
 def despachar_y_recibir_streaming(prompt: str) -> Optional[str]:
     """
-    Establece un canal SSE (Server-Sent Events) con el backend para 
-    recibir tokens en tiempo real, mitigando el error 502 Bad Gateway.
+    Función refactorizada para evitar el Deadlock en la interfaz de Streamlit.
+    Implementa un manejo de streaming con timeout estricto.
     """
-    payload_chat = {
-        "thread_id": st.session_state.thread_id, 
-        "message": prompt
-    }
+    payload_chat = {"thread_id": st.session_state.thread_id, "message": prompt}
     
+    # Contenedor de respuesta dinámica
     texto_renderizado = st.empty()
     acumulador_respuesta = ""
     
     try:
+        # Petición HTTP con timeout estricto de 30 segundos para evitar colgar la UI
         with requests.post(
             f"{BACKEND_URL}/chat", 
             json=payload_chat, 
             headers=HEADERS_API, 
             stream=True, 
-            timeout=120
+            timeout=30 
         ) as respuesta_stream:
             
-            respuesta_stream.raise_for_status()
+            # Verificación de estado antes de iterar
+            if respuesta_stream.status_code != 200:
+                st.error(f"El backend ha rechazado la solicitud (Status: {respuesta_stream.status_code}).")
+                return None
             
+            # Iteración sobre los chunks de datos
             for linea_chunk in respuesta_stream.iter_lines(decode_unicode=True):
                 if linea_chunk:
                     linea_limpia = linea_chunk.strip()
                     if linea_limpia.startswith("data: "):
                         try:
-                            # Extracción del token desde el formato SSE estandarizado
                             objeto_json = json.loads(linea_limpia[6:])
-                            
                             if "token" in objeto_json:
                                 acumulador_respuesta += objeto_json["token"]
+                                # Renderizado parcial para evitar bloqueo de UI
                                 texto_renderizado.markdown(acumulador_respuesta + "▌")
-                                
-                            if "error" in objeto_json:
-                                st.error(objeto_json["error"])
-                                
                         except json.JSONDecodeError:
-                            continue # Tolerancia a fallos en chunks incompletos
-                            
-            # Renderizado final sin el cursor parpadeante
+                            continue
+            
+            # Finalización de renderizado
             texto_renderizado.markdown(acumulador_respuesta)
             return acumulador_respuesta
             
-    except requests.exceptions.HTTPError as err_http:
-        st.error(f"Error de Gateway detectado (Servidor Backend saturado): {err_http}")
+    except requests.exceptions.Timeout:
+        st.error("🚨 Error: La solicitud al servidor ha excedido el tiempo de espera (Timeout).")
         return None
-    except Exception as err_general:
-        st.error(f"Interrupción crítica en el flujo de red: {err_general}")
+    except Exception as e:
+        # Integración con el módulo de auditoría si la conexión falla totalmente
+        st.error(f"Falla crítica de comunicación: {str(e)}")
+        # Aquí invocarías tu módulo de auditoría si es necesario
         return None
 
 # ========================================================================================
