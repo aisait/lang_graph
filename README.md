@@ -212,8 +212,8 @@ JARVI obtiene conocimiento desde:
 - ISO/IEC 27001
 - ISO/IEC 25010
 - ISO/IEC 29119
-- LangGraph Docs
-- PostgreSQL Docs
+- LangGraph API Docs
+- PostgreSQL API Docs
 - FastAPI Docs
 
 ---
