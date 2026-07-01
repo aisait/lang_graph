@@ -91,24 +91,27 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks)
     
     async def event_generator():
         try:
-            # Captura polimórfica para robustecer la extracción de tokens intermedios
+            # Inspección polimórfica profunda de eventos de streaming del Grafo
             async for event in jarvi_graph.astream_events(
                 {"messages": [HumanMessage(content=payload.message)]}, 
                 config=config_ejecucion,
                 version="v2"
             ):
-                if event["event"] in ["on_chat_model_stream", "on_llm_stream"]:
+                event_type = event.get("event", "")
+                # Captura genérica de cualquier emisión de modelo de lenguaje o chat en la ejecución
+                if "stream" in event_type or event_type in ["on_chat_model_stream", "on_llm_stream"]:
                     data_chunk = event.get("data", {})
                     chunk_obj = data_chunk.get("chunk")
                     if chunk_obj and hasattr(chunk_obj, "content"):
                         token = chunk_obj.content
                         if token:
-                            yield f"data: {json.dumps({'token': token})}\n\n"
+                            # Formateo explícito Server-Sent Events con doble salto de línea obligatorio
+                            yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
             
-            # Al finalizar la generación, extraemos quirúrgicamente el estado persistido
+            # Al finalizar la generación, extraemos el estado persistido de forma segura
             state_snapshot = jarvi_graph.get_state(config_ejecucion)
-            contexto_actual = state_snapshot.values.get("contexto_tecnico", {})
-            yield f"data: {json.dumps({'contexto_tecnico': contexto_actual})}\n\n"
+            contexto_actual = state_snapshot.values.get("contexto_tecnico", {}) if state_snapshot else {}
+            yield f"data: {json.dumps({'contexto_tecnico': contexto_actual}, ensure_ascii=False)}\n\n"
             
         except Exception as e:
             tb_str = traceback.format_exc()
@@ -120,7 +123,7 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks)
                 "tags_ejecucion": config_ejecucion["tags"]
             }
             background_tasks.add_task(notificar_error_runtime, e, tb_str, session_snapshot, payload.message)
-            yield f"data: {json.dumps({'error': 'Error interno en el procesamiento del flujo.'})}\n\n"
+            yield f"data: {json.dumps({'error': 'Error interno en el procesamiento del flujo.'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
