@@ -80,7 +80,6 @@ img_a_procesar = factura_img if factura_img else factura_cam
 headers_api = {"Authorization": f"Bearer {API_KEY_SECRET}", "Content-Type": "application/json"}
 
 if img_a_procesar and not st.session_state.factura_procesada:
-    # Ajuste quirúrgico de timeout para visión (3 segundos para conexión inicial)
     with st.spinner("🔍 Analizando factura con visión artificial..."):
         try:
             base64_img = base64.b64encode(img_a_procesar.getvalue()).decode('utf-8')
@@ -88,7 +87,7 @@ if img_a_procesar and not st.session_state.factura_procesada:
                 f"{BACKEND_URL}/vision/analyze", 
                 json={"thread_id": st.session_state.thread_id, "image_base64": base64_img},
                 headers=headers_api,
-                timeout=(3.0, 30.0) # 3 segundos para conectar, 30 segundos para recibir datos pesados
+                timeout=(3.0, 30.0) # 3 segundos enlace inicial, 30 segundos tiempo máximo de ejecución de visión
             )
             
             if res.status_code == 200:
@@ -139,7 +138,6 @@ if prompt:
         st.markdown(prompt)
     
     with st.chat_message("assistant"):
-        # Contenedor dinámico vacío para renderizar en tiempo real por flujo
         placeholder = st.empty()
         respuesta_completa = ""
         contexto_tecnico = {}
@@ -147,36 +145,35 @@ if prompt:
         try:
             payload = {"thread_id": st.session_state.thread_id, "message": prompt}
             
-            # Ajuste de timeout quirúrgico: 3.0 segundos para conectar, 15.0 segundos máximo de lectura total
+            # Control estricto de timeout de ingeniería: 3 segundos para el handshake inicial, 15 de lectura completa
             with requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers_api, stream=True, timeout=(3.0, 15.0)) as response:
                 if response.status_code == 200:
-                    for line in response.iter_lines():
+                    # El iterador de líneas se procesa bajo un búfer inmediato sin acumulación oculta
+                    for line in response.iter_lines(decode_unicode=True):
                         if line:
-                            decoded_line = line.decode('utf-8').strip()
-                            if decoded_line.startswith("data: "):
+                            cleaned_line = line.strip()
+                            if cleaned_line.startswith("data: "):
                                 try:
-                                    data_json = json.loads(decoded_line[6:])
+                                    data_json = json.loads(cleaned_line[6:])
                                     
-                                    # Acumulación e impresión inmediata de los tokens en pantalla
+                                    # Inyección inmediata del token en la UI eliminando el estado colgado/mudo
                                     if "token" in data_json:
                                         respuesta_completa += data_json["token"]
                                         placeholder.markdown(respuesta_completa + "▌")
                                     
-                                    # Absorción silenciosa del contexto técnico al final del stream
                                     if "contexto_tecnico" in data_json:
                                         contexto_tecnico = data_json["contexto_tecnico"]
                                     
-                                    # Captura de excepciones controladas desde la API
                                     if "error" in data_json:
                                         st.error(data_json["error"])
                                 except json.JSONDecodeError:
-                                    continue # Previene rupturas de canal ante metadatos intermedios malformados
+                                    continue # Resiliencia ante fragmentación parcial de paquetes de red
                                     
-                    # Render final sin el cursor simulado
+                    # Fijación de texto finalizado
                     placeholder.markdown(respuesta_completa)
                     st.session_state.messages.append({"role": "assistant", "content": respuesta_completa})
                     
-                    # TTS Lógica explícita sobre el buffer completo finalizado
+                    # Ejecución del sintetizador de audio sobre el bloque unificado
                     if st.session_state.is_voice_mode and client and respuesta_completa:
                         with st.spinner("Generando síntesis de voz..."):
                             speech_response = client.audio.speech.create(
@@ -189,5 +186,7 @@ if prompt:
                             st.audio(audio_buffer.getvalue(), format="audio/mp3", autoplay=True)
                 else:
                     st.error(f"Error del servidor backend (Código: {response.status_code}). Verifica los logs de la API.")
+        except requests.exceptions.Timeout:
+            st.error("⏱️ Error de Red: Excedido el límite de conexión de 3 segundos con el Core de Ingeniería.")
         except Exception as e:
-            st.error(f"Error fatal de conexión con la API o Timeout alcanzado: {str(e)}")
+            st.error(f"Error fatal de conexión con la API: {str(e)}")
