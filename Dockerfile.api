@@ -1,19 +1,68 @@
+# Dockerfile.api
+# Propósito: Imagen de contenedor para el servidor central de lógica de negocio JARVI 2.0 (FastAPI).
+# Estándares aplicados: ISO/IEC/IEEE 12207 (Ciclo de vida), ISO/IEC 26514 (Documentación),
+# ISO/IEC 25010 (Calidad), ISO/IEC 29119 (Pruebas de caja negra).
+
+# ----------------------------------------------------------------------
+# Capa base: Python 3.11 slim, optimizada para producción
+# Prueba de caja negra: Verificar que el contenedor arranque con el runtime correcto
+# y que las variables de entorno del sistema estén disponibles.
+# ----------------------------------------------------------------------
 FROM python:3.11-slim
 
+# ----------------------------------------------------------------------
+# Metadatos de la imagen (ISO/IEC 26514 - Documentación de software)
+# ----------------------------------------------------------------------
+LABEL maintainer="AISA Solar - Equipo de Ingeniería"
+LABEL description="Servidor API centralizado de JARVI 2.0. Contiene el grafo de agente, "
+                  "conexiones a Odoo, OpenAI y base de datos de auditoría."
+LABEL version="2.0.02"
+
+# ----------------------------------------------------------------------
+# Directorio de trabajo dentro del contenedor
+# ----------------------------------------------------------------------
 WORKDIR /app
 
-# Dependencias del sistema necesarias para compilar librerías de IA y Postgres
-RUN apt-get update && apt-get install -y gcc libpq-dev && rm -rf /var/lib/apt/lists/*
+# ----------------------------------------------------------------------
+# Instalación de dependencias del sistema operativo
+#   - gcc: requerido para compilar extensiones nativas (psycopg, etc.)
+#   - libpq-dev: cabeceras de PostgreSQL para psycopg2 y psycopg3
+# Prueba de caja negra: Ejecutar 'gcc --version' y 'pg_config --version' dentro del contenedor.
+# ----------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
+# ----------------------------------------------------------------------
+# Copia e instalación de dependencias Python
+# Se copia solo requirements.txt primero para aprovechar la caché de Docker.
+# Las dependencias se instalan sin caché para reducir el tamaño de la imagen.
+# Prueba de caja negra: Importar módulos clave (fastapi, langgraph, psycopg) sin errores.
+# ----------------------------------------------------------------------
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ----------------------------------------------------------------------
+# Copia del resto del código fuente de la API
+# Se excluyen archivos innecesarios mediante .dockerignore (si existe).
+# ----------------------------------------------------------------------
 COPY . .
 
-# Exposición dinámica de puertos
+# ----------------------------------------------------------------------
+# Exposición del puerto de escucha (configurable mediante variable PORT)
+# La API utilizará el puerto 8080 por defecto.
+# Prueba de caja negra: Enviar una petición HTTP a http://localhost:8080/chat y
+# verificar que responde (aunque sea con error de método, para probar conectividad).
+# ----------------------------------------------------------------------
 EXPOSE 8080
 
-# MITIGACIÓN OOM KILLER: 
-# Se utiliza un solo worker (--workers 1) para consolidar la memoria del modelo.
-# Se incrementa el timeout-keep-alive para soportar la latencia de inferencia.
-CMD ["sh", "-c", "uvicorn api_server:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1 --timeout-keep-alive 120"]
+# ----------------------------------------------------------------------
+# Comando de arranque
+#   - uvicorn: servidor ASGI de alto rendimiento
+#   - api:app  : módulo 'api.py' y objeto 'app' (FastAPI)
+#   - --workers 1 : un solo worker para consolidar memoria del modelo y evitar OOM en Railway
+#   - --timeout-keep-alive 120 : tiempo máximo para mantener conexiones vivas,
+#     necesario para operaciones de inferencia de larga duración
+# Prueba de caja negra: Monitorear logs de arranque, verificar que no haya errores de importación
+# y que la ruta de salud (/health si se implementa) responda 200.
+# ----------------------------------------------------------------------
+CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1 --timeout-keep-alive 120"]
