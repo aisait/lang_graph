@@ -1,189 +1,274 @@
-import streamlit as st
-import requests
+"""
+api_server.py (backend central JARVI 2.0)
+=========================================
+Este módulo implementa el servidor FastAPI que centraliza **toda la lógica de negocio**
+del agente de preventa técnica de AISA Solar. Los canales (Streamlit, n8n, LangSmith)
+son clientes ligeros que consumen exclusivamente esta API.
+
+Estándares aplicados:
+  - ISO/IEC/IEEE 12207:2008 (Ciclo de vida del software)
+  - ISO/IEC 26514:2021 (Documentación de software)
+  - ISO/IEC 25010:2011 (Calidad del producto)
+  - ISO/IEC 29119:2022 (Pruebas de software)
+"""
+
 import os
-import uuid
-import base64
-import io
+import asyncio
 import json
-from openai import OpenAI
+import logging
+from collections import defaultdict
+from typing import AsyncGenerator, Optional
 
-# --- 0. Configuración de Entorno (Railway - Producción) ---
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-if BACKEND_URL.endswith('/'):
-    BACKEND_URL = BACKEND_URL[:-1]
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Security, UploadFile, File
+from fastapi.responses import StreamingResponse, Response
+from fastapi.security import APIKeyHeader
+from contextlib import asynccontextmanager
+from pydantic import BaseModel, Field
 
-API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") 
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langchain_core.messages import HumanMessage
 
-# Inicialización de Cliente de OpenAI (Configuración explícita)
-if OPENAI_API_KEY:
-    client = OpenAI(api_key=OPENAI_API_KEY)
-else:
-    client = None
-    st.error("Error crítico: OPENAI_API_KEY no configurada en el entorno.")
+from schemas import ChatRequest, ChatResponse
+from agent_graph import create_graph
 
-# --- 1. Configuración de Interfaz ---
-st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
+# ---------------------------------------------------------------------------
+# Configuración de logging (ISO/IEC 26514 – trazabilidad de eventos)
+# ---------------------------------------------------------------------------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("jarvi.api_server")
 
-# --- 2. Variables de Estado (Persistencia Completa) ---
-if "thread_id" not in st.session_state:
-    st.session_state.thread_id = str(uuid.uuid4())
-if "is_voice_mode" not in st.session_state:
-    st.session_state.is_voice_mode = False
-if "audio_key_counter" not in st.session_state:
-    st.session_state.audio_key_counter = 0
-if "pending_prompt" not in st.session_state:
-    st.session_state.pending_prompt = None
-if "factura_procesada" not in st.session_state:
-    st.session_state.factura_procesada = False
-if "messages" not in st.session_state:
-    greeting = """¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. Estamos para ayudarte a encontrar la mejor solución energética. ¿Sobre qué producto necesitas información hoy?
-    
-1. Calentadores Solares
-2. Paneles Solares (Fuera de la red)
-3. Paneles Solares (Ahorro en factura eléctrica)
-4. Bombas de Agua Solares
-5. Bombas de Calor para piscinas
-6. Máquinas de hacer hielo
-7. Hieleras
 
-Cuéntame qué te interesa y, para darte una atención personalizada, ¿podrías indicarme tu nombre y en qué zona te encuentras?"""
-    st.session_state.messages = [{"role": "assistant", "content": greeting}]
+# ---------------------------------------------------------------------------
+# Seguridad – autenticación por API Key (ISO/IEC 27001)
+# ---------------------------------------------------------------------------
+API_KEY = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
+api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 
-# --- 3. Título e Instrucciones UI ---
-st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
-with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
-    st.markdown("""¡Hola! Soy Jarvi, tu ingeniero de soluciones de **AISA Solar**. Para obtener la mejor asesoría, realizaremos estos pasos:
-    * **1. Descubrimiento:** Identificamos tus necesidades.
-    * **2. Análisis Técnico:** Calculamos requerimientos.
-    * **3. Especificación:** Seleccionamos equipos.
-    * **4. Presupuesto:** Generamos la lista base.
-    * **5. Contacto directo:** Gestión vía WhatsApp.""")
+async def validar_api_key(auth: Optional[str] = Security(api_key_header)):
+    """
+    Verifica que la cabecera 'Authorization' contenga el token válido.
+    Formato esperado: 'Bearer <API_KEY>'.
 
-# Renderizado de historial
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+    Prueba de caja negra (ISO/IEC 29119):
+        - Solicitud sin cabecera → 403 Forbidden.
+        - Solicitud con token inválido → 403.
+        - Solicitud con token correcto → continúa al endpoint.
+    """
+    expected = f"Bearer {API_KEY}"
+    if not auth or auth != expected:
+        logger.warning("Intento de acceso no autorizado")
+        raise HTTPException(status_code=403, detail="Acceso no autorizado")
+    return auth
 
-# --- 4. Lógica Multimodal (Captura de Factura) ---
-st.markdown("---")
-st.write("📸 **Cargar Factura Eléctrica (Opcional)**")
-col_img, col_cam = st.columns(2)
 
-with col_img:
-    factura_img = st.file_uploader("Sube una foto de tu factura", type=["jpg", "jpeg", "png"], key="file_factura")
-with col_cam:
-    factura_cam = st.camera_input("O toma una foto a la factura", key="cam_factura")
+# ---------------------------------------------------------------------------
+# Control de concurrencia por sesión (evita escrituras simultáneas)
+# ---------------------------------------------------------------------------
+locks = defaultdict(asyncio.Lock)  # Un lock por thread_id
 
-img_a_procesar = factura_img if factura_img else factura_cam
-headers_api = {"Authorization": f"Bearer {API_KEY_SECRET}", "Content-Type": "application/json"}
 
-if img_a_procesar and not st.session_state.factura_procesada:
-    with st.spinner("🔍 Analizando factura con visión artificial..."):
-        try:
-            base64_img = base64.b64encode(img_a_procesar.getvalue()).decode('utf-8')
-            res = requests.post(
-                f"{BACKEND_URL}/vision/analyze", 
-                json={"thread_id": st.session_state.thread_id, "image_base64": base64_img},
-                headers=headers_api,
-                timeout=60
-            )
-            
-            if res.status_code == 200:
-                datos = res.json().get("extracted_data", {})
-                st.session_state.factura_procesada = True
-                prompt_factura = f"He subido mi factura eléctrica. Datos detectados: Empresa: {datos.get('empresa_electrica', 'N/A')}, Consumo: {datos.get('consumo_kwh', 'N/A')} kWh, Monto: Q{datos.get('monto_factura', 'N/A')}."
-                st.session_state.pending_prompt = prompt_factura
-                st.success("✅ Factura analizada correctamente.")
-                st.rerun()
-            else:
-                st.error(f"Fallo al procesar la factura en el servidor (Código {res.status_code}).")
-        except Exception as e:
-            st.error(f"Error técnico analizando la factura: {e}")
+# ---------------------------------------------------------------------------
+# Auditoría 360° (escritura asíncrona de eventos)
+# ---------------------------------------------------------------------------
+async def persistir_evento_auditoria(thread_id: str, run_id: str, payload: dict):
+    """
+    Registra un evento de auditoría en la base de datos (o log estructurado).
 
-st.markdown("---")
+    Prueba de caja negra:
+        - Llamar al método tras una ejecución del grafo y verificar que el log
+          contiene 'AUDIT|{thread_id}|{run_id}|...'.
+        - En producción, verificar que la tabla `audit_events` recibe un nuevo registro.
+    """
+    try:
+        logger.info("AUDIT|%s|%s|%s", thread_id, run_id, json.dumps(payload, default=str))
+        # En una implementación completa, aquí se haría un INSERT asíncrono en PostgreSQL
+    except Exception as e:
+        logger.error("Error en auditoría: %s", e)
 
-# --- 5. Entrada de Usuario (Voz y Texto) ---
-audio_value = st.audio_input("🎤 Grabar mensaje de voz", key=f"audio_input_{st.session_state.audio_key_counter}")
-text_value = st.chat_input("¿Qué solución necesitas hoy?")
 
-prompt = None
-if text_value:
-    st.session_state.is_voice_mode = False
-    prompt = text_value
-elif audio_value is not None:
-    st.session_state.is_voice_mode = True
-    if client:
-        with st.spinner("Transcribiendo mensaje de voz..."):
-            try:
-                audio_value.name = "audio.wav"
-                transcript = client.audio.transcriptions.create(model="whisper-1", file=audio_value)
-                st.session_state.pending_prompt = transcript.text
-                st.session_state.audio_key_counter += 1
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error al transcribir audio: {e}")
-    else:
-        st.error("Error: Cliente OpenAI no inicializado.")
+# ---------------------------------------------------------------------------
+# Ciclo de vida de la aplicación (ISO/IEC 12207 – inicialización controlada)
+# ---------------------------------------------------------------------------
+graph = None
 
-if st.session_state.pending_prompt:
-    prompt = st.session_state.pending_prompt
-    st.session_state.pending_prompt = None 
 
-# --- 6. Comunicación Streaming con el Backend (Lógica de Chat Activa) ---
-if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    
-    with st.chat_message("assistant"):
-        # Contenedor dinámico vacío para renderizar en tiempo real por flujo
-        placeholder = st.empty()
-        respuesta_completa = ""
-        contexto_tecnico = {}
-        
-        try:
-            payload = {"thread_id": st.session_state.thread_id, "message": prompt}
-            
-            # Activación del contexto stream=True sobre la red interna de Railway
-            with requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers_api, stream=True, timeout=60) as response:
-                if response.status_code == 200:
-                    for line in response.iter_lines():
-                        if line:
-                            decoded_line = line.decode('utf-8')
-                            if decoded_line.startswith("data: "):
-                                data_json = json.loads(decoded_line[6:])
-                                
-                                # Acumulación inmediata de tokens
-                                if "token" in data_json:
-                                    respuesta_completa += data_json["token"]
-                                    placeholder.markdown(respuesta_completa + "▌")
-                                
-                                # Absorción silenciosa del contexto técnico al final del stream
-                                if "contexto_tecnico" in data_json:
-                                    contexto_tecnico = data_json["contexto_tecnico"]
-                                
-                                # Captura de excepciones controladas desde la API
-                                if "error" in data_json:
-                                    st.error(data_json["error"])
-                                    
-                    # Render final sin el cursor simulado
-                    placeholder.markdown(respuesta_completa)
-                    st.session_state.messages.append({"role": "assistant", "content": respuesta_completa})
-                    
-                    # TTS Lógica explícita sobre el buffer completo finalizado
-                    if st.session_state.is_voice_mode and client and respuesta_completa:
-                        with st.spinner("Generando síntesis de voz..."):
-                            speech_response = client.audio.speech.create(
-                                model="tts-1", voice="alloy", input=respuesta_completa
-                            )
-                            audio_buffer = io.BytesIO()
-                            for chunk in speech_response.iter_bytes(chunk_size=4096):
-                                audio_buffer.write(chunk)
-                            audio_buffer.seek(0)
-                            st.audio(audio_buffer.getvalue(), format="audio/mp3", autoplay=True)
-                else:
-                    st.error(f"Error del servidor backend (Código: {response.status_code}). Verifica los logs de la API.")
-        except Exception as e:
-            st.error(f"Error fatal de conexión con la API: {str(e)}")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Inicializa el checkpointer de PostgreSQL y compila el grafo del agente
+    exactamente una vez, optimizando recursos (ISO/IEC 25010 – eficiencia).
+
+    Prueba de caja negra:
+        - Arrancar la aplicación: debe aparecer el log "JARVI 2.0 API inicializada".
+        - Si DATABASE_URL es incorrecta, la aplicación no debe levantar (RuntimeError).
+    """
+    global graph
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL no definida – servicio no disponible")
+    checkpointer = AsyncPostgresSaver.from_conn_string(db_url)
+    # El DDL se ejecuta en db_migrate.py, no duplicamos setup() aquí
+    graph = create_graph(checkpointer)
+    logger.info("JARVI 2.0 API inicializada – Grafo listo")
+    yield
+    logger.info("Apagando API JARVI")
+
+
+# ---------------------------------------------------------------------------
+# Instancia de FastAPI con dependencia de seguridad global
+# ---------------------------------------------------------------------------
+app = FastAPI(
+    title="JARVI 2.0 API Central",
+    version="2.0.02",
+    lifespan=lifespan,
+    dependencies=[Depends(validar_api_key)]  # Aplica a todos los endpoints
+)
+
+
+# ---------------------------------------------------------------------------
+# Endpoint principal: chat con streaming (SSE)
+# ---------------------------------------------------------------------------
+async def generar_sse(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]:
+    """
+    Genera un stream Server‑Sent Events (SSE) a partir de la ejecución del grafo.
+    Cada token del LLM se emite como un evento separado para minimizar la latencia
+    percibida (Time‑to‑First‑Token).
+
+    Prueba de caja negra (ISO/IEC 29119):
+        - Enviar un mensaje de prueba; se deben recibir múltiples líneas
+          `data: {"token": "..."}\n\n` y un evento final con `"contexto_tecnico"`.
+        - Si el mensaje activa la herramienta de persistencia, el flujo debe continuar
+          sin bloquearse y la herramienta ejecutarse en segundo plano.
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
+
+    async with locks[thread_id]:
+        evento_llm = False
+        async for evento in graph.astream_events(estado_inicial, config=config, version="v2"):
+            kind = evento["event"]
+            if kind == "on_chat_model_stream":
+                contenido = evento["data"]["chunk"].content
+                if contenido:
+                    # Escapar saltos de línea para preservar el formato SSE
+                    contenido_escapado = contenido.replace('\n', '\\n')
+                    yield f"data: {{\"token\": \"{contenido_escapado}\"}}\n\n"
+                    evento_llm = True
+            elif kind == "on_chain_end" and evento["name"] == "LangGraph":
+                estado_final = evento["data"]["output"]
+                ctx = estado_final.get("contexto_tecnico", {})
+                yield f"data: {{\"contexto_tecnico\": {json.dumps(ctx)}}}\n\n"
+                break
+
+        if not evento_llm:
+            yield f"data: {{\"token\": \"(acción ejecutada)\"}}\n\n"
+
+
+@app.post("/chat")
+async def chat_endpoint(request: ChatRequest, background_tasks: BackgroundTasks):
+    """
+    Procesa un mensaje del usuario y retorna la respuesta del agente en tiempo real
+    mediante streaming SSE.
+
+    Prueba de caja negra:
+        - POST /chat con body {"thread_id": "abc", "message": "Hola"}.
+        - El Content‑Type de la respuesta debe ser 'text/event-stream'.
+        - Verificar que el cliente recibe tokens progresivamente.
+    """
+    try:
+        return StreamingResponse(
+            generar_sse(request.thread_id, request.message),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+    except Exception as e:
+        logger.error("Error en /chat: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Error interno del agente")
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: Speech‑to‑Text (centralización de Whisper)
+# ---------------------------------------------------------------------------
+@app.post("/stt")
+async def speech_to_text(audio: UploadFile = File(...)):
+    """
+    Recibe un archivo de audio y lo transcribe a texto usando OpenAI Whisper.
+    (Pendiente de implementación completa – la lógica se extraerá de la UI)
+
+    Prueba de caja negra:
+        - Subir un archivo .wav con voz clara.
+        - Esperar respuesta {"transcript": "texto transcrito"}.
+    """
+    # TODO: Implementar llamada a OpenAI Whisper y devolver transcripción
+    raise HTTPException(status_code=501, detail="No implementado – pendiente migrar Whisper desde UI")
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: Text‑to‑Speech (centralización de TTS)
+# ---------------------------------------------------------------------------
+class TTSRequest(BaseModel):
+    text: str = Field(..., description="Texto a convertir en voz")
+    voice: str = Field(default="alloy", description="Voz del modelo TTS")
+
+@app.post("/tts")
+async def text_to_speech(req: TTSRequest):
+    """
+    Convierte texto en audio usando OpenAI TTS y devuelve el archivo de audio.
+
+    Prueba de caja negra:
+        - POST /tts con {"text": "Hola mundo"}.
+        - La respuesta debe ser un blob de audio/mpeg que se pueda reproducir.
+    """
+    # TODO: Implementar llamada a OpenAI TTS y devolver StreamingResponse de audio
+    raise HTTPException(status_code=501, detail="No implementado – pendiente migrar TTS desde UI")
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: Visión (análisis de facturas)
+# ---------------------------------------------------------------------------
+class ImageRequest(BaseModel):
+    thread_id: str = Field(..., description="ID de sesión")
+    image_base64: str = Field(..., description="Imagen codificada en base64")
+
+@app.post("/vision/analyze")
+async def analizar_factura(request: ImageRequest):
+    """
+    Analiza una factura eléctrica de Guatemala usando GPT‑4o‑mini y extrae datos.
+    (Pendiente de implementación completa – la lógica se extraerá de vision.py)
+
+    Prueba de caja negra:
+        - Enviar base64 de una factura real.
+        - Verificar que la respuesta incluya 'empresa_electrica', 'consumo_kwh' y 'monto_factura'.
+    """
+    # TODO: Llamar a la función procesar_imagen_factura de vision.py
+    raise HTTPException(status_code=501, detail="No implementado – pendiente migrar visión desde UI")
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: Catálogo de productos (ontología/Odoo)
+# ---------------------------------------------------------------------------
+@app.get("/products")
+async def consultar_productos(topologia: Optional[str] = None):
+    """
+    Devuelve el fragmento de ontología o los productos de Odoo según topología.
+    Permite a canales externos (n8n) obtener información sin pasar por el LLM.
+
+    Prueba de caja negra:
+        - GET /products?topologia=on-grid → lista de categorías on‑grid.
+        - GET /products (sin parámetro) → lista por defecto.
+    """
+    # TODO: Integrar obtener_fragmento_ontologia(topologia) y devolver JSON
+    raise HTTPException(status_code=501, detail="No implementado – pendiente exponer catálogo")
+
+
+# ---------------------------------------------------------------------------
+# Punto de entrada para ejecución local (solo para desarrollo)
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("api_server:app", host="0.0.0.0", port=int(os.getenv("PORT", "8080")), reload=False)
