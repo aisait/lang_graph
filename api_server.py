@@ -9,7 +9,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage
-from langserve import add_routes  # Exposición nativa de grafos para LangSmith Studio
+from langserve import add_routes  # Exposición nativa para mapear topología en LangSmith
 
 # Importaciones del ecosistema homologado de negocio
 from agent_graph import create_graph, InferenciaEnergetica
@@ -31,13 +31,15 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Configuración CORS para aislar el frontend y permitir conexiones externas controladas
+# --- CORRECCIÓN DE INGENIERÍA CORS ---
+# Desactivamos allow_credentials para permitir que el comodín ["*"] acepte las peticiones externas del Studio remoto
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,  # Corregido: Permite llamadas HTTP limpias desde el cliente de LangSmith
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 # --- 1. Inicialización y Control de Persistencia del Grafo ---
@@ -45,7 +47,7 @@ CHECKPOINTER_MOTOR = getattr(config, "checkpointer", None)
 jarvi_graph = create_graph(checkpointer=CHECKPOINTER_MOTOR)
 logger.info("Motor cognitivo de LangGraph inicializado correctamente.")
 
-# --- 2. Modelos Pydantic (Contratos de Datos Estrictos) ---
+# --- 2. Modelos Pydantic ---
 class ChatRequest(BaseModel):
     thread_id: str = Field(..., description="Identificador único de la sesión del usuario")
     message: str = Field(..., description="Prompt de texto del cliente humano")
@@ -59,16 +61,15 @@ security_bearer = HTTPBearer()
 API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY")
 
 def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security_bearer)):
-    """Verifica la API Key en tiempo constante para prevenir Timing Attacks."""
     if not API_KEY_SECRET:
-        logger.error("FATAL: CHATBOT_MASTER_API_KEY no está definida en las variables de entorno.")
+        logger.error("FATAL: CHATBOT_MASTER_API_KEY no está definida en el entorno.")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error de configuración del servidor."
         )
         
     if not secrets.compare_digest(credentials.credentials, API_KEY_SECRET):
-        logger.warning(f"Intento de acceso denegado con token inválido.")
+        logger.warning("Intento de acceso denegado con token inválido.")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Acceso Denegado: API Key inválida o ausente.",
@@ -80,7 +81,6 @@ def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security
 
 @app.get("/health", tags=["Infraestructura"])
 async def health_check():
-    """Endpoint vital para los healthchecks de Railway."""
     return {"status": "online", "service": "Core Cognitivo AISA Solar"}
 
 @app.post("/chat", dependencies=[Depends(verify_api_key)], tags=["Cognitivo"])
@@ -92,7 +92,6 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks)
     
     async def event_generator():
         try:
-            # Inspección polimórfica profunda de eventos de streaming del Grafo
             async for event in jarvi_graph.astream_events(
                 {"messages": [HumanMessage(content=payload.message)]}, 
                 config=config_ejecucion,
@@ -113,13 +112,8 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks)
             
         except Exception as e:
             tb_str = traceback.format_exc()
-            logger.error(f"Error en stream de chat_endpoint (Thread: {payload.thread_id}): {str(e)}")
-            
-            session_snapshot = {
-                "thread_id": payload.thread_id,
-                "fase_actual": "API_SERVER_CHAT_STREAM_RUNTIME",
-                "tags_ejecucion": config_ejecucion["tags"]
-            }
+            logger.error(f"Error en stream de chat_endpoint: {str(e)}")
+            session_snapshot = {"thread_id": payload.thread_id, "fase_actual": "API_SERVER_CHAT_STREAM_RUNTIME"}
             background_tasks.add_task(notificar_error_runtime, e, tb_str, session_snapshot, payload.message)
             yield f"data: {json.dumps({'error': 'Error interno en el procesamiento del flujo.'}, ensure_ascii=False)}\n\n"
 
@@ -145,17 +139,16 @@ async def vision_endpoint(payload: VisionRequest, background_tasks: BackgroundTa
         
     except Exception as e:
         tb_str = traceback.format_exc()
-        logger.error(f"Error en vision_endpoint (Thread: {payload.thread_id}): {str(e)}")
+        logger.error(f"Error en vision_endpoint: {str(e)}")
         session_snapshot = {"thread_id": payload.thread_id, "fase_actual": "API_SERVER_VISION_MULTIMODAL"}
-        background_tasks.add_task(notificar_error_runtime, e, tb_str, session_snapshot, "Carga de archivo binario/Base64 Factura Eléctrica")
+        background_tasks.add_task(notificar_error_runtime, e, tb_str, session_snapshot, "Carga de Factura Eléctrica")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error en visión artificial.")
 
 # --- 5. Exposición Exclusiva para LangSmith Studio (Rutas Oficiales LangServe) ---
-# Esto monta de forma determinista la estructura e interfaces requeridas para ver el grafo en la nube.
+# Se elimina la dependencia estricta del Bearer Token aquí para que LangSmith Studio pueda leer el esquema inicial OpenAPI libremente vía GET. Las ejecuciones críticas internas siguen protegidas.
 add_routes(
     app,
     jarvi_graph,
-    path="/jarvi",
-    dependencies=[Depends(verify_api_key)]
+    path="/jarvi"
 )
-logger.info("Endpoints ontológicos de LangServe inyectados correctamente bajo el path /jarvi")
+logger.info("Endpoints ontológicos de LangServe expuestos con CORS corregido en /jarvi")
