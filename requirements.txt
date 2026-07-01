@@ -1,24 +1,75 @@
-# --- Frameworks Web ---
+# requirements.txt
+# Archivo de dependencias del proyecto JARVI 2.0.
+# Documenta las bibliotecas necesarias para el funcionamiento de la API
+# central, la interfaz Streamlit y los componentes de IA y persistencia.
+#
+# Estándares aplicados:
+# - ISO/IEC/IEEE 12207:2008 (Ciclo de vida): este archivo es un insumo
+#   para la gestión de la configuración y construcción del sistema.
+# - ISO/IEC 26514:2021 (Documentación): cada sección está comentada
+#   describiendo la categoría y el propósito de las dependencias.
+# - ISO/IEC 25010:2011 (Calidad): las versiones están fijadas (==) o
+#   acotadas (>=) para garantizar la estabilidad del producto.
+# - ISO/IEC 29119:2022 (Pruebas de software - caja negra):
+#   Prueba sugerida:
+#   1. Crear un entorno virtual limpio y ejecutar:
+#        pip install --no-cache-dir -r requirements.txt
+#      Verificar que la instalación finaliza sin errores.
+#   2. Ejecutar un script que importe los módulos principales:
+#        python -c "import fastapi, uvicorn, streamlit, langchain, langgraph,
+#        langchain_openai, openai, psycopg, psycopg2, sqlalchemy, requests,
+#        dotenv, pydantic, httpx"
+#      Verificar que no se producen errores de importación.
+#   3. Verificar la versión instalada de un paquete crítico:
+#        pip show fastapi
+#      Debe mostrar la versión 0.111.0.
+#
+
+# ---------------------------------------------------------------------
+# Frameworks Web
+# ---------------------------------------------------------------------
+# FastAPI: framework asíncrono para la API central.
 fastapi==0.111.0
+# Uvicorn: servidor ASGI de alto rendimiento para FastAPI.
 uvicorn[standard]==0.30.1
+# Streamlit: framework para la interfaz de usuario web (canal humano).
 streamlit>=1.38.0
+# python-multipart: requerido para manejar formularios y subida de archivos en FastAPI.
 python-multipart==0.0.9
 
-# --- Core Agéntico ---
+# ---------------------------------------------------------------------
+# Core Agéntico (LangChain / LangGraph / OpenAI)
+# ---------------------------------------------------------------------
+# LangChain: framework base para la construcción del agente.
 langchain==0.2.6
+# LangGraph: orquestación de grafos de estados para el agente.
 langgraph==0.2.0
+# langchain-openai: integración de LangChain con modelos OpenAI.
 langchain-openai==0.1.9
+# OpenAI: cliente oficial de la API de OpenAI (Whisper, GPT, TTS).
 openai>=1.50.0
+# langchain-community: utilidades adicionales de la comunidad LangChain.
 langchain-community==0.2.6
 
-# --- Persistencia y Base de Datos ---
-# Coexistencia simétrica de Drivers para ORM (v2) y LangGraph Async (v3)
+# ---------------------------------------------------------------------
+# Persistencia y Base de Datos
+# ---------------------------------------------------------------------
+# Coexistencia simétrica de drivers para ORM (v2) y LangGraph Async (v3)
+# psycopg2: driver síncrono para PostgreSQL (usado por SQLAlchemy y otros).
 psycopg2-binary==2.9.9
+# psycopg v3 con extras binarios: driver asíncrono para LangGraph y FastAPI.
 psycopg[binary]>=3.1.0
+# SQLAlchemy: ORM para interactuar con la base de datos de auditoría.
 sqlalchemy==2.0.31
 
-# --- Utilidades ---
+# ---------------------------------------------------------------------
+# Utilidades
+# ---------------------------------------------------------------------
+# Requests: cliente HTTP para llamadas a APIs externas (WhatsApp, n8n).
 requests==2.32.3
+# python-dotenv: carga variables de entorno desde archivo .env en desarrollo.
 python-dotenv==1.0.1
+# Pydantic: validación de datos y esquemas para FastAPI.
 pydantic==2.7.4
+# httpx: cliente HTTP asíncrono para pruebas y conexiones internas.
 httpx>=0.27.2
