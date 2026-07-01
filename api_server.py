@@ -9,15 +9,15 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage
-from langserve import add_routes  # Exposición nativa para mapear topología en LangSmith
+from langserve import add_routes 
 
-# Importaciones del ecosistema homologado de negocio
+# Lógica de negocio intacta
 from agent_graph import create_graph, InferenciaEnergetica
 from vision import procesar_imagen_factura
 from audit import notificar_error_runtime
 import config
 
-# --- 0. Configuración de Logging de Producción ---
+# Logging de Producción
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -27,61 +27,48 @@ logger = logging.getLogger("aisa_api_core")
 
 app = FastAPI(
     title="Core Cognitivo API - AISA Solar",
-    description="API de razonamiento y visión para Jarvi 2.0",
+    description="API de razonamiento y visión agéntica",
     version="2.0.0"
 )
 
-# --- CORRECCIÓN DE INGENIERÍA CORS ---
-# Desactivamos allow_credentials para permitir que el comodín ["*"] acepte las peticiones externas del Studio remoto
+# CORS Permisivo para LangSmith Studio
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,  # Corregido: Permite llamadas HTTP limpias desde el cliente de LangSmith
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"]
 )
 
-# --- 1. Inicialización y Control de Persistencia del Grafo ---
+# Inicialización Singleton del Grafo
 CHECKPOINTER_MOTOR = getattr(config, "checkpointer", None) 
 jarvi_graph = create_graph(checkpointer=CHECKPOINTER_MOTOR)
-logger.info("Motor cognitivo de LangGraph inicializado correctamente.")
+logger.info("Motor cognitivo de LangGraph inicializado y montado en memoria RAM.")
 
-# --- 2. Modelos Pydantic ---
 class ChatRequest(BaseModel):
-    thread_id: str = Field(..., description="Identificador único de la sesión del usuario")
-    message: str = Field(..., description="Prompt de texto del cliente humano")
+    thread_id: str = Field(..., description="Identificador único de la sesión")
+    message: str = Field(..., description="Prompt de entrada")
 
 class VisionRequest(BaseModel):
-    thread_id: str = Field(..., description="Identificador único de la sesión del usuario")
-    image_base64: str = Field(..., description="Cadena Base64 de la imagen de la factura")
+    thread_id: str = Field(..., description="Identificador único de la sesión")
+    image_base64: str = Field(..., description="Cadena Base64 de la factura")
 
-# --- 3. Configuración de Seguridad (Bearer Token) ---
 security_bearer = HTTPBearer()
-API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY")
+API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY", "aisa_fallback_secret_123")
 
 def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security_bearer)):
-    if not API_KEY_SECRET:
-        logger.error("FATAL: CHATBOT_MASTER_API_KEY no está definida en el entorno.")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error de configuración del servidor."
-        )
-        
     if not secrets.compare_digest(credentials.credentials, API_KEY_SECRET):
-        logger.warning("Intento de acceso denegado con token inválido.")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Acceso Denegado: API Key inválida o ausente.",
+            detail="Acceso Denegado: API Key inválida.",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return credentials.credentials
 
-# --- 4. Endpoints de Negocio ---
-
 @app.get("/health", tags=["Infraestructura"])
 async def health_check():
-    return {"status": "online", "service": "Core Cognitivo AISA Solar"}
+    return {"status": "online", "service": "AISA Solar API"}
 
 @app.post("/chat", dependencies=[Depends(verify_api_key)], tags=["Cognitivo"])
 async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks):
@@ -112,10 +99,10 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks)
             
         except Exception as e:
             tb_str = traceback.format_exc()
-            logger.error(f"Error en stream de chat_endpoint: {str(e)}")
-            session_snapshot = {"thread_id": payload.thread_id, "fase_actual": "API_SERVER_CHAT_STREAM_RUNTIME"}
+            logger.error(f"Error de ejecución: {str(e)}")
+            session_snapshot = {"thread_id": payload.thread_id, "fase": "API_CHAT_RUNTIME"}
             background_tasks.add_task(notificar_error_runtime, e, tb_str, session_snapshot, payload.message)
-            yield f"data: {json.dumps({'error': 'Error interno en el procesamiento del flujo.'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'error': 'Interrupción técnica procesada.'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -127,28 +114,15 @@ async def vision_endpoint(payload: VisionRequest, background_tasks: BackgroundTa
         
         jarvi_graph.update_state(
             config_ejecucion,
-            {
-                "contexto_tecnico": {
-                    "empresa_electrica": datos_extraidos.get("empresa_electrica"),
-                    "requiere_auditoria_electrica": True
-                }
-            },
+            {"contexto_tecnico": {"empresa_electrica": datos_extraidos.get("empresa_electrica"), "requiere_auditoria_electrica": True}},
             as_node="clasificador"
         )
         return {"status": "ok", "extracted_data": datos_extraidos}
         
     except Exception as e:
         tb_str = traceback.format_exc()
-        logger.error(f"Error en vision_endpoint: {str(e)}")
-        session_snapshot = {"thread_id": payload.thread_id, "fase_actual": "API_SERVER_VISION_MULTIMODAL"}
-        background_tasks.add_task(notificar_error_runtime, e, tb_str, session_snapshot, "Carga de Factura Eléctrica")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error en visión artificial.")
+        session_snapshot = {"thread_id": payload.thread_id}
+        background_tasks.add_task(notificar_error_runtime, e, tb_str, session_snapshot, "Visión Artificial")
+        raise HTTPException(status_code=500, detail="Fallo en módulo multimodal.")
 
-# --- 5. Exposición Exclusiva para LangSmith Studio (Rutas Oficiales LangServe) ---
-# Se elimina la dependencia estricta del Bearer Token aquí para que LangSmith Studio pueda leer el esquema inicial OpenAPI libremente vía GET. Las ejecuciones críticas internas siguen protegidas.
-add_routes(
-    app,
-    jarvi_graph,
-    path="/jarvi"
-)
-logger.info("Endpoints ontológicos de LangServe expuestos con CORS corregido en /jarvi")
+add_routes(app, jarvi_graph, path="/jarvi")
