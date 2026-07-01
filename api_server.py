@@ -9,6 +9,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage
+from langserve import add_routes  # Exposición nativa de grafos para LangSmith Studio
 
 # Importaciones del ecosistema homologado de negocio
 from agent_graph import create_graph, InferenciaEnergetica
@@ -30,10 +31,10 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Configuración CORS para aislar el frontend
+# Configuración CORS para aislar el frontend y permitir conexiones externas controladas
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En máxima seguridad, restringir a la URL interna de Streamlit
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -98,17 +99,14 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks)
                 version="v2"
             ):
                 event_type = event.get("event", "")
-                # Captura genérica de cualquier emisión de modelo de lenguaje o chat en la ejecución
                 if "stream" in event_type or event_type in ["on_chat_model_stream", "on_llm_stream"]:
                     data_chunk = event.get("data", {})
                     chunk_obj = data_chunk.get("chunk")
                     if chunk_obj and hasattr(chunk_obj, "content"):
                         token = chunk_obj.content
                         if token:
-                            # Formateo explícito Server-Sent Events con doble salto de línea obligatorio
                             yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
             
-            # Al finalizar la generación, extraemos el estado persistido de forma segura
             state_snapshot = jarvi_graph.get_state(config_ejecucion)
             contexto_actual = state_snapshot.values.get("contexto_tecnico", {}) if state_snapshot else {}
             yield f"data: {json.dumps({'contexto_tecnico': contexto_actual}, ensure_ascii=False)}\n\n"
@@ -130,10 +128,7 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks)
 @app.post("/vision/analyze", dependencies=[Depends(verify_api_key)], tags=["Multimodal"])
 async def vision_endpoint(payload: VisionRequest, background_tasks: BackgroundTasks):
     try:
-        # Extrae datos estructurados de la factura
         datos_extraidos = procesar_imagen_factura(payload.image_base64)
-        
-        # Inyecta resultados directamente en el estado persistente de LangGraph
         config_ejecucion = {"configurable": {"thread_id": payload.thread_id}}
         
         jarvi_graph.update_state(
@@ -144,22 +139,23 @@ async def vision_endpoint(payload: VisionRequest, background_tasks: BackgroundTa
                     "requiere_auditoria_electrica": True
                 }
             },
-            as_node="clasificador" # Fuerza el asentamiento en el nodo inicial
+            as_node="clasificador"
         )
-        
-        return {
-            "status": "ok",
-            "extracted_data": datos_extraidos
-        }
+        return {"status": "ok", "extracted_data": datos_extraidos}
         
     except Exception as e:
         tb_str = traceback.format_exc()
         logger.error(f"Error en vision_endpoint (Thread: {payload.thread_id}): {str(e)}")
-        
         session_snapshot = {"thread_id": payload.thread_id, "fase_actual": "API_SERVER_VISION_MULTIMODAL"}
         background_tasks.add_task(notificar_error_runtime, e, tb_str, session_snapshot, "Carga de archivo binario/Base64 Factura Eléctrica")
-        
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error al procesar el pipeline de visión artificial de la factura."
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error en visión artificial.")
+
+# --- 5. Exposición Exclusiva para LangSmith Studio (Rutas Oficiales LangServe) ---
+# Esto monta de forma determinista la estructura e interfaces requeridas para ver el grafo en la nube.
+add_routes(
+    app,
+    jarvi_graph,
+    path="/jarvi",
+    dependencies=[Depends(verify_api_key)]
+)
+logger.info("Endpoints ontológicos de LangServe inyectados correctamente bajo el path /jarvi")
