@@ -1,128 +1,189 @@
+import streamlit as st
+import requests
 import os
+import uuid
+import base64
+import io
 import json
-import secrets
-import traceback
-import logging
-from fastapi import FastAPI, Depends, HTTPException, Security, status, BackgroundTasks
-from fastapi.responses import StreamingResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from langchain_core.messages import HumanMessage
-from langserve import add_routes 
+from openai import OpenAI
 
-# Lógica de negocio intacta
-from agent_graph import create_graph, InferenciaEnergetica
-from vision import procesar_imagen_factura
-from audit import notificar_error_runtime
-import config
+# --- 0. Configuración de Entorno (Railway - Producción) ---
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+if BACKEND_URL.endswith('/'):
+    BACKEND_URL = BACKEND_URL[:-1]
 
-# Logging de Producción
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger("aisa_api_core")
+API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") 
 
-app = FastAPI(
-    title="Core Cognitivo API - AISA Solar",
-    description="API de razonamiento y visión agéntica",
-    version="2.0.0"
-)
+# Inicialización de Cliente de OpenAI (Configuración explícita)
+if OPENAI_API_KEY:
+    client = OpenAI(api_key=OPENAI_API_KEY)
+else:
+    client = None
+    st.error("Error crítico: OPENAI_API_KEY no configurada en el entorno.")
 
-# CORS Permisivo para LangSmith Studio
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
-)
+# --- 1. Configuración de Interfaz ---
+st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
-# Inicialización Singleton del Grafo
-CHECKPOINTER_MOTOR = getattr(config, "checkpointer", None) 
-jarvi_graph = create_graph(checkpointer=CHECKPOINTER_MOTOR)
-logger.info("Motor cognitivo de LangGraph inicializado y montado en memoria RAM.")
-
-class ChatRequest(BaseModel):
-    thread_id: str = Field(..., description="Identificador único de la sesión")
-    message: str = Field(..., description="Prompt de entrada")
-
-class VisionRequest(BaseModel):
-    thread_id: str = Field(..., description="Identificador único de la sesión")
-    image_base64: str = Field(..., description="Cadena Base64 de la factura")
-
-security_bearer = HTTPBearer()
-API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY", "aisa_fallback_secret_123")
-
-def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security_bearer)):
-    if not secrets.compare_digest(credentials.credentials, API_KEY_SECRET):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Acceso Denegado: API Key inválida.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return credentials.credentials
-
-@app.get("/health", tags=["Infraestructura"])
-async def health_check():
-    return {"status": "online", "service": "AISA Solar API"}
-
-@app.post("/chat", dependencies=[Depends(verify_api_key)], tags=["Cognitivo"])
-async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks):
-    config_ejecucion = {
-        "configurable": {"thread_id": payload.thread_id},
-        "tags": ["aisa-produccion-solar"]
-    }
+# --- 2. Variables de Estado (Persistencia Completa) ---
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())
+if "is_voice_mode" not in st.session_state:
+    st.session_state.is_voice_mode = False
+if "audio_key_counter" not in st.session_state:
+    st.session_state.audio_key_counter = 0
+if "pending_prompt" not in st.session_state:
+    st.session_state.pending_prompt = None
+if "factura_procesada" not in st.session_state:
+    st.session_state.factura_procesada = False
+if "messages" not in st.session_state:
+    greeting = """¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. Estamos para ayudarte a encontrar la mejor solución energética. ¿Sobre qué producto necesitas información hoy?
     
-    async def event_generator():
+1. Calentadores Solares
+2. Paneles Solares (Fuera de la red)
+3. Paneles Solares (Ahorro en factura eléctrica)
+4. Bombas de Agua Solares
+5. Bombas de Calor para piscinas
+6. Máquinas de hacer hielo
+7. Hieleras
+
+Cuéntame qué te interesa y, para darte una atención personalizada, ¿podrías indicarme tu nombre y en qué zona te encuentras?"""
+    st.session_state.messages = [{"role": "assistant", "content": greeting}]
+
+# --- 3. Título e Instrucciones UI ---
+st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
+
+with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
+    st.markdown("""¡Hola! Soy Jarvi, tu ingeniero de soluciones de **AISA Solar**. Para obtener la mejor asesoría, realizaremos estos pasos:
+    * **1. Descubrimiento:** Identificamos tus necesidades.
+    * **2. Análisis Técnico:** Calculamos requerimientos.
+    * **3. Especificación:** Seleccionamos equipos.
+    * **4. Presupuesto:** Generamos la lista base.
+    * **5. Contacto directo:** Gestión vía WhatsApp.""")
+
+# Renderizado de historial
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# --- 4. Lógica Multimodal (Captura de Factura) ---
+st.markdown("---")
+st.write("📸 **Cargar Factura Eléctrica (Opcional)**")
+col_img, col_cam = st.columns(2)
+
+with col_img:
+    factura_img = st.file_uploader("Sube una foto de tu factura", type=["jpg", "jpeg", "png"], key="file_factura")
+with col_cam:
+    factura_cam = st.camera_input("O toma una foto a la factura", key="cam_factura")
+
+img_a_procesar = factura_img if factura_img else factura_cam
+headers_api = {"Authorization": f"Bearer {API_KEY_SECRET}", "Content-Type": "application/json"}
+
+if img_a_procesar and not st.session_state.factura_procesada:
+    with st.spinner("🔍 Analizando factura con visión artificial..."):
         try:
-            async for event in jarvi_graph.astream_events(
-                {"messages": [HumanMessage(content=payload.message)]}, 
-                config=config_ejecucion,
-                version="v2"
-            ):
-                event_type = event.get("event", "")
-                if "stream" in event_type or event_type in ["on_chat_model_stream", "on_llm_stream"]:
-                    data_chunk = event.get("data", {})
-                    chunk_obj = data_chunk.get("chunk")
-                    if chunk_obj and hasattr(chunk_obj, "content"):
-                        token = chunk_obj.content
-                        if token:
-                            yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+            base64_img = base64.b64encode(img_a_procesar.getvalue()).decode('utf-8')
+            res = requests.post(
+                f"{BACKEND_URL}/vision/analyze", 
+                json={"thread_id": st.session_state.thread_id, "image_base64": base64_img},
+                headers=headers_api,
+                timeout=60
+            )
             
-            state_snapshot = jarvi_graph.get_state(config_ejecucion)
-            contexto_actual = state_snapshot.values.get("contexto_tecnico", {}) if state_snapshot else {}
-            yield f"data: {json.dumps({'contexto_tecnico': contexto_actual}, ensure_ascii=False)}\n\n"
-            
+            if res.status_code == 200:
+                datos = res.json().get("extracted_data", {})
+                st.session_state.factura_procesada = True
+                prompt_factura = f"He subido mi factura eléctrica. Datos detectados: Empresa: {datos.get('empresa_electrica', 'N/A')}, Consumo: {datos.get('consumo_kwh', 'N/A')} kWh, Monto: Q{datos.get('monto_factura', 'N/A')}."
+                st.session_state.pending_prompt = prompt_factura
+                st.success("✅ Factura analizada correctamente.")
+                st.rerun()
+            else:
+                st.error(f"Fallo al procesar la factura en el servidor (Código {res.status_code}).")
         except Exception as e:
-            tb_str = traceback.format_exc()
-            logger.error(f"Error de ejecución: {str(e)}")
-            session_snapshot = {"thread_id": payload.thread_id, "fase": "API_CHAT_RUNTIME"}
-            background_tasks.add_task(notificar_error_runtime, e, tb_str, session_snapshot, payload.message)
-            yield f"data: {json.dumps({'error': 'Interrupción técnica procesada.'}, ensure_ascii=False)}\n\n"
+            st.error(f"Error técnico analizando la factura: {e}")
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+st.markdown("---")
 
-@app.post("/vision/analyze", dependencies=[Depends(verify_api_key)], tags=["Multimodal"])
-async def vision_endpoint(payload: VisionRequest, background_tasks: BackgroundTasks):
-    try:
-        datos_extraidos = procesar_imagen_factura(payload.image_base64)
-        config_ejecucion = {"configurable": {"thread_id": payload.thread_id}}
+# --- 5. Entrada de Usuario (Voz y Texto) ---
+audio_value = st.audio_input("🎤 Grabar mensaje de voz", key=f"audio_input_{st.session_state.audio_key_counter}")
+text_value = st.chat_input("¿Qué solución necesitas hoy?")
+
+prompt = None
+if text_value:
+    st.session_state.is_voice_mode = False
+    prompt = text_value
+elif audio_value is not None:
+    st.session_state.is_voice_mode = True
+    if client:
+        with st.spinner("Transcribiendo mensaje de voz..."):
+            try:
+                audio_value.name = "audio.wav"
+                transcript = client.audio.transcriptions.create(model="whisper-1", file=audio_value)
+                st.session_state.pending_prompt = transcript.text
+                st.session_state.audio_key_counter += 1
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error al transcribir audio: {e}")
+    else:
+        st.error("Error: Cliente OpenAI no inicializado.")
+
+if st.session_state.pending_prompt:
+    prompt = st.session_state.pending_prompt
+    st.session_state.pending_prompt = None 
+
+# --- 6. Comunicación Streaming con el Backend (Lógica de Chat Activa) ---
+if prompt:
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    
+    with st.chat_message("assistant"):
+        # Contenedor dinámico vacío para renderizar en tiempo real por flujo
+        placeholder = st.empty()
+        respuesta_completa = ""
+        contexto_tecnico = {}
         
-        jarvi_graph.update_state(
-            config_ejecucion,
-            {"contexto_tecnico": {"empresa_electrica": datos_extraidos.get("empresa_electrica"), "requiere_auditoria_electrica": True}},
-            as_node="clasificador"
-        )
-        return {"status": "ok", "extracted_data": datos_extraidos}
-        
-    except Exception as e:
-        tb_str = traceback.format_exc()
-        session_snapshot = {"thread_id": payload.thread_id}
-        background_tasks.add_task(notificar_error_runtime, e, tb_str, session_snapshot, "Visión Artificial")
-        raise HTTPException(status_code=500, detail="Fallo en módulo multimodal.")
-
-add_routes(app, jarvi_graph, path="/jarvi")
+        try:
+            payload = {"thread_id": st.session_state.thread_id, "message": prompt}
+            
+            # Activación del contexto stream=True sobre la red interna de Railway
+            with requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers_api, stream=True, timeout=60) as response:
+                if response.status_code == 200:
+                    for line in response.iter_lines():
+                        if line:
+                            decoded_line = line.decode('utf-8')
+                            if decoded_line.startswith("data: "):
+                                data_json = json.loads(decoded_line[6:])
+                                
+                                # Acumulación inmediata de tokens
+                                if "token" in data_json:
+                                    respuesta_completa += data_json["token"]
+                                    placeholder.markdown(respuesta_completa + "▌")
+                                
+                                # Absorción silenciosa del contexto técnico al final del stream
+                                if "contexto_tecnico" in data_json:
+                                    contexto_tecnico = data_json["contexto_tecnico"]
+                                
+                                # Captura de excepciones controladas desde la API
+                                if "error" in data_json:
+                                    st.error(data_json["error"])
+                                    
+                    # Render final sin el cursor simulado
+                    placeholder.markdown(respuesta_completa)
+                    st.session_state.messages.append({"role": "assistant", "content": respuesta_completa})
+                    
+                    # TTS Lógica explícita sobre el buffer completo finalizado
+                    if st.session_state.is_voice_mode and client and respuesta_completa:
+                        with st.spinner("Generando síntesis de voz..."):
+                            speech_response = client.audio.speech.create(
+                                model="tts-1", voice="alloy", input=respuesta_completa
+                            )
+                            audio_buffer = io.BytesIO()
+                            for chunk in speech_response.iter_bytes(chunk_size=4096):
+                                audio_buffer.write(chunk)
+                            audio_buffer.seek(0)
+                            st.audio(audio_buffer.getvalue(), format="audio/mp3", autoplay=True)
+                else:
+                    st.error(f"Error del servidor backend (Código: {response.status_code}). Verifica los logs de la API.")
+        except Exception as e:
+            st.error(f"Error fatal de conexión con la API: {str(e)}")
