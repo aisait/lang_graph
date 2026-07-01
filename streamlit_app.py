@@ -80,6 +80,7 @@ img_a_procesar = factura_img if factura_img else factura_cam
 headers_api = {"Authorization": f"Bearer {API_KEY_SECRET}", "Content-Type": "application/json"}
 
 if img_a_procesar and not st.session_state.factura_procesada:
+    # Ajuste quirúrgico de timeout para visión (3 segundos para conexión inicial)
     with st.spinner("🔍 Analizando factura con visión artificial..."):
         try:
             base64_img = base64.b64encode(img_a_procesar.getvalue()).decode('utf-8')
@@ -87,7 +88,7 @@ if img_a_procesar and not st.session_state.factura_procesada:
                 f"{BACKEND_URL}/vision/analyze", 
                 json={"thread_id": st.session_state.thread_id, "image_base64": base64_img},
                 headers=headers_api,
-                timeout=60
+                timeout=(3.0, 30.0) # 3 segundos para conectar, 30 segundos para recibir datos pesados
             )
             
             if res.status_code == 200:
@@ -146,27 +147,30 @@ if prompt:
         try:
             payload = {"thread_id": st.session_state.thread_id, "message": prompt}
             
-            # Activación del contexto stream=True sobre la red interna de Railway
-            with requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers_api, stream=True, timeout=60) as response:
+            # Ajuste de timeout quirúrgico: 3.0 segundos para conectar, 15.0 segundos máximo de lectura total
+            with requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers_api, stream=True, timeout=(3.0, 15.0)) as response:
                 if response.status_code == 200:
                     for line in response.iter_lines():
                         if line:
-                            decoded_line = line.decode('utf-8')
+                            decoded_line = line.decode('utf-8').strip()
                             if decoded_line.startswith("data: "):
-                                data_json = json.loads(decoded_line[6:])
-                                
-                                # Acumulación inmediata de tokens
-                                if "token" in data_json:
-                                    respuesta_completa += data_json["token"]
-                                    placeholder.markdown(respuesta_completa + "▌")
-                                
-                                # Absorción silenciosa del contexto técnico al final del stream
-                                if "contexto_tecnico" in data_json:
-                                    contexto_tecnico = data_json["contexto_tecnico"]
-                                
-                                # Captura de excepciones controladas desde la API
-                                if "error" in data_json:
-                                    st.error(data_json["error"])
+                                try:
+                                    data_json = json.loads(decoded_line[6:])
+                                    
+                                    # Acumulación e impresión inmediata de los tokens en pantalla
+                                    if "token" in data_json:
+                                        respuesta_completa += data_json["token"]
+                                        placeholder.markdown(respuesta_completa + "▌")
+                                    
+                                    # Absorción silenciosa del contexto técnico al final del stream
+                                    if "contexto_tecnico" in data_json:
+                                        contexto_tecnico = data_json["contexto_tecnico"]
+                                    
+                                    # Captura de excepciones controladas desde la API
+                                    if "error" in data_json:
+                                        st.error(data_json["error"])
+                                except json.JSONDecodeError:
+                                    continue # Previene rupturas de canal ante metadatos intermedios malformados
                                     
                     # Render final sin el cursor simulado
                     placeholder.markdown(respuesta_completa)
@@ -186,4 +190,4 @@ if prompt:
                 else:
                     st.error(f"Error del servidor backend (Código: {response.status_code}). Verifica los logs de la API.")
         except Exception as e:
-            st.error(f"Error fatal de conexión con la API: {str(e)}")
+            st.error(f"Error fatal de conexión con la API o Timeout alcanzado: {str(e)}")
