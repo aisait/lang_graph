@@ -1,6 +1,18 @@
 JARVI 2.0.02 – Agente de Preventa Técnica para AISA Solar
 Arquitectura de Agente Cognitivo con Persistencia de Estado Seriable, Orquestación de Grafo Determinista y Gobernanza Forense de Eventos Auditables
 
+graph TD
+    S[Streamlit UI] -->|HTTP/SSE| API
+    L[LangSmith] -->|HTTP| API
+    N[n8n] -->|Webhook| API
+    API -->|Graph| AGENT[Grafo LangGraph]
+    AGENT -->|Tool Call| Odoo
+    AGENT -->|Read| Ontologia(JSON Catálogo)
+    AGENT -->|Persist| DB[(PostgreSQL)]
+    API -->|Whisper/TTS| OpenAI
+    API -->|Vision| OpenAI
+    API -->|Audit| AuditLogger
+    AuditLogger -->|Gmail API| Controller
 ---
 
  Tabla de Contenidos
