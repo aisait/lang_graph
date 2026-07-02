@@ -3,13 +3,20 @@ agent_graph.py
 Módulo central del grafo agéntico de JARVI 2.0.
 Contiene la definición del estado compartido, herramientas, nodos de razonamiento
 y la función de construcción del grafo con persistencia en PostgreSQL.
+Incorpora el decorador CTFOM de telemetría cognitiva para la observabilidad
+de cada nodo del grafo (trazas, latencia, errores).
+
 Estándares: ISO/IEC/IEEE 12207, ISO/IEC 26514, ISO/IEC 25010, ISO/IEC 29119.
 """
 
 import os
+import time
+import uuid
+import asyncio
 import threading
 import requests
 import re
+import functools
 from typing import Annotated, TypedDict, Optional
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -30,6 +37,9 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 import config
 from audit import auditar_fase
 from ontology import obtener_fragmento_ontologia
+
+# --- CTFOM: módulo de telemetría cognitiva ---
+from telemetry import trace_id_var, span_id_var, parent_span_id_var, log_telemetry_event
 
 # ---------------------------------------------------------------------------
 # Diccionario de códigos de área para Centroamérica
@@ -116,6 +126,51 @@ class AgentState(TypedDict):
     """Estado global del agente: historial de mensajes y contexto técnico."""
     messages: Annotated[list, add_messages]
     contexto_tecnico: InferenciaEnergetica
+
+
+# ---------------------------------------------------------------------------
+# Decorador CTFOM para nodos del grafo (telemetría cognitiva)
+# ---------------------------------------------------------------------------
+def observe_node(layer: str = "graph", node_name: str = ""):
+    """
+    Decorador síncrono que envuelve funciones del grafo para registrar eventos
+    de telemetría (inicio/fin/error) con trace_id, span_id, latencia, etc.
+
+    Requiere que el contexto de traza haya sido inicializado (desde el middleware HTTP).
+    Utiliza asyncio.ensure_future para no bloquear el flujo del grafo.
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            trace_id = trace_id_var.get()
+            span_id = str(uuid.uuid4())
+            parent = span_id_var.get()
+            span_id_var.set(span_id)
+
+            start = time.perf_counter()
+            try:
+                result = func(*args, **kwargs)
+                elapsed = (time.perf_counter() - start) * 1000
+                # Registrar evento exitoso de forma asíncrona no bloqueante
+                asyncio.ensure_future(log_telemetry_event(
+                    trace_id, span_id, parent,
+                    layer=layer, node_name=node_name,
+                    event_type="END", latency_ms=elapsed
+                ))
+                return result
+            except Exception as e:
+                elapsed = (time.perf_counter() - start) * 1000
+                asyncio.ensure_future(log_telemetry_event(
+                    trace_id, span_id, parent,
+                    layer=layer, node_name=node_name,
+                    event_type="ERROR", latency_ms=elapsed,
+                    error_code=f"SWR-LGG-{type(e).__name__}"
+                ))
+                raise
+            finally:
+                span_id_var.set(parent)
+        return wrapper
+    return decorator
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +313,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     # -------------------- Nodo: Clasificador Topológico --------------------
     @auditar_fase(nombre_fase="Clasificador Topológico", criticidad="MEDIA")
+    @observe_node(node_name="clasificador_topologia")
     def clasificador_topologia_node(state: AgentState):
         """
         Infiere la topología del sistema (On‑Grid / Off‑Grid) a partir
@@ -283,6 +339,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     # -------------------- Nodo: Validador Geográfico --------------------
     @auditar_fase(nombre_fase="Validador Geográfico", criticidad="MEDIA")
+    @observe_node(node_name="validador_geolocalizacion")
     def validador_geolocalizacion_node(state: AgentState):
         """
         Determina la ciudad y, si corresponde, la empresa eléctrica y tarifa,
@@ -306,6 +363,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     # -------------------- Nodo: Chatbot (Inferencia principal) --------------------
     @auditar_fase(nombre_fase="Inferencia del Chatbot", criticidad="ALTA")
+    @observe_node(node_name="chatbot")
     def chatbot_node(state: AgentState, config: RunnableConfig):
         """
         Nodo central que invoca al LLM con el contexto enriquecido.
