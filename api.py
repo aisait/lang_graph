@@ -20,7 +20,7 @@ import psutil  # telemetría de recursos
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Security, Request
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, AsyncExitStack
 from pydantic import BaseModel
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -108,21 +108,39 @@ async def lifespan(app: FastAPI):
     """
     Inicializa el checkpointer de PostgreSQL, compila el grafo una sola vez
     y arranca el worker de inserción batch de telemetría CTFOM.
+    Alineado a la especificación de administradores de contexto asíncronos de LangGraph.
     """
     global graph
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         raise RuntimeError("DATABASE_URL no definida – servicio no disponible")
-    checkpointer = AsyncPostgresSaver.from_conn_string(db_url)
-    graph = create_graph(checkpointer)
-    logger.info("JARVI 2.0 API inicializada – Grafo listo")
+    
+    # Se utiliza AsyncExitStack para mantener vivas las conexiones del Pool asíncrono
+    # de manera segura durante todo el ciclo de vida del proceso de FastAPI.
+    async with AsyncExitStack() as stack:
+        logger.info("Inicializando Pool de conexiones de Postgres para LangGraph Checkpointer...")
+        
+        # 1. Instanciar el gestor desde la cadena de conexión
+        raw_checkpointer = AsyncPostgresSaver.from_conn_string(db_url)
+        
+        # 2. Entrar al contexto asíncrono del checkpointer para inicializar la conexión interna y el pool.
+        # Esto resuelve el error de Pydantic al retornar una instancia completamente válida y tipada.
+        checkpointer = await stack.enter_async_context(raw_checkpointer)
+        
+        # 3. Asegurar que las tablas de control de estados existan en PostgreSQL
+        await checkpointer.setup()
+        
+        # 4. Compilar el grafo pasando el checkpointer completamente activo
+        graph = create_graph(checkpointer)
+        logger.info("JARVI 2.0 API inicializada – Grafo listo con Checkpointer de PostgreSQL Activo")
 
-    # CTFOM: iniciar worker de telemetría en segundo plano
-    asyncio.create_task(_batch_worker())
-    logger.info("CTFOM: worker de telemetría iniciado")
+        # CTFOM: iniciar worker de telemetría en segundo plano
+        asyncio.create_task(_batch_worker())
+        logger.info("CTFOM: worker de telemetría iniciado")
 
-    yield
-    logger.info("Apagando API JARVI")
+        yield
+        
+    logger.info("Apagando API JARVI y liberando recursos del Pool de Base de Datos")
 
 
 # ---------------------------------------------------------------------------
