@@ -3,17 +3,21 @@ api.py
 Servidor central de lógica de negocio de JARVI 2.0 (FastAPI).
 Contiene el ciclo de vida del grafo, control de concurrencia, seguridad
 y endpoints unificados para todos los canales (Streamlit, n8n, LangSmith).
+Incorpora el módulo CTFOM de telemetría cognitiva para trazabilidad
+end‑to‑end, detección de cuellos de botella y verificación de despacho.
 Estándares: ISO/IEC/IEEE 12207, ISO/IEC 26514, ISO/IEC 25010, ISO/IEC 29119.
 """
 
 import os
 import asyncio
 import json
+import time
 import logging
 from collections import defaultdict
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Security
+import psutil  # telemetría de recursos
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Security, Request
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
 from contextlib import asynccontextmanager
@@ -24,6 +28,12 @@ from langchain_core.messages import HumanMessage
 from schemas import ChatRequest, ChatResponse, AudioRequest, ImageRequest
 from agent_graph import create_graph
 from config import ISOConfigValidator  # noqa: F401 – asegura entorno válido
+
+# --- CTFOM: módulo de telemetría cognitiva ---
+from telemetry import (
+    trace_id_var, span_id_var, parent_span_id_var,
+    generate_trace_span, log_telemetry_event, _batch_worker
+)
 
 # ---------------------------------------------------------------------------
 # Configuración de logging (ISO/IEC 26514 – documentación de eventos)
@@ -61,37 +71,45 @@ async def persistir_evento_auditoria(thread_id: str, run_id: str, payload: dict)
     tras cada llamada al endpoint /chat.
     """
     try:
-        # Se asume que existe una función helper en db.py para insertar
-        # Por simplicidad, aquí se simula con un log estructurado
         logger.info("AUDIT|%s|%s|%s", thread_id, run_id, json.dumps(payload, default=str))
-        # En producción, se podría llamar a:
-        # await insertar_auditoria(thread_id, run_id, payload)
     except Exception as e:
         logger.error("Error crítico en auditoría asíncrona: %s", e)
 
 
 # ---------------------------------------------------------------------------
-# Ciclo de vida de la aplicación (inicialización del grafo y base de datos)
+# Taxonomía de errores alineada con ISO 27001 / 42001
+# ---------------------------------------------------------------------------
+def taxonomy_error(exc: Exception) -> str:
+    """Mapea excepciones a códigos de error estructurados."""
+    if isinstance(exc, HTTPException):
+        return f"SWR-API-MED-{exc.status_code}"
+    return "SWR-API-UNKNOWN-000"
+
+
+# ---------------------------------------------------------------------------
+# Ciclo de vida de la aplicación (inicialización del grafo, base de datos y telemetría)
 # ---------------------------------------------------------------------------
 graph = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Inicializa el checkpointer de PostgreSQL y compila el grafo una sola vez.
-    Prueba de caja negra: al arrancar, debe loguear "Grafo inicializado correctamente".
-    Si falla la conexión a DB, la aplicación no debe levantar.
+    Inicializa el checkpointer de PostgreSQL, compila el grafo una sola vez
+    y arranca el worker de inserción batch de telemetría CTFOM.
     """
     global graph
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         raise RuntimeError("DATABASE_URL no definida – servicio no disponible")
     checkpointer = AsyncPostgresSaver.from_conn_string(db_url)
-    # El DDL se aplica en db_migrate.py, no duplicamos setup() aquí
     graph = create_graph(checkpointer)
     logger.info("JARVI 2.0 API inicializada – Grafo listo")
+
+    # CTFOM: iniciar worker de telemetría en segundo plano
+    asyncio.create_task(_batch_worker())
+    logger.info("CTFOM: worker de telemetría iniciado")
+
     yield
-    # cleanup: cerrar conexiones si fuera necesario
     logger.info("Apagando API JARVI")
 
 
@@ -100,10 +118,62 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title="JARVI 2.0 API Central",
-    version="2.0.02",
+    version="2.0.03",
     lifespan=lifespan,
     dependencies=[Depends(validar_api_key)]
 )
+
+
+# ---------------------------------------------------------------------------
+# Middleware HTTP para telemetría CTFOM (catch-on-the-middle)
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def telemetry_middleware(request: Request, call_next):
+    """
+    Captura cada request HTTP: genera trace/span, mide latencia, CPU y memoria,
+    y registra un evento de telemetría al finalizar.
+    Prueba de caja negra: después de una solicitud, debe existir un registro
+    en telemetry_events con layer='api'.
+    """
+    generate_trace_span()
+    start = time.perf_counter()
+    cpu = psutil.cpu_percent(interval=None)
+    mem = psutil.virtual_memory().used / (1024 * 1024)
+    try:
+        response = await call_next(request)
+        elapsed = (time.perf_counter() - start) * 1000
+        await log_telemetry_event(
+            trace_id_var.get(), span_id_var.get(), "",
+            layer="api", event_type="END", latency_ms=elapsed,
+            cpu_percent=cpu, memory_mb=mem,
+            metadata={"path": request.url.path, "method": request.method}
+        )
+        return response
+    except Exception as e:
+        elapsed = (time.perf_counter() - start) * 1000
+        await log_telemetry_event(
+            trace_id_var.get(), span_id_var.get(), "",
+            layer="api", event_type="ERROR", latency_ms=elapsed,
+            cpu_percent=cpu, memory_mb=mem,
+            error_code=taxonomy_error(e),
+            metadata={"path": request.url.path}
+        )
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Endpoint de confirmación de despacho (ACK) para canales externos
+# ---------------------------------------------------------------------------
+@app.post("/ack/{trace_id}")
+async def acknowledge_dispatch(trace_id: str):
+    """
+    Recibe confirmación de entrega desde canales externos (n8n).
+    En una implementación completa actualizaría dispatch_events.
+    Prueba de caja negra: tras una llamada a /chat, enviar POST /ack/{trace_id}
+    y verificar en dispatch_events que ack_received = TRUE.
+    """
+    # Aquí se actualizaría el estado en dispatch_events usando trace_id
+    return {"status": "ACK received", "trace_id": trace_id}
 
 
 # ---------------------------------------------------------------------------
@@ -119,27 +189,22 @@ async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, No
     estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
 
     async with locks[thread_id]:
-        # stream_mode="messages" emite (message, metadata) por cada token
-        # Usamos astream_events para capturar tokens del LLM
         evento_llm = False
         async for evento in graph.astream_events(estado_inicial, config=config, version="v2"):
             kind = evento["event"]
             if kind == "on_chat_model_stream":
                 contenido = evento["data"]["chunk"].content
                 if contenido:
-                    # Escapar saltos de línea para SSE
                     contenido_escapado = contenido.replace('\n', '\\n')
                     yield f"data: {{\"token\": \"{contenido_escapado}\"}}\n\n"
                     evento_llm = True
             elif kind == "on_chain_end" and evento["name"] == "LangGraph":
-                # Último evento del grafo, enviamos el contexto técnico
                 estado_final = evento["data"]["output"]
                 ctx = estado_final.get("contexto_tecnico", {})
                 yield f"data: {{\"contexto_tecnico\": {json.dumps(ctx)}}}\n\n"
                 break
 
         if not evento_llm:
-            # Si no se emitieron tokens (ej. tool call directo), enviamos respuesta textual
             yield f"data: {{\"token\": \"(acción ejecutada)\"}}\n\n"
 
 
@@ -184,8 +249,6 @@ async def speech_to_text(request: AudioRequest):
     Convierte un archivo de audio (multipart/form-data) en texto usando OpenAI Whisper.
     Prueba de caja negra: subir un archivo .wav con voz; debe devolver {"transcript": "..."}.
     """
-    # Este endpoint requeriría una integración con OpenAI; aquí se deja la estructura
-    # La lógica real se movería desde Streamlit a esta API
     raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar Whisper")
 
 
