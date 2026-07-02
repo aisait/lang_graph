@@ -15,6 +15,7 @@ import time
 import logging
 from collections import defaultdict
 from typing import AsyncGenerator
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import psutil  # telemetría de recursos
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Security, Request
@@ -115,13 +116,31 @@ async def lifespan(app: FastAPI):
     if not db_url:
         raise RuntimeError("DATABASE_URL no definida – servicio no disponible")
     
+    # --- SANITIZACIÓN DE LA URL (Evita el error de psycopg con pool_size) ---
+    try:
+        parsed_url = urlparse(db_url)
+        query_params = parse_qs(parsed_url.query)
+        
+        # Eliminación controlada de parámetros de pooling incompatibles con psycopg3 nativo
+        parametros_conflictivos = ["pool_size", "max_overflow", "pool_timeout"]
+        for param in parametros_conflictivos:
+            query_params.pop(param, None)
+            
+        # Reconstrucción estricta de la cadena de consulta y URL final
+        clean_query = urlencode(query_params, doseq=True)
+        db_url_clean = urlunparse(parsed_url._replace(query=clean_query))
+    except Exception as e:
+        logger.error("Error al sanitizar DATABASE_URL, se recurrirá al string original: %s", e)
+        db_url_clean = db_url
+    # ------------------------------------------------------------------------
+    
     # Se utiliza AsyncExitStack para mantener vivas las conexiones del Pool asíncrono
     # de manera segura durante todo el ciclo de vida del proceso de FastAPI.
     async with AsyncExitStack() as stack:
         logger.info("Inicializando Pool de conexiones de Postgres para LangGraph Checkpointer...")
         
-        # 1. Instanciar el gestor desde la cadena de conexión
-        raw_checkpointer = AsyncPostgresSaver.from_conn_string(db_url)
+        # 1. Instanciar el gestor desde la cadena de conexión limpia
+        raw_checkpointer = AsyncPostgresSaver.from_conn_string(db_url_clean)
         
         # 2. Entrar al contexto asíncrono del checkpointer para inicializar la conexión interna y el pool.
         # Esto resuelve el error de Pydantic al retornar una instancia completamente válida y tipada.
