@@ -40,7 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
 # Prueba de caja negra: Importar módulos clave (fastapi, langgraph, psycopg) sin errores.
 # ----------------------------------------------------------------------
 COPY requirements.txt .
-RUN pip install --no-cache-dir -U langgraph langgraph-checkpoint-postgres && pip install --no-cache-dir -r requirements.txt psutil google-auth google-api-python-client
+RUN pip install --no-cache-dir -r requirements.txt psutil google-auth google-api-python-client langgraph langgraph-checkpoint-postgres
 
 # ----------------------------------------------------------------------
 # Copia del resto del código fuente de la API
