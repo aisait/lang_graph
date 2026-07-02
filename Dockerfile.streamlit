@@ -15,8 +15,8 @@ FROM python:3.11-slim
 # Metadatos de la imagen (ISO/IEC 26514 - Documentación de software)
 # ----------------------------------------------------------------------
 LABEL maintainer="AISA Solar - Equipo de Ingeniería"
-LABEL description="Interfaz de usuario ligera de JARVI 2.0. Actúa como cliente de la API central,
-                   sin lógica de negocio propia. Maneja entrada de texto, voz, imágenes y renderizado de respuestas."
+LABEL description="Interfaz de usuario ligera de JARVI 2.0. Actúa como cliente de la API central, \
+sin lógica de negocio propia. Maneja entrada de texto, voz, imágenes y renderizado de respuestas."
 LABEL version="2.0.02"
 
 # ----------------------------------------------------------------------
@@ -42,7 +42,7 @@ COPY . .
 
 # ----------------------------------------------------------------------
 # Exposición del puerto de escucha (configurable mediante variable PORT)
-# Streamlit se comunicará internamente con la API, pero expone su propia UI.
+# Streamlit se comunicará internamente con la API, expone su propia UI.
 # Prueba de caja negra: En un navegador, abrir la URL pública del servicio
 # y verificar que se carga la página de inicio con el mensaje de bienvenida.
 # ----------------------------------------------------------------------
@@ -51,9 +51,9 @@ EXPOSE 8080
 # ----------------------------------------------------------------------
 # Comando de arranque
 #   - streamlit run streamlit_app.py : archivo de entrada de la UI
-#   - --server.port=$PORT : escucha en el puerto dinámico asignado por Railway
+#   - --server.port=${PORT:-8080} : escucha en el puerto dinámico de Railway
 #   - --server.address=0.0.0.0 : permite conexiones desde fuera del contenedor
 # Prueba de caja negra: Enviar un mensaje de texto desde la interfaz y verificar
 # que la respuesta se renderiza correctamente, validando la integración con el backend.
 # ----------------------------------------------------------------------
-CMD ["sh", "-c", "streamlit run streamlit_app.py --server.port=$PORT --server.address=0.0.0.0"]
+CMD ["sh", "-c", "streamlit run streamlit_app.py --server.port=${PORT:-8080} --server.address=0.0.0.0"]
