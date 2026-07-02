@@ -30,7 +30,7 @@ import json
 # ---------------------------------------------------------------------------
 # 0. Configuración del entorno (Railway - Producción)
 # ---------------------------------------------------------------------------
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://jarvi-backend.railway.internal:8000")
 if BACKEND_URL.endswith('/'):
     BACKEND_URL = BACKEND_URL[:-1]
 
