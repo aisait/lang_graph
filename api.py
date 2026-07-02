@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Security, 
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
 from contextlib import asynccontextmanager
+from pydantic import BaseModel
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage
@@ -34,6 +35,17 @@ from telemetry import (
     trace_id_var, span_id_var, parent_span_id_var,
     generate_trace_span, log_telemetry_event, _batch_worker
 )
+
+# ---------------------------------------------------------------------------
+# Esquemas adicionales de validación de datos (Pydantic)
+# ---------------------------------------------------------------------------
+class TTSRequest(BaseModel):
+    """
+    Esquema de validación para las peticiones de síntesis de voz (Text-to-Speech).
+    """
+    text: str
+    voice: str | None = None
+
 
 # ---------------------------------------------------------------------------
 # Configuración de logging (ISO/IEC 26514 – documentación de eventos)
