@@ -1,4 +1,4 @@
-# JARVI 2.0.03 | CTFOM (Cognitive Telemetry & Forensic Observability Middleware)
+# JARVI 2.0.03 | Agente Cognitivo de Preventa Técnica para AISA Solar & CTFOM (Cognitive Telemetry & Forensic Observability Middleware)
 
 > Arquitectura de agente cognitivo con persistencia de estado serializable, orquestación mediante grafos deterministas, gobernanza forense de eventos auditables, canales de consumo desacoplados y telemetría cognitiva de grado industrial.
 
