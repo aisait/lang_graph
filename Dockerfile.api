@@ -12,15 +12,16 @@ FROM python:3.11-slim
 
 # ----------------------------------------------------------------------
 # Metadatos de la imagen (ISO/IEC 26514 - Documentación de software)
+# Corregido: Sintaxis de escape multilínea (\) para evitar errores de sintaxis del compilador.
 # ----------------------------------------------------------------------
 LABEL maintainer="AISA Solar - Equipo de Ingeniería"
-LABEL description="Servidor API centralizado de JARVI 2.0.03. Contiene el grafo de agente, \
-conexiones a Odoo, OpenAI, base de datos de auditoría y telemetría CTFOM."
-LABEL version="2.0.03"
+LABEL description="Servidor API centralizado de JARVI 2.0. Contiene el grafo de agente, \
+conexiones a Odoo, OpenAI y base de datos de auditoría."
+LABEL version="2.0.02"
 
 # ----------------------------------------------------------------------
 # Directorio de trabajo dentro del contenedor
-# ----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 WORKDIR /app
 
 # ----------------------------------------------------------------------
@@ -39,7 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
 # Prueba de caja negra: Importar módulos clave (fastapi, langgraph, psycopg) sin errores.
 # ----------------------------------------------------------------------
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt psutil google-auth google-api-python-client langgraph langgraph-checkpoint langgraph-checkpoint-postgres langchain-core --upgrade
 
 # ----------------------------------------------------------------------
 # Copia del resto del código fuente de la API
@@ -57,12 +58,11 @@ EXPOSE 8000
 
 # ----------------------------------------------------------------------
 # Comando de arranque
-#   - Primero ejecuta db_migrate_unificado.py para garantizar que el esquema
-#     de base de datos esté actualizado (idempotente).
-#   - Luego inicia uvicorn con la aplicación FastAPI.
+#   - uvicorn: servidor ASGI de alto rendimiento
+#   - api:app  : módulo 'api.py' y objeto 'app' (FastAPI)
 #   - --workers 1 : un solo worker para consolidar memoria del modelo y evitar OOM en Railway
 #   - --timeout-keep-alive 120 : tiempo máximo para mantener conexiones vivas
 # Prueba de caja negra: Monitorear logs de arranque, verificar que no haya errores de importación
-# y que la migración se ejecute correctamente antes de levantar el servidor.
+# y que la ruta de salud (/health si se implementa) responda 200.
 # ----------------------------------------------------------------------
-CMD ["sh", "-c", "python db_migrate_unificado.py && uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --timeout-keep-alive 120"]
+CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --timeout-keep-alive 120"]
