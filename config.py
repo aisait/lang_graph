@@ -51,6 +51,14 @@ class ISOConfigValidator:
 ISOConfigValidator.validar_entorno()
 
 # ---------------------------------------------------------------------------
+# Orquestación de Red y Descubrimiento de Servicios (ISO/IEC 25010 - Mantenibilidad)
+# ---------------------------------------------------------------------------
+# Se inyecta la variable de entorno dinámica para evitar el Error 1 de resolución DNS.
+# Si no viene definida en el entorno, cae de manera segura al DNS de la red interna de Railway.
+BACKEND_URL = os.getenv("BACKEND_URL", "http://jarvi-backend.railway.internal:8000")
+"""str: URL base del endpoint de la API (Orquestador LangGraph) consumida por el Frontend."""
+
+# ---------------------------------------------------------------------------
 # Parámetros de conexión a Odoo ERP
 # ---------------------------------------------------------------------------
 ODOO_HOST = os.getenv("ODOO_HOST", "34.75.123.223")
@@ -89,4 +97,5 @@ N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
 #     de importación si las variables están configuradas.
 #   - Modificar temporalmente el entorno para que falte OPENAI_API_KEY con
 #     IS_BACKEND=True y comprobar que se lanza ImportError.
+#   - Verificar que cambie el valor de BACKEND_URL al modificar la variable de entorno.
 # ---------------------------------------------------------------------------
