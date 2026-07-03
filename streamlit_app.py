@@ -1,22 +1,8 @@
 """
 streamlit_app.py
-Interfaz de usuario ligera de JARVI 2.0 (canal humano web).
-Actúa exclusivamente como cliente de la API central; no contiene
-lógica de negocio, inteligencia artificial ni acceso directo a Odoo.
-Todas las operaciones de voz, texto e imagen se delegan a la API.
-
-Estándares aplicados:
-- ISO/IEC/IEEE 12207:2008 (Ciclo de vida): este módulo es la interfaz
-  de usuario final del sistema.
-- ISO/IEC 26514:2021 (Documentación de software): se documentan todas las
-  secciones y flujos de interacción.
-- ISO/IEC 25010:2011 (Calidad del producto):
-  * Usabilidad: mensajes de bienvenida, indicadores de progreso y
-    manejo de errores amigables.
-  * Rendimiento: streaming de tokens para baja latencia percibida.
-  * Mantenibilidad: separación total de la lógica de negocio.
-- ISO/IEC 29119:2022 (Pruebas de software - caja negra):
-  Las pruebas sugeridas se incluyen en los comentarios de cada sección.
+Interfaz de usuario ligera de JARVI 2.0.03 (canal humano web).
+Cliente robusto con manejo correcto de streaming SSE,
+timeouts, errores y delegación total a la API central.
 """
 
 import streamlit as st
@@ -26,27 +12,25 @@ import uuid
 import base64
 import io
 import json
+import time
 
 # ---------------------------------------------------------------------------
-# 0. Configuración del entorno (Railway - Producción)
+# 0. Configuración del entorno
 # ---------------------------------------------------------------------------
-BACKEND_URL = os.getenv("BACKEND_URL", "https://jarvi-backend-production.up.railway.app:8000")
-if BACKEND_URL.endswith('/'):
-    BACKEND_URL = BACKEND_URL[:-1]
+BACKEND_URL = os.getenv(
+    "BACKEND_URL",
+    "https://cliente-api-production-c7bb.up.railway.app"  # sin puerto explícito
+).rstrip('/')
 
 API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
 
 # ---------------------------------------------------------------------------
-# 1. Configuración de la interfaz de usuario
-# Prueba de caja negra: al cargar la página, debe verse el título
-# "Jarvi ⚡ Agente de Soluciones de AISA Solar" y el favicon ⚡.
+# 1. Configuración de la interfaz
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
 # ---------------------------------------------------------------------------
-# 2. Variables de estado de la sesión (persistencia completa)
-# Prueba de caja negra: cada pestaña/ventana del navegador debe generar
-# un thread_id único y mantener el historial de mensajes por separado.
+# 2. Variables de estado
 # ---------------------------------------------------------------------------
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
@@ -76,7 +60,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": greeting}]
 
 # ---------------------------------------------------------------------------
-# 3. Título e instrucciones de uso
+# 3. Título e instrucciones
 # ---------------------------------------------------------------------------
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
@@ -93,21 +77,14 @@ with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     )
 
 # ---------------------------------------------------------------------------
-# Renderizado del historial de la conversación
-# Prueba de caja negra: los mensajes del usuario aparecen a la derecha
-# y los del asistente a la izquierda, con formato Markdown.
+# Historial
 # ---------------------------------------------------------------------------
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 # ---------------------------------------------------------------------------
-# 4. Captura multimodal: factura eléctrica (imagen)
-# Prueba de caja negra:
-#   - Subir una imagen de factura: debe aparecer "✅ Factura analizada
-#     correctamente." y en el chat se inyecta un prompt con los datos.
-#   - Subir una imagen no válida: la API debe responder con error y se
-#     muestra un mensaje en rojo.
+# 4. Captura de factura (igual que antes, delegando a API)
 # ---------------------------------------------------------------------------
 st.markdown("---")
 st.write("📸 **Cargar Factura Eléctrica (Opcional)**")
@@ -122,7 +99,11 @@ with col_cam:
     factura_cam = st.camera_input("O toma una foto a la factura", key="cam_factura")
 
 img_a_procesar = factura_img if factura_img else factura_cam
-headers_api = {"Authorization": f"Bearer {API_KEY_SECRET}", "Content-Type": "application/json"}
+headers_api = {
+    "Authorization": f"Bearer {API_KEY_SECRET}",
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+}
 
 if img_a_procesar and not st.session_state.factura_procesada:
     with st.spinner("🔍 Analizando factura con visión artificial..."):
@@ -147,22 +128,14 @@ if img_a_procesar and not st.session_state.factura_procesada:
                 st.success("✅ Factura analizada correctamente.")
                 st.rerun()
             else:
-                st.error(
-                    f"Fallo al procesar la factura en el servidor "
-                    f"(Código {res.status_code})."
-                )
+                st.error(f"Fallo al procesar la factura (Código {res.status_code}).")
         except Exception as e:
             st.error(f"Error técnico analizando la factura: {e}")
 
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# 5. Entrada del usuario: voz y texto
-# Prueba de caja negra:
-#   - Escribir en el campo de texto y enviar: se debe agregar el mensaje
-#     al historial y comenzar el streaming de respuesta.
-#   - Grabar un mensaje de voz: debe aparecer "Transcribiendo..." y luego
-#     el texto transcrito se inyecta como prompt automáticamente.
+# 5. Entrada de usuario (voz y texto)
 # ---------------------------------------------------------------------------
 audio_value = st.audio_input(
     "🎤 Grabar mensaje de voz",
@@ -178,7 +151,6 @@ elif audio_value is not None:
     st.session_state.is_voice_mode = True
     with st.spinner("Transcribiendo mensaje de voz..."):
         try:
-            # Enviar el audio a la API central (/stt) en lugar de usar OpenAI directamente
             audio_bytes = audio_value.read()
             files = {"audio": ("audio.wav", audio_bytes, "audio/wav")}
             stt_response = requests.post(
@@ -194,9 +166,9 @@ elif audio_value is not None:
                     st.session_state.audio_key_counter += 1
                     st.rerun()
                 else:
-                    st.error("No se pudo transcribir el audio (texto vacío).")
+                    st.error("No se pudo transcribir el audio.")
             elif stt_response.status_code == 501:
-                st.error("Funcionalidad de voz no disponible en la API todavía.")
+                st.error("Funcionalidad de voz no disponible.")
             else:
                 st.error(f"Error del servidor al transcribir: {stt_response.status_code}")
         except Exception as e:
@@ -207,16 +179,9 @@ if st.session_state.pending_prompt:
     st.session_state.pending_prompt = None
 
 # ---------------------------------------------------------------------------
-# 6. Comunicación con el backend: envío del mensaje y recepción del streaming
-# Prueba de caja negra:
-#   - Enviar un mensaje de texto: debe aparecer el mensaje del usuario y
-#     la respuesta del asistente renderizarse token a token.
-#   - Si el modo voz está activo, al finalizar la respuesta se debe
-#     generar y reproducir un audio automáticamente.
-#   - Si el backend no está disponible, debe mostrarse un error de conexión.
+# 6. Comunicación con el backend (MEJORADO)
 # ---------------------------------------------------------------------------
 if prompt:
-    # Añadir mensaje del usuario al historial
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -231,57 +196,87 @@ if prompt:
                 "thread_id": st.session_state.thread_id,
                 "message": prompt
             }
-            # Stream SSE desde la API central
-            with requests.post(
+
+            # ------------------------------------------------
+            # Petición con timeout amplio y manejo robusto
+            # ------------------------------------------------
+            response = requests.post(
                 f"{BACKEND_URL}/chat",
                 json=payload,
                 headers=headers_api,
                 stream=True,
-                timeout=60
-            ) as response:
-                if response.status_code == 200:
-                    for line in response.iter_lines():
-                        if line:
-                            decoded_line = line.decode('utf-8')
-                            if decoded_line.startswith("data: "):
-                                data_json = json.loads(decoded_line[6:])
-                                # Acumulación de tokens en tiempo real
-                                if "token" in data_json:
-                                    respuesta_completa += data_json["token"]
-                                    placeholder.markdown(respuesta_completa + "▌")
-                                # Contexto técnico final
-                                if "contexto_tecnico" in data_json:
-                                    contexto_tecnico = data_json["contexto_tecnico"]
-                                # Manejo de errores desde la API
-                                if "error" in data_json:
-                                    st.error(data_json["error"])
-                    # Renderizado final sin el cursor
-                    placeholder.markdown(respuesta_completa)
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": respuesta_completa}
-                    )
+                timeout=120
+            )
 
-                    # Si el modo voz está activo, solicitar síntesis de voz a la API
-                    if st.session_state.is_voice_mode and respuesta_completa:
-                        with st.spinner("Generando síntesis de voz..."):
-                            tts_response = requests.post(
-                                f"{BACKEND_URL}/tts",
-                                json={"text": respuesta_completa, "voice": "alloy"},
-                                headers=headers_api,
-                                timeout=30
-                            )
-                            if tts_response.status_code == 200:
-                                audio_bytes = tts_response.content
-                                st.audio(audio_bytes, format="audio/mp3", autoplay=True)
-                            elif tts_response.status_code == 501:
-                                st.warning("Síntesis de voz no disponible en la API.")
-                            else:
-                                st.error(f"Error al generar voz: {tts_response.status_code}")
-                else:
-                    st.error(
-                        f"Error del servidor backend (Código: {response.status_code}). "
-                        "Verifica los logs de la API."
+            if response is None:
+                st.error("Backend no disponible")
+                st.stop()
+
+            if response.status_code != 200:
+                st.error(f"Error backend {response.status_code}: {response.text}")
+                st.stop()
+
+            content_type = response.headers.get("Content-Type", "")
+
+            # ================== CASO 1: SSE STREAMING ==================
+            if "text/event-stream" in content_type:
+                for line in response.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    if line.startswith("data: "):
+                        try:
+                            data = json.loads(line[6:])
+
+                            if "token" in data:
+                                respuesta_completa += data["token"]
+                                placeholder.markdown(respuesta_completa + "▌")
+
+                            if "contexto_tecnico" in data:
+                                contexto_tecnico = data["contexto_tecnico"]
+
+                            if "error" in data:
+                                st.error(data["error"])
+
+                        except json.JSONDecodeError:
+                            # a veces llega texto no JSON, lo agregamos como token
+                            respuesta_completa += line[6:]
+                            placeholder.markdown(respuesta_completa + "▌")
+
+            # ================== CASO 2: JSON NORMAL ==================
+            else:
+                try:
+                    data = response.json()
+                    respuesta_completa = (
+                        data.get("response")
+                        or data.get("answer")
+                        or data.get("message")
+                        or str(data)
                     )
+                except Exception:
+                    respuesta_completa = response.text
+
+            # ------------ Render final y TTS ------------
+            placeholder.markdown(respuesta_completa)
+            st.session_state.messages.append(
+                {"role": "assistant", "content": respuesta_completa}
+            )
+
+            if st.session_state.is_voice_mode and respuesta_completa:
+                with st.spinner("Generando síntesis de voz..."):
+                    tts_response = requests.post(
+                        f"{BACKEND_URL}/tts",
+                        json={"text": respuesta_completa, "voice": "alloy"},
+                        headers=headers_api,
+                        timeout=30
+                    )
+                    if tts_response.status_code == 200:
+                        audio_bytes = tts_response.content
+                        st.audio(audio_bytes, format="audio/mp3", autoplay=True)
+                    elif tts_response.status_code == 501:
+                        st.warning("Síntesis de voz no disponible en la API.")
+                    else:
+                        st.error(f"Error al generar voz: {tts_response.status_code}")
+
         except requests.exceptions.ConnectionError:
             st.error("Error fatal de conexión con la API. Asegúrate de que el backend esté en ejecución.")
         except Exception as e:
