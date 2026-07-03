@@ -150,7 +150,17 @@ async def generar_sse(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]
             elif kind == "on_chain_end" and evento["name"] == "LangGraph":
                 estado_final = evento["data"]["output"]
                 ctx = estado_final.get("contexto_tecnico", {})
-                respuesta_final = estado_final.get("messages", [""])[-1].content if estado_final.get("messages") else ""
+               
+                
+                messages = estado_final.get("messages")
+                respuesta_final = ""
+                if messages and isinstance(messages, list):
+                last = messages[-1]
+                if hasattr(last, "content"):
+                respuesta_final = last.content 
+                
+                
+                if estado_final.get("messages") else ""
                 payload = {
                     "type": "final",
                     "response": respuesta_final,
