@@ -55,7 +55,7 @@ ISOConfigValidator.validar_entorno()
 # ---------------------------------------------------------------------------
 # Se inyecta la variable de entorno dinámica para evitar el Error 1 de resolución DNS.
 # Si no viene definida en el entorno, cae de manera segura al DNS de la red interna de Railway.
-BACKEND_URL = os.getenv("BACKEND_URL", "http://jarvi-backend.railway.internal:8000")
+BACKEND_URL = os.getenv("BACKEND_URL", "https://jarvi-backend-production.up.railway.app:8000")
 """str: URL base del endpoint de la API (Orquestador LangGraph) consumida por el Frontend."""
 
 # ---------------------------------------------------------------------------
