@@ -160,7 +160,7 @@ async def generar_sse(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]
                 break
 
         if not has_tokens:
-            yield 'data: {"type":"token","data":"(acción ejecutada)"}\n\n'
+            yield f'data: {json.dumps({"type":"token","data":"(acción ejecutada)"}, ensure_ascii=False)}\n\n'
 
 # ---------------------------------------------------------------------------
 # Endpoint /chat
