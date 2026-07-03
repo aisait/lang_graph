@@ -13,7 +13,7 @@
 
 - [Resumen Ejecutivo](#resumen-ejecutivo)
 - [Arquitectura Modular](#arquitectura-modular)
-- [Telemetría Cognitiva CTFOM](#telemetría-cognitiva-ctfom)
+- [Telemetría Cognitiva CTFOM](#telemettría-cognitiva-ctfom)
 - [Diseño de Base de Datos](#diseño-de-base-de-datos)
 - [Arquitectura Lógica](#arquitectura-lógica)
 - [Variables de Entorno](#variables-de-entorno)
@@ -66,8 +66,7 @@ Toda la lógica de negocio reside en una API central basada en:
 | `odoo_client.py` | Integración ERP |
 | `audit.py` | Auditoría forense |
 | `config.py` | Variables de entorno |
-| `db_migrate.py` | Migración DB principal |
-| `db_migrate_ctfom.py` | Migración esquema telemetría |
+| `db_migrate_unificado.py` | Migración unificada Core + CTFOM |
 | `telemetry.py` | Worker asíncrono de eventos |
 | `schemas.py` | Contratos Pydantic |
 | `vision.py` | OCR de facturas |
@@ -87,40 +86,60 @@ Permite:
 - Root Cause Analysis
 - Monitoreo de salud del sistema
 
-### Componentes Lógicos
+## Componentes Lógicos
 
-1. **Middleware HTTP (`api.py`)**
-   - Genera traza raíz
-   - Instrumenta requests
+### 1. Middleware HTTP (`api.py`)
+- Genera traza raíz
+- Instrumenta requests
 
-2. **Decoradores de nodos (`agent_graph.py`)**
-   - Instrumentación por span
+### 2. Decoradores de nodos (`agent_graph.py`)
+- Instrumentación por span
 
-3. **Worker batch (`telemetry.py`)**
-   - Inserción no bloqueante
+### 3. Worker batch (`telemetry.py`)
+- Inserción no bloqueante
 
-4. **Tablas de telemetría**
-   - Persistencia optimizada para alto volumen
+### 4. Tablas de telemetría
+- Persistencia optimizada sin particiones manuales
 
 ---
 
 # Diseño de Base de Datos
 
-CTFOM agrega cuatro tablas nuevas además de:
+El esquema se crea mediante un único script:
 
+`db_migrate_unificado.py`
+
+Esto garantiza instalación limpia e idempotente de todas las tablas.
+
+No se requiere mantenimiento de particiones: la telemetría reside en tablas normales y las consultas se realizan por filtros temporales:
+
+```sql
+WHERE created_at BETWEEN ... AND ...
+```
+
+Ideal para herramientas analíticas como **:contentReference[oaicite:0]{index=0}**.
+
+Tablas:
+
+### Núcleo Original
 - `checkpoints`
+- `checkpoint_blobs`
 - `threads`
 - `audit_events`
+
+### Módulo CTFOM
+- `telemetry_events`
+- `dispatch_events`
+- `system_health`
+- `root_cause_analysis`
 
 ---
 
 ## Tabla `telemetry_events`
 
-Tabla principal de observabilidad.
-
 | Campo | Tipo | Descripción |
 |---|---|---|
-| `id` | BIGSERIAL | ID autogenerado |
+| `id` | BIGSERIAL PK | ID autogenerado |
 | `trace_id` | UUID | Traza global |
 | `span_id` | UUID | Span actual |
 | `parent_span_id` | UUID | Span padre |
@@ -142,11 +161,9 @@ Tabla principal de observabilidad.
 
 ## Tabla `dispatch_events`
 
-Registra envíos a canales externos.
-
 | Campo | Tipo |
 |---|---|
-| `id` | BIGSERIAL |
+| `id` | BIGSERIAL PK |
 | `trace_id` | UUID |
 | `channel` | VARCHAR |
 | `payload_hash` | TEXT |
@@ -162,11 +179,9 @@ Registra envíos a canales externos.
 
 ## Tabla `system_health`
 
-Monitoreo de servicios.
-
 | Campo | Tipo |
 |---|---|
-| `service_name` | TEXT |
+| `service_name` | TEXT PK |
 | `heartbeat_ts` | TIMESTAMPTZ |
 | `status` | TEXT |
 | `avg_latency_ms` | INTEGER |
@@ -177,11 +192,9 @@ Monitoreo de servicios.
 
 ## Tabla `root_cause_analysis`
 
-Motor forense post-mortem.
-
 | Campo | Tipo |
 |---|---|
-| `incident_id` | UUID |
+| `incident_id` | UUID PK |
 | `trace_id` | UUID |
 | `primary_failure` | TEXT |
 | `secondary_failure` | TEXT |
@@ -247,8 +260,6 @@ Características:
 - TTS
 - OCR de facturas
 
----
-
 ## n8n
 
 Automatización vía webhook.
@@ -266,8 +277,6 @@ Headers:
 Authorization: Bearer API_KEY
 Content-Type: application/json
 ```
-
----
 
 ## LangSmith
 
@@ -312,7 +321,7 @@ El sistema modela:
 - Incidentes de infraestructura
 - Salud de servicios
 
-Capas:
+Capas ontológicas:
 
 1. Ontología de dominio  
 2. Ontología de proceso  
@@ -373,18 +382,15 @@ Uso de `pgvector`.
 Catálogo dinámico.
 
 ## Agentes Especialistas
-
 - On-Grid
 - Off-Grid
 - Bombeo
 - Solar térmico
 
 ## Predictive Bottleneck Engine
-
-Machine Learning para predecir cuellos de botella.
+Machine Learning para predicción de cuellos de botella.
 
 ## Reflexive Truth Engine
-
 Autoajuste de prompts basado en telemetría operacional.
 
 ---
