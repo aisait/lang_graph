@@ -129,44 +129,61 @@ def health():
 #   data: {"type":"token","data":"..."}
 #   data: {"type":"final","response":"...","contexto_tecnico":{...}}
 # ---------------------------------------------------------------------------
-async def generar_sse(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]:
-    config = {"configurable": {"thread_id": thread_id}}
-    state = {"messages": [HumanMessage(content=mensaje)]}
+async def generar_sse(thread_id: str, mensaje: str):
 
-    async with locks[thread_id]:
-        has_tokens = False
-        async for evento in graph.astream_events(state, config=config, version="v2"):
-            kind = evento["event"]
+    try:
+        config = {"configurable": {"thread_id": thread_id}}
+        state = {"messages": [HumanMessage(content=mensaje)]}
 
-            # Token del LLM
-            if kind == "on_chat_model_stream":
-                contenido = evento["data"]["chunk"].content
-                if contenido:
-                    has_tokens = True
-                    payload = {"type": "token", "data": contenido}
+        async with locks[thread_id]:
+
+            has_tokens = False
+
+            async for evento in graph.astream_events(state, config=config, version="v2"):
+
+                kind = evento["event"]
+
+                if kind == "on_chat_model_stream":
+                    contenido = evento["data"]["chunk"].content
+                    if contenido:
+                        has_tokens = True
+                        payload = {"type": "token", "data": contenido}
+                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+                elif kind == "on_chain_end" and evento["name"] == "LangGraph":
+
+                    estado_final = evento["data"]["output"]
+
+                    ctx = estado_final.get("contexto_tecnico", {})
+
+                    messages = estado_final.get("messages")
+                    respuesta_final = ""
+
+                    if messages and isinstance(messages, list):
+                        last = messages[-1]
+                        if hasattr(last, "content"):
+                            respuesta_final = last.content
+
+                    payload = {
+                        "type": "final",
+                        "response": respuesta_final,
+                        "contexto_tecnico": ctx
+                    }
+
                     yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    break
 
-            # Fin del grafo
-            elif kind == "on_chain_end" and evento["name"] == "LangGraph":
-                estado_final = evento["data"]["output"]
-                ctx = estado_final.get("contexto_tecnico", {})
-               
-                
-                messages = estado_final.get("messages")
-                respuesta_final = ""
-                if messages and isinstance(messages, list):
-                last = messages[-1]
-                if hasattr(last, "content"):
-                respuesta_final = last.content 
-                
-                
-                if estado_final.get("messages") else ""
-                payload = {
-                    "type": "final",
-                    "response": respuesta_final,
-                    "contexto_tecnico": ctx
-                }
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            if not has_tokens:
+                yield f'data: {json.dumps({"type":"token","data":"(acción ejecutada)"}, ensure_ascii=False)}\n\n'
+
+    except Exception as e:
+
+        error_payload = {
+            "type": "error",
+            "message": str(e)
+        }
+
+        yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
                 break
 
         if not has_tokens:
