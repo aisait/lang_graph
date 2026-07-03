@@ -1,8 +1,8 @@
 """
 streamlit_app.py
-Interfaz de usuario ligera de JARVI 2.0.03 (canal humano web).
-Cliente robusto con manejo correcto de streaming SSE,
-timeouts, errores y delegación total a la API central.
+Interfaz de usuario web de JARVI 2.0.03.
+Consume la API central con streaming SSE estandarizado,
+manejo de errores y timeouts adecuados.
 """
 
 import streamlit as st
@@ -12,25 +12,24 @@ import uuid
 import base64
 import io
 import json
-import time
 
 # ---------------------------------------------------------------------------
 # 0. Configuración del entorno
 # ---------------------------------------------------------------------------
 BACKEND_URL = os.getenv(
     "BACKEND_URL",
-    "https://cliente-api-production-c7bb.up.railway.app"  # sin puerto explícito
+    "https://cliente-api-production-c7bb.up.railway.app"
 ).rstrip('/')
 
 API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
 
 # ---------------------------------------------------------------------------
-# 1. Configuración de la interfaz
+# 1. Configuración de interfaz
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
 # ---------------------------------------------------------------------------
-# 2. Variables de estado
+# 2. Estado de sesión
 # ---------------------------------------------------------------------------
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
@@ -84,7 +83,16 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # ---------------------------------------------------------------------------
-# 4. Captura de factura (igual que antes, delegando a API)
+# Headers unificados
+# ---------------------------------------------------------------------------
+headers_api = {
+    "Authorization": f"Bearer {API_KEY_SECRET}",
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+}
+
+# ---------------------------------------------------------------------------
+# 4. Captura de factura (opcional)
 # ---------------------------------------------------------------------------
 st.markdown("---")
 st.write("📸 **Cargar Factura Eléctrica (Opcional)**")
@@ -99,11 +107,6 @@ with col_cam:
     factura_cam = st.camera_input("O toma una foto a la factura", key="cam_factura")
 
 img_a_procesar = factura_img if factura_img else factura_cam
-headers_api = {
-    "Authorization": f"Bearer {API_KEY_SECRET}",
-    "Content-Type": "application/json",
-    "Accept": "application/json"
-}
 
 if img_a_procesar and not st.session_state.factura_procesada:
     with st.spinner("🔍 Analizando factura con visión artificial..."):
@@ -179,7 +182,7 @@ if st.session_state.pending_prompt:
     st.session_state.pending_prompt = None
 
 # ---------------------------------------------------------------------------
-# 6. Comunicación con el backend (MEJORADO)
+# 6. Comunicación con el backend (SSE estandarizado)
 # ---------------------------------------------------------------------------
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -189,17 +192,10 @@ if prompt:
     with st.chat_message("assistant"):
         placeholder = st.empty()
         respuesta_completa = ""
-        contexto_tecnico = {}
 
         try:
-            payload = {
-                "thread_id": st.session_state.thread_id,
-                "message": prompt
-            }
+            payload = {"thread_id": st.session_state.thread_id, "message": prompt}
 
-            # ------------------------------------------------
-            # Petición con timeout amplio y manejo robusto
-            # ------------------------------------------------
             response = requests.post(
                 f"{BACKEND_URL}/chat",
                 json=payload,
@@ -208,59 +204,37 @@ if prompt:
                 timeout=120
             )
 
-            if response is None:
-                st.error("Backend no disponible")
-                st.stop()
-
             if response.status_code != 200:
                 st.error(f"Error backend {response.status_code}: {response.text}")
                 st.stop()
 
-            content_type = response.headers.get("Content-Type", "")
-
-            # ================== CASO 1: SSE STREAMING ==================
-            if "text/event-stream" in content_type:
-                for line in response.iter_lines(decode_unicode=True):
-                    if not line:
-                        continue
-                    if line.startswith("data: "):
-                        try:
-                            data = json.loads(line[6:])
-
-                            if "token" in data:
-                                respuesta_completa += data["token"]
-                                placeholder.markdown(respuesta_completa + "▌")
-
-                            if "contexto_tecnico" in data:
-                                contexto_tecnico = data["contexto_tecnico"]
-
-                            if "error" in data:
-                                st.error(data["error"])
-
-                        except json.JSONDecodeError:
-                            # a veces llega texto no JSON, lo agregamos como token
-                            respuesta_completa += line[6:]
-                            placeholder.markdown(respuesta_completa + "▌")
-
-            # ================== CASO 2: JSON NORMAL ==================
-            else:
+            for line in response.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data: "):
+                    continue
                 try:
-                    data = response.json()
-                    respuesta_completa = (
-                        data.get("response")
-                        or data.get("answer")
-                        or data.get("message")
-                        or str(data)
-                    )
-                except Exception:
-                    respuesta_completa = response.text
+                    data = json.loads(line[6:])
+                except json.JSONDecodeError:
+                    continue
 
-            # ------------ Render final y TTS ------------
-            placeholder.markdown(respuesta_completa)
+                # Token nuevo
+                if data.get("type") == "token":
+                    respuesta_completa += data["data"]
+                    placeholder.markdown(respuesta_completa + "▌")
+
+                # Final de la respuesta
+                elif data.get("type") == "final":
+                    respuesta_final = data.get("response") or respuesta_completa
+                    placeholder.markdown(respuesta_final)
+                    break
+
+            # Guardar respuesta definitiva
+            if not respuesta_completa:
+                respuesta_completa = "(el agente no emitió tokens)"
             st.session_state.messages.append(
                 {"role": "assistant", "content": respuesta_completa}
             )
 
+            # TTS si modo voz activo
             if st.session_state.is_voice_mode and respuesta_completa:
                 with st.spinner("Generando síntesis de voz..."):
                     tts_response = requests.post(
@@ -270,14 +244,11 @@ if prompt:
                         timeout=30
                     )
                     if tts_response.status_code == 200:
-                        audio_bytes = tts_response.content
-                        st.audio(audio_bytes, format="audio/mp3", autoplay=True)
-                    elif tts_response.status_code == 501:
-                        st.warning("Síntesis de voz no disponible en la API.")
+                        st.audio(tts_response.content, format="audio/mp3", autoplay=True)
                     else:
-                        st.error(f"Error al generar voz: {tts_response.status_code}")
+                        st.warning("Voz no disponible")
 
         except requests.exceptions.ConnectionError:
-            st.error("Error fatal de conexión con la API. Asegúrate de que el backend esté en ejecución.")
+            st.error("Error de conexión con la API. Verifica que el backend esté corriendo.")
         except Exception as e:
             st.error(f"Error inesperado: {str(e)}")
