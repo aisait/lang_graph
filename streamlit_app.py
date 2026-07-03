@@ -21,7 +21,7 @@ BACKEND_URL = os.getenv(
     "https://cliente-api-production-c7bb.up.railway.app"
 ).rstrip('/')
 
-API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
+API_KEY_SECRET = os.environ["CHATBOT_MASTER_API_KEY"]
 
 # ---------------------------------------------------------------------------
 # 1. Configuración de interfaz
