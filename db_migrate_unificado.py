@@ -1,13 +1,7 @@
 """
 db_migrate_unificado.py
 Migración unificada del esquema de base de datos para JARVI 2.0.03 (Core + CTFOM).
-Crea todas las tablas necesarias en una única transacción atómica e idempotente.
-
-Ejecución:
-    python db_migrate_unificado.py
-
-Estándares aplicados:
-- ISO/IEC/IEEE 12207, ISO/IEC 26514, ISO/IEC 25010, ISO/IEC 29119.
+Sin particiones, completamente idempotente y libre de mantenimiento manual.
 """
 
 import asyncio
@@ -17,9 +11,6 @@ from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 import psycopg
 from psycopg import AsyncConnection
 
-# ---------------------------------------------------------------------------
-# Esquema DDL completo (Core + CTFOM)
-# ---------------------------------------------------------------------------
 DDL_UNIFICADO = """
 -- =========================================================================
 -- 1. Sistema de checkpoints de LangGraph
@@ -71,10 +62,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_thread_id ON audit_events(thread_id);
 CREATE INDEX IF NOT EXISTS idx_audit_run_id ON audit_events(langsmith_run_id);
 
 -- =========================================================================
--- 3. Módulo CTFOM: Telemetría cognitiva
+-- 3. Módulo CTFOM: Telemetría cognitiva (tabla única, sin particiones)
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS telemetry_events (
-    id BIGSERIAL,
+    id BIGSERIAL PRIMARY KEY,
     trace_id UUID NOT NULL,
     span_id UUID NOT NULL,
     parent_span_id UUID,
@@ -91,36 +82,14 @@ CREATE TABLE IF NOT EXISTS telemetry_events (
     dispatch_success BOOLEAN,
     metadata JSONB DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-) PARTITION BY RANGE (created_at);
+);
 
+-- Índices para consultas frecuentes en Metabase y trazabilidad
 CREATE INDEX IF NOT EXISTS idx_telemetry_trace_id ON telemetry_events (trace_id);
 CREATE INDEX IF NOT EXISTS idx_telemetry_run_id ON telemetry_events (run_id);
 CREATE INDEX IF NOT EXISTS idx_telemetry_created_at ON telemetry_events (created_at);
 CREATE INDEX IF NOT EXISTS idx_telemetry_error_code ON telemetry_events (error_code);
 CREATE INDEX IF NOT EXISTS idx_telemetry_gin_metadata ON telemetry_events USING GIN (metadata);
-
-CREATE OR REPLACE FUNCTION create_monthly_partitions(
-    start_date DATE DEFAULT date_trunc('month', now())::DATE,
-    months_ahead INTEGER DEFAULT 12
-) RETURNS void AS $$
-DECLARE
-    partition_date DATE;
-    partition_name TEXT;
-    start_of_month TEXT;
-    end_of_month TEXT;
-BEGIN
-    FOR i IN 0..months_ahead LOOP
-        partition_date := start_date + (i || ' months')::INTERVAL;
-        partition_name := 'telemetry_events_' || to_char(partition_date, 'YYYY_MM');
-        start_of_month := to_char(partition_date, 'YYYY-MM-01');
-        end_of_month := to_char((partition_date + INTERVAL '1 month')::DATE, 'YYYY-MM-01');
-        EXECUTE format(
-            'CREATE TABLE IF NOT EXISTS %I PARTITION OF telemetry_events FOR VALUES FROM (%L) TO (%L)',
-            partition_name, start_of_month, end_of_month
-        );
-    END LOOP;
-END;
-$$ LANGUAGE plpgsql;
 
 CREATE TABLE IF NOT EXISTS dispatch_events (
     id BIGSERIAL PRIMARY KEY,
@@ -145,17 +114,6 @@ CREATE TABLE IF NOT EXISTS system_health (
     queue_depth INTEGER
 );
 
-CREATE TABLE IF NOT EXISTS root_cause_analysis (
-    incident_id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    trace_id UUID,
-    primary_failure TEXT,
-    secondary_failure TEXT,
-    tertiary_failure TEXT,
-    confidence FLOAT,
-    remediation TEXT,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
 INSERT INTO system_health (service_name, status)
 VALUES
     ('api', 'UNKNOWN'),
@@ -166,38 +124,41 @@ VALUES
     ('n8n', 'UNKNOWN'),
     ('langsmith', 'UNKNOWN')
 ON CONFLICT (service_name) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS root_cause_analysis (
+    incident_id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    trace_id UUID,
+    primary_failure TEXT,
+    secondary_failure TEXT,
+    tertiary_failure TEXT,
+    confidence FLOAT,
+    remediation TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
 """
 
-
 async def run_migration():
-    """
-    Ejecuta la migración completa (Core + CTFOM) en una única transacción atómica.
-    """
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         print("❌ Error: DATABASE_URL no encontrada en el entorno.")
         sys.exit(1)
 
-    # Filtro de inmunidad sintáctica para parámetros no nativos de psycopg v3
     if "pool_size" in db_url:
         parsed_url = urlparse(db_url)
         query_params = parse_qsl(parsed_url.query)
         filtered_params = [(k, v) for k, v in query_params if k != "pool_size"]
         db_url = urlunparse(parsed_url._replace(query=urlencode(filtered_params)))
 
-    print("🚀 Iniciando migración unificada de base de datos...")
+    print("🚀 Iniciando migración unificada (sin particiones)...")
     try:
         async with await AsyncConnection.connect(db_url) as conn:
             async with conn.transaction():
                 async with conn.cursor() as cur:
                     await cur.execute(DDL_UNIFICADO)
-                    # Generar particiones de telemetría para los próximos 12 meses
-                    await cur.execute("SELECT create_monthly_partitions();")
-        print("✅ Migración unificada completada exitosamente (Core + CTFOM).")
+        print("✅ Migración unificada completada exitosamente.")
     except Exception as e:
-        print(f"❌ Error crítico en migración unificada: {e}")
+        print(f"❌ Error crítico en migración: {e}")
         sys.exit(1)
-
 
 if __name__ == "__main__":
     asyncio.run(run_migration())
