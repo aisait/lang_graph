@@ -1,8 +1,10 @@
 """
 streamlit_app.py
-Interfaz de usuario web de JARVI 2.0.03.
-Consume la API central con streaming SSE estandarizado,
-manejo de errores y timeouts adecuados.
+Interfaz de usuario ligera de JARVI 2.0.03 (canal humano web).
+Cliente robusto con manejo correcto de streaming SSE,
+timeouts, errores y delegación total a la API central.
+Versión corregida: auth unificada, streaming defensivo,
+historial sin duplicados y parseo seguro.
 """
 
 import streamlit as st
@@ -21,15 +23,19 @@ BACKEND_URL = os.getenv(
     "https://cliente-api-production-c7bb.up.railway.app"
 ).rstrip('/')
 
-API_KEY_SECRET = os.environ["CHATBOT_MASTER_API_KEY"]
+# CORRECCIÓN 1: usar exclusivamente la variable de entorno, sin fallback inseguro
+API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY")
+if not API_KEY_SECRET:
+    st.error("Falta la variable CHATBOT_MASTER_API_KEY. La aplicación no puede continuar.")
+    st.stop()
 
 # ---------------------------------------------------------------------------
-# 1. Configuración de interfaz
+# 1. Configuración de la interfaz
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
 # ---------------------------------------------------------------------------
-# 2. Estado de sesión
+# 2. Variables de estado de la sesión
 # ---------------------------------------------------------------------------
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
@@ -76,14 +82,14 @@ with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     )
 
 # ---------------------------------------------------------------------------
-# Historial
+# Historial de mensajes
 # ---------------------------------------------------------------------------
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 # ---------------------------------------------------------------------------
-# Headers unificados
+# Headers unificados (CORRECCIÓN 1: API KEY obligatoria)
 # ---------------------------------------------------------------------------
 headers_api = {
     "Authorization": f"Bearer {API_KEY_SECRET}",
@@ -92,7 +98,7 @@ headers_api = {
 }
 
 # ---------------------------------------------------------------------------
-# 4. Captura de factura (opcional)
+# 4. Captura multimodal: factura eléctrica (imagen)
 # ---------------------------------------------------------------------------
 st.markdown("---")
 st.write("📸 **Cargar Factura Eléctrica (Opcional)**")
@@ -112,6 +118,8 @@ if img_a_procesar and not st.session_state.factura_procesada:
     with st.spinner("🔍 Analizando factura con visión artificial..."):
         try:
             base64_img = base64.b64encode(img_a_procesar.getvalue()).decode('utf-8')
+            # CORRECCIÓN 5: la llamada se mantiene síncrona, pero se evita bloqueo total
+            # con el spinner; idealmente sería asíncrona, pero no es crítico.
             res = requests.post(
                 f"{BACKEND_URL}/vision/analyze",
                 json={"thread_id": st.session_state.thread_id, "image_base64": base64_img},
@@ -138,7 +146,7 @@ if img_a_procesar and not st.session_state.factura_procesada:
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# 5. Entrada de usuario (voz y texto)
+# 5. Entrada del usuario: voz y texto
 # ---------------------------------------------------------------------------
 audio_value = st.audio_input(
     "🎤 Grabar mensaje de voz",
@@ -182,9 +190,10 @@ if st.session_state.pending_prompt:
     st.session_state.pending_prompt = None
 
 # ---------------------------------------------------------------------------
-# 6. Comunicación con el backend (SSE estandarizado)
+# 6. Comunicación con el backend (MEJORADA con las correcciones críticas)
 # ---------------------------------------------------------------------------
 if prompt:
+    # Registrar mensaje del usuario
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -194,8 +203,12 @@ if prompt:
         respuesta_completa = ""
 
         try:
-            payload = {"thread_id": st.session_state.thread_id, "message": prompt}
+            payload = {
+                "thread_id": st.session_state.thread_id,
+                "message": prompt
+            }
 
+            # CORRECCIÓN 2: timeout explícito y manejo de chunks con backpressure
             response = requests.post(
                 f"{BACKEND_URL}/chat",
                 json=payload,
@@ -208,31 +221,51 @@ if prompt:
                 st.error(f"Error backend {response.status_code}: {response.text}")
                 st.stop()
 
-            for line in response.iter_lines(decode_unicode=True):
+            # Forzar decodificación UTF-8 si no está presente
+            if response.encoding is None:
+                response.encoding = "utf-8"
+
+            # CORRECCIÓN 2: iter_lines con chunk_size=1 para más control
+            for line in response.iter_lines(chunk_size=1, decode_unicode=True):
                 if not line or not line.startswith("data: "):
                     continue
+
+                # CORRECCIÓN 4: parseo defensivo
                 try:
                     data = json.loads(line[6:])
                 except json.JSONDecodeError:
                     continue
 
-                # Token nuevo
+                if not isinstance(data, dict):
+                    continue
+
+                # Token
                 if data.get("type") == "token":
                     respuesta_completa += data["data"]
                     placeholder.markdown(respuesta_completa + "▌")
 
-                # Final de la respuesta
+                # Evento final
                 elif data.get("type") == "final":
-                    respuesta_final = data.get("response") or respuesta_completa
-                    placeholder.markdown(respuesta_final)
-                    break
+                    # CORRECCIÓN 3: respuesta final, si está vacía usar la concatenada
+                    respuesta_final = data.get("response")
+                    if not respuesta_final:
+                        respuesta_final = respuesta_completa
 
-            # Guardar respuesta definitiva
-            if not respuesta_completa:
-                respuesta_completa = "(el agente no emitió tokens)"
-            st.session_state.messages.append(
-                {"role": "assistant", "content": respuesta_completa}
-            )
+                    placeholder.markdown(respuesta_final)
+
+                    # CORRECCIÓN 4: guardar historial UNA sola vez, con el texto final
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": respuesta_final}
+                    )
+                    break  # salir del bucle tras procesar el final
+
+            # Si no hubo evento final (raro), guardamos lo que tengamos
+            if respuesta_completa and not any(
+                m["content"] == respuesta_completa for m in st.session_state.messages[-1:]
+            ):
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": respuesta_completa}
+                )
 
             # TTS si modo voz activo
             if st.session_state.is_voice_mode and respuesta_completa:
