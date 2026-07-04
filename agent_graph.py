@@ -37,7 +37,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 import config
 from audit import auditar_fase
 from ontology import obtener_fragmento_ontologia
-
+# comentario de prueba
 # --- CTFOM: módulo de telemetría cognitiva ---
 from telemetry import trace_id_var, span_id_var, parent_span_id_var, log_telemetry_event
 
