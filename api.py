@@ -34,7 +34,7 @@ from config import ISOConfigValidator  # noqa: F401 – asegura entorno válido
 # --- CTFOM: módulo de telemetría cognitiva ---
 from telemetry import (
     trace_id_var, span_id_var, parent_span_id_var,
-    generate_trace_span, log_telemetry_event, _batch_worker
+    generate_trace_span, log_telemetry_event, start_batch_worker
 )
 
 # ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ async def lifespan(app: FastAPI):
         logger.info("JARVI 2.0 API inicializada – Grafo listo con Checkpointer de PostgreSQL Activo")
 
         # CTFOM: iniciar worker de telemetría en segundo plano
-        asyncio.create_task(_batch_worker())
+        start_batch_worker()
         logger.info("CTFOM: worker de telemetría iniciado")
 
         yield
@@ -235,7 +235,10 @@ async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, No
     múltiples eventos 'data' cuyo último mensaje incluye 'contexto_tecnico'.
     """
     config = {"configurable": {"thread_id": thread_id}}
-    estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
+    estado_inicial = {
+        "messages": [HumanMessage(content=mensaje)],
+        "contexto_tecnico": {},
+    }
 
     async with locks[thread_id]:
         evento_llm = False
@@ -249,7 +252,7 @@ async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, No
                     evento_llm = True
             elif kind == "on_chain_end" and evento["name"] == "LangGraph":
                 estado_final = evento["data"]["output"]
-                ctx = estado_final.get("contexto_tecnico", {})
+                ctx = estado_final.get("contexto_tecnico") or {}
                 yield f"data: {{\"contexto_tecnico\": {json.dumps(ctx)}}}\n\n"
                 break
 

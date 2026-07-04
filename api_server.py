@@ -26,7 +26,7 @@ from schemas import ChatRequest
 from agent_graph import create_graph
 from telemetry import (
     trace_id_var, span_id_var, parent_span_id_var,
-    generate_trace_span, log_telemetry_event, _batch_worker
+    generate_trace_span, log_telemetry_event, start_batch_worker
 )
 
 # ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ async def lifespan(app: FastAPI):
     checkpointer = AsyncPostgresSaver.from_conn_string(db_url)
     graph = create_graph(checkpointer)
     logger.info("JARVI 2.0.03 API iniciada – Grafo listo")
-    asyncio.create_task(_batch_worker())
+    start_batch_worker()
     logger.info("CTFOM worker arrancado")
     yield
     logger.info("Apagando API JARVI")
@@ -135,7 +135,10 @@ async def generar_sse(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]
     """
     try:
         config = {"configurable": {"thread_id": thread_id}}
-        state = {"messages": [HumanMessage(content=mensaje)]}
+        state = {
+            "messages": [HumanMessage(content=mensaje)],
+            "contexto_tecnico": {},
+        }
 
         async with locks[thread_id]:
             has_tokens = False
@@ -152,7 +155,7 @@ async def generar_sse(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]
 
                 elif kind == "on_chain_end" and evento["name"] == "LangGraph":
                     estado_final = evento["data"]["output"]
-                    ctx = estado_final.get("contexto_tecnico", {})
+                    ctx = estado_final.get("contexto_tecnico") or {}
 
                     # Extracción segura del último mensaje
                     messages = estado_final.get("messages")

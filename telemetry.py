@@ -19,6 +19,46 @@ parent_span_id_var: ContextVar[str] = ContextVar("parent_span_id", default="")
 # Cola para inserciones batch
 _event_queue: asyncio.Queue = asyncio.Queue()
 _pool: Optional[AsyncConnectionPool] = None
+_telemetry_loop: Optional[asyncio.AbstractEventLoop] = None
+_batch_worker_task: Optional[asyncio.Task] = None
+
+
+def start_batch_worker() -> asyncio.Task:
+    """Inicia el worker de telemetria una sola vez en el event loop activo."""
+    global _telemetry_loop, _batch_worker_task
+    loop = asyncio.get_running_loop()
+    _telemetry_loop = loop
+    if _batch_worker_task is None or _batch_worker_task.done():
+        _batch_worker_task = loop.create_task(_batch_worker())
+    return _batch_worker_task
+
+
+def schedule_telemetry_event(*args: Any, **kwargs: Any):
+    """
+    Agenda telemetria desde codigo sincrono, incluso si LangGraph lo ejecuta
+    dentro de un ThreadPoolExecutor.
+    """
+    coro = log_telemetry_event(*args, **kwargs)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        if _telemetry_loop and _telemetry_loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(coro, _telemetry_loop)
+
+            def _log_failure(done_future):
+                try:
+                    done_future.result()
+                except Exception as exc:
+                    logger.error("Error al registrar telemetria desde thread: %s", exc)
+
+            future.add_done_callback(_log_failure)
+            return future
+
+        coro.close()
+        logger.warning("Evento de telemetria descartado: no hay event loop activo")
+        return None
+
+    return loop.create_task(coro)
 
 async def _get_pool():
     """Obtiene o crea un pool de conexiones limpio (Solución a ProgrammingError)."""
@@ -74,7 +114,7 @@ async def log_telemetry_event(trace_id: str, span_id: str, parent_span_id: str,
                               thread_id: str = None, run_id: str = None):
     """Agrega un evento a la cola de telemetría asegurando persistencia ACID."""
     if not hasattr(log_telemetry_event, "_started"):
-        asyncio.create_task(_batch_worker())
+        start_batch_worker()
         log_telemetry_event._started = True
 
     event = (

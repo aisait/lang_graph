@@ -12,7 +12,6 @@ Estándares: ISO/IEC/IEEE 12207, ISO/IEC 26514, ISO/IEC 25010, ISO/IEC 29119.
 import os
 import time
 import uuid
-import asyncio
 import threading
 import requests
 import re
@@ -39,7 +38,7 @@ from audit import auditar_fase
 from ontology import obtener_fragmento_ontologia
 # comentario de prueba
 # --- CTFOM: módulo de telemetría cognitiva ---
-from telemetry import trace_id_var, span_id_var, parent_span_id_var, log_telemetry_event
+from telemetry import trace_id_var, span_id_var, parent_span_id_var, schedule_telemetry_event
 
 # ---------------------------------------------------------------------------
 # Diccionario de códigos de área para Centroamérica
@@ -137,7 +136,7 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     de telemetría (inicio/fin/error) con trace_id, span_id, latencia, etc.
 
     Requiere que el contexto de traza haya sido inicializado (desde el middleware HTTP).
-    Utiliza asyncio.ensure_future para no bloquear el flujo del grafo.
+    Agenda la telemetria sin bloquear el flujo del grafo.
     """
     def decorator(func):
         @functools.wraps(func)
@@ -152,20 +151,20 @@ def observe_node(layer: str = "graph", node_name: str = ""):
                 result = func(*args, **kwargs)
                 elapsed = (time.perf_counter() - start) * 1000
                 # Registrar evento exitoso de forma asíncrona no bloqueante
-                asyncio.ensure_future(log_telemetry_event(
+                schedule_telemetry_event(
                     trace_id, span_id, parent,
                     layer=layer, node_name=node_name,
                     event_type="END", latency_ms=elapsed
-                ))
+                )
                 return result
             except Exception as e:
                 elapsed = (time.perf_counter() - start) * 1000
-                asyncio.ensure_future(log_telemetry_event(
+                schedule_telemetry_event(
                     trace_id, span_id, parent,
                     layer=layer, node_name=node_name,
                     event_type="ERROR", latency_ms=elapsed,
                     error_code=f"SWR-LGG-{type(e).__name__}"
-                ))
+                )
                 raise
             finally:
                 span_id_var.set(parent)
@@ -324,7 +323,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             - Mensaje "vivo en una finca sin luz" → topologia Off‑Grid, auditoría True.
             - Mensaje sin palabras clave → el contexto no se modifica.
         """
-        ctx = state.get("contexto_tecnico", {})
+        ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
             return {"contexto_tecnico": ctx}
@@ -349,7 +348,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             - Mensaje "vivo en Mixco" → ciudad "Guatemala Metropolitana".
             - Si además requiere auditoría eléctrica, empresa "EEGSA", tarifa 1.45.
         """
-        ctx = state.get("contexto_tecnico", {})
+        ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
             return {"contexto_tecnico": ctx}
@@ -375,7 +374,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
               inyecten en el config para trazabilidad en LangSmith.
             - Comprobar que el LLM recibe todo el historial de mensajes más el system prompt.
         """
-        ctx = state.get("contexto_tecnico", {})
+        ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
         # Extracción de contacto vía modelo estructurado si no se tiene aún
