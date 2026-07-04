@@ -2,7 +2,7 @@
 api_server.py (backend central JARVI 2.0.03 + CTFOM)
 =====================================================
 Servidor FastAPI con telemetría cognitiva, autenticación Bearer,
-y streaming SSE estandarizado compatible con Streamlit.
+streaming SSE estandarizado y manejo seguro de excepciones en el grafo.
 """
 
 import os
@@ -36,7 +36,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("jarvi.api")
 
 # ---------------------------------------------------------------------------
-# Seguridad
+# Seguridad – API Key
 # ---------------------------------------------------------------------------
 API_KEY = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
@@ -48,7 +48,7 @@ async def validar_api_key(auth: str | None = Security(api_key_header)):
     return auth
 
 # ---------------------------------------------------------------------------
-# Concurrencia
+# Control de concurrencia por sesión
 # ---------------------------------------------------------------------------
 locks = defaultdict(asyncio.Lock)
 
@@ -61,7 +61,7 @@ def taxonomy_error(exc: Exception) -> str:
     return "SWR-API-UNKNOWN-000"
 
 # ---------------------------------------------------------------------------
-# Ciclo de vida
+# Ciclo de vida de la aplicación
 # ---------------------------------------------------------------------------
 graph = None
 
@@ -124,23 +124,23 @@ def health():
     return {"status": "ok"}
 
 # ---------------------------------------------------------------------------
-# Generador SSE estandarizado
-# Formato de cada evento:
-#   data: {"type":"token","data":"..."}
-#   data: {"type":"final","response":"...","contexto_tecnico":{...}}
+# Generador SSE con formato fijo y manejo de errores
 # ---------------------------------------------------------------------------
-async def generar_sse(thread_id: str, mensaje: str):
-
+async def generar_sse(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]:
+    """
+    Emite eventos SSE estandarizados:
+      {"type":"token","data":"..."}
+      {"type":"final","response":"...","contexto_tecnico":{...}}
+      {"type":"error","message":"..."}
+    """
     try:
         config = {"configurable": {"thread_id": thread_id}}
         state = {"messages": [HumanMessage(content=mensaje)]}
 
         async with locks[thread_id]:
-
             has_tokens = False
 
             async for evento in graph.astream_events(state, config=config, version="v2"):
-
                 kind = evento["event"]
 
                 if kind == "on_chat_model_stream":
@@ -151,14 +151,12 @@ async def generar_sse(thread_id: str, mensaje: str):
                         yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
                 elif kind == "on_chain_end" and evento["name"] == "LangGraph":
-
                     estado_final = evento["data"]["output"]
-
                     ctx = estado_final.get("contexto_tecnico", {})
 
+                    # Extracción segura del último mensaje
                     messages = estado_final.get("messages")
                     respuesta_final = ""
-
                     if messages and isinstance(messages, list):
                         last = messages[-1]
                         if hasattr(last, "content"):
@@ -169,28 +167,26 @@ async def generar_sse(thread_id: str, mensaje: str):
                         "response": respuesta_final,
                         "contexto_tecnico": ctx
                     }
-
                     yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                     break
 
             if not has_tokens:
-                yield f'data: {json.dumps({"type":"token","data":"(acción ejecutada)"}, ensure_ascii=False)}\n\n'
+                fallback = json.dumps(
+                    {"type": "token", "data": "(acción ejecutada)"},
+                    ensure_ascii=False
+                )
+                yield f"data: {fallback}\n\n"
 
     except Exception as e:
-
-        error_payload = {
-            "type": "error",
-            "message": str(e)
-        }
-
-        yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
-                break
-
-        if not has_tokens:
-            yield f'data: {json.dumps({"type":"token","data":"(acción ejecutada)"}, ensure_ascii=False)}\n\n'
+        logger.error(f"Error en el grafo: {e}", exc_info=True)
+        error_payload = json.dumps(
+            {"type": "error", "message": str(e)},
+            ensure_ascii=False
+        )
+        yield f"data: {error_payload}\n\n"
 
 # ---------------------------------------------------------------------------
-# Endpoint /chat
+# Endpoint /chat (streaming)
 # ---------------------------------------------------------------------------
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -207,7 +203,7 @@ async def chat_endpoint(request: ChatRequest):
     )
 
 # ---------------------------------------------------------------------------
-# Endpoints restantes (stub)
+# Endpoints auxiliares
 # ---------------------------------------------------------------------------
 @app.post("/ack/{trace_id}")
 async def acknowledge_dispatch(trace_id: str):
