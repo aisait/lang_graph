@@ -32,7 +32,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # que el binario principal esté disponible en el entorno global del contenedor.
 # ----------------------------------------------------------------------
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt langgraph-cli --upgrade
+RUN pip install --no-cache-dir -r requirements.txt "langgraph-cli[inmem]" --upgrade
 
 COPY . .
 
