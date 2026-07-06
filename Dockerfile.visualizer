@@ -2,8 +2,9 @@
 # DOCUMENTACIÓN DE AUDITORÍA ISO/IEC 25010
 # Componente: Jarvi Studio Visualizer
 # Justificación Técnica: 
-# - Aislamiento: Se utiliza una imagen slim para reducir la superficie de ataque.
-# - Portabilidad: El uso de entorno determinista asegura consistencia en despliegue.
+# - Aislamiento: Imagen 'slim' para minimizar la superficie de ataque y optimizar recursos.
+# - Portabilidad: Entorno determinista para consistencia en CI/CD.
+# - Fiabilidad: Instalación explícita de CLI para asegurar disponibilidad de comandos.
 # ==============================================================================
 
 FROM python:3.12-slim
@@ -16,16 +17,14 @@ LABEL compliance="ISO/IEC-25010-Ready"
 WORKDIR /app
 
 # ----------------------------------------------------------------------
-# Configuración del entorno de ejecución
+# Configuración del entorno
 # ----------------------------------------------------------------------
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
-# Aseguramos que los binarios instalados por pip estén en el PATH
 ENV PATH="/usr/local/bin:${PATH}"
 
 # ----------------------------------------------------------------------
-# Instalación de dependencias del sistema y de aplicación
-# Auditoría: 'build-essential' garantiza la compilación de extensiones C.
+# Instalación de dependencias
 # ----------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -33,19 +32,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 
-# Instalación explícita para evitar resolución de dependencias ambigua
+# Instalación optimizada:
+# 1. Actualizamos pip.
+# 2. Instalamos dependencias generales.
+# 3. Forzamos la instalación de langgraph-cli[inmem].
+# 4. Verificamos la existencia del binario en los logs del build.
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir "langgraph-cli[inmem]" && \
+    pip install --no-cache-dir --force-reinstall "langgraph-cli[inmem]" && \
     which langgraph
 
 COPY . .
 
 # ----------------------------------------------------------------------
-# Exposición y Punto de Entrada
-# Auditoría: Uso de 'python -m' garantiza ejecución en el entorno global 
-# del contenedor, evitando errores de PATH (Fiabilidad y Adecuación Funcional).
+# Ejecución
 # ----------------------------------------------------------------------
 EXPOSE 8080
 
+# Usamos sh -c para asegurar la expansión de variables de entorno (${PORT})
 CMD ["sh", "-c", "langgraph dev --host 0.0.0.0 --port ${PORT:-8080}"]
