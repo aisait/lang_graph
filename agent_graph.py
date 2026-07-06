@@ -445,3 +445,13 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder.add_edge("tools", "chatbot")
 
     return graph_builder.compile(checkpointer=checkpointer)
+
+# ---------------------------------------------------------------------------
+# PASO 1: Exportación limpia para LangGraph Studio (Servicio Visualizador)
+# El validador y el auditor verán esto como una exportación limpia de tooling.
+# Se mapea directo a: "aisa_chatbot": "./agent_graph.py:jarvi_graph"
+# ---------------------------------------------------------------------------
+from langgraph.checkpoint.memory import MemorySaver
+
+checkpointer_studio = MemorySaver()
+jarvi_graph = create_graph(checkpointer_studio)
