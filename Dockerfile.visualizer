@@ -38,8 +38,9 @@ COPY requirements.txt .
 # 3. Forzamos la instalación de langgraph-cli[inmem].
 # 4. Verificamos la existencia del binario en los logs del build.
 RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir google-auth && \
     pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir --force-reinstall "langgraph-cli[inmem]" && \
+    pip install --no-cache-dir --force-reinstall "langgraph-cli[inmem]"
     which langgraph
 
 COPY . .
