@@ -1,7 +1,7 @@
 {
-  "_comentario_iso": "Archivo de configuracion del servidor...",
   "dependencies": ["."],
   "graphs": {
-    "aisa_chatbot": "./studio_entry.py:graph"
-  }
+    "jarvi_visual": "./grafico_gerencia.py:graph"
+  },
+  "env": ".env"
 }
