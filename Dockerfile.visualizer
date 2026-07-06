@@ -1,47 +1,50 @@
-# Dockerfile.visualizer
-# Propósito: Imagen de contenedor aislada para JARVI Studio Visualizer (LangGraph CLI).
-# Estándares aplicados: ISO/IEC 25010 (Aislamiento de recursos y Portabilidad).
+# ==============================================================================
+# DOCUMENTACIÓN DE AUDITORÍA ISO/IEC 25010
+# Componente: Jarvi Studio Visualizer
+# Justificación Técnica: 
+# - Aislamiento: Se utiliza una imagen slim para reducir la superficie de ataque.
+# - Portabilidad: El uso de entorno determinista asegura consistencia en despliegue.
+# ==============================================================================
 
-# ----------------------------------------------------------------------
-# Capa base: Python 3.12 slim, alineada con el runtime original del Visualizador
-# ----------------------------------------------------------------------
 FROM python:3.12-slim
 
 LABEL maintainer="AISA Solar - Equipo de Ingeniería"
-LABEL description="Servidor dedicado para LangGraph Studio Visualizer. Aislado de la API central."
+LABEL description="Servidor dedicado para LangGraph Studio Visualizer."
 LABEL service="visualizer"
+LABEL compliance="ISO/IEC-25010-Ready"
 
 WORKDIR /app
 
 # ----------------------------------------------------------------------
-# Instalación de dependencias del sistema operativo base
+# Configuración del entorno de ejecución
+# ----------------------------------------------------------------------
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+# Aseguramos que los binarios instalados por pip estén en el PATH
+ENV PATH="/usr/local/bin:${PATH}"
+
+# ----------------------------------------------------------------------
+# Instalación de dependencias del sistema y de aplicación
+# Auditoría: 'build-essential' garantiza la compilación de extensiones C.
 # ----------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# ----------------------------------------------------------------------
-# Prevención de caché y control de bytecode
-# ----------------------------------------------------------------------
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-
-# ----------------------------------------------------------------------
-# Gestión de dependencias
-# Se fuerza la instalación explícita de langgraph-cli para asegurar
-# que el binario principal esté disponible en el entorno global del contenedor.
-# ----------------------------------------------------------------------
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt "langgraph-cli[inmem]" --upgrade
+
+# Instalación explícita para evitar resolución de dependencias ambigua
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir "langgraph-cli[inmem]"
 
 COPY . .
 
 # ----------------------------------------------------------------------
-# Exposición de puerto dinámico
+# Exposición y Punto de Entrada
+# Auditoría: Uso de 'python -m' garantiza ejecución en el entorno global 
+# del contenedor, evitando errores de PATH (Fiabilidad y Adecuación Funcional).
 # ----------------------------------------------------------------------
 EXPOSE 8080
 
-# ----------------------------------------------------------------------
-# Entrypoint determinístico usando el módulo de Python
-# ----------------------------------------------------------------------
-CMD ["sh", "-c", "langgraph dev --host 0.0.0.0 --port ${PORT:-8080}"]
+CMD ["python", "-m", "langgraph", "dev", "--host", "0.0.0.0", "--port", "8080"]
