@@ -1,8 +1,10 @@
 # studio_entry.py
 # ARCHIVO EXCLUSIVO PARA DESARROLLO Y VISUALIZACIÓN EN STUDIO LANGRAPH- NO SE USA EN PRODUCCIÓN
-
-from langgraph.checkpoint.memory import MemorySaver
 from agent_graph import create_graph
+from langgraph.checkpoint.memory import MemorySaver
+
+# Compilamos el grafo en memoria, sin tocar PostgreSQL
+graph = create_graph(MemorySaver())
 
 # LangGraph Studio necesita una instancia compilada o una función sin argumentos obligatorios.
 # Usamos MemorySaver para renderizar la topología sin conectarnos a la base de datos real.
