@@ -28,7 +28,7 @@ ENV PATH="/usr/local/bin:${PATH}"
 # ----------------------------------------------------------------------
 
 # Add this line to force a rebuild
-ARG CACHE_DATE=2026-07-06
+ARG REFRESH_DATE=2026-07-06
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
