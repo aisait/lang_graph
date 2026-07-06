@@ -74,4 +74,4 @@ pydantic==2.7.4
 # httpx: cliente HTTP asíncrono para pruebas y conexiones internas.
 httpx>=0.27.2
 psutil
-langgraph-cli
+langgraph-cli[inmem]
