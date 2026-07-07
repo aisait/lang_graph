@@ -16,7 +16,7 @@ import json
 # ---------------------------------------------------------------------------
 BACKEND_URL = os.getenv(
     "BACKEND_URL",
-    "https://jarvi-backend-production.up.railway.app"  # URL correcta del backend
+    "https://jarvi-backend-production.up.railway.app"
 ).rstrip('/')
 
 API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY")
@@ -157,6 +157,7 @@ prompt = None
 if text_value:
     st.session_state.is_voice_mode = False
     prompt = text_value
+    st.sidebar.info(f"📝 Texto ingresado: {prompt[:50]}...")
 elif audio_value is not None:
     st.session_state.is_voice_mode = True
     with st.spinner("Transcribiendo mensaje de voz..."):
@@ -187,10 +188,10 @@ elif audio_value is not None:
 if st.session_state.pending_prompt:
     prompt = st.session_state.pending_prompt
     st.session_state.pending_prompt = None
+    st.sidebar.info(f"📝 Prompt pendiente: {prompt[:50]}...")
 
 # ---------------------------------------------------------------------------
-# 6. Comunicación con el backend (SSE, errores visibles, sin duplicados)
-#    Ahora con logs de auditoría en la UI para depuración
+# 6. Comunicación con el backend (SSE, errores visibles)
 # ---------------------------------------------------------------------------
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -201,17 +202,16 @@ if prompt:
         placeholder = st.empty()
         respuesta_completa = ""
 
-        # ---- Log de auditoría ----
+        # ---- Log detallado en sidebar ----
         st.sidebar.markdown("---")
         st.sidebar.markdown("### 📡 Última petición")
         st.sidebar.code(f"thread_id: {st.session_state.thread_id}")
-        st.sidebar.code(f"prompt: {prompt[:50]}...")
+        st.sidebar.code(f"prompt: {prompt[:100]}...")
 
         try:
             payload = {"thread_id": st.session_state.thread_id, "message": prompt}
+            st.sidebar.info(f"⏳ Conectando a {BACKEND_URL}/chat ...")
 
-            # ---- Intento de conexión ----
-            st.sidebar.info(f"Conectando a {BACKEND_URL}/chat ...")
             response = requests.post(
                 f"{BACKEND_URL}/chat",
                 json=payload,
@@ -221,11 +221,11 @@ if prompt:
             )
 
             if response.status_code != 200:
-                st.sidebar.error(f"Error HTTP {response.status_code}")
+                st.sidebar.error(f"❌ Error HTTP {response.status_code}")
                 st.error(f"Error backend {response.status_code}: {response.text[:200]}")
                 st.stop()
 
-            st.sidebar.success("Conexión establecida ✅")
+            st.sidebar.success("✅ Conexión establecida")
 
             if response.encoding is None:
                 response.encoding = "utf-8"
@@ -255,7 +255,7 @@ if prompt:
                     break
 
                 elif data.get("type") == "error":
-                    st.sidebar.error(f"Error en evento: {data.get('message')}")
+                    st.sidebar.error(f"❌ Error en evento: {data.get('message')}")
                     st.error(data.get("message", "Error desconocido en el backend"))
                     break
 
@@ -281,9 +281,9 @@ if prompt:
                         st.warning("Voz no disponible")
 
         except requests.exceptions.ConnectionError as e:
-            st.sidebar.error(f"Error de conexión: {e}")
+            st.sidebar.error(f"🔌 Error de conexión: {e}")
             st.error("❌ Error de conexión con la API. Verifica que el backend esté corriendo y que BACKEND_URL sea correcta.")
             st.sidebar.code(f"BACKEND_URL actual: {BACKEND_URL}")
         except Exception as e:
-            st.sidebar.error(f"Excepción: {type(e).__name__}: {e}")
+            st.sidebar.error(f"⚠️ Excepción: {type(e).__name__}: {e}")
             st.error(f"Error inesperado: {str(e)}")
