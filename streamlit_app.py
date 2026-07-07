@@ -1,8 +1,7 @@
 """
 streamlit_app.py
 Interfaz de usuario ligera de JARVI 2.0.03 (canal humano web).
-Cliente robusto con manejo correcto de streaming SSE,
-autenticación unificada, historial sin duplicados y parseo seguro.
+Versión con logs de auditoría en la UI para depuración.
 """
 
 import streamlit as st
@@ -10,20 +9,25 @@ import requests
 import os
 import uuid
 import base64
-import io
 import json
 
 # ---------------------------------------------------------------------------
-# 0. Configuración del entorno
+# 0. Configuración del entorno con logs de auditoría
 # ---------------------------------------------------------------------------
 BACKEND_URL = os.getenv(
     "BACKEND_URL",
-    "https://cliente-api-production-c7bb.up.railway.app"
+    "https://jarvi-backend-production.up.railway.app"  # URL correcta del backend
 ).rstrip('/')
 
 API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY")
+
+# ---- Auditoría en UI ----
+st.sidebar.markdown("### 🔍 Auditoría de conexión")
+st.sidebar.code(f"BACKEND_URL = {BACKEND_URL}")
+st.sidebar.code(f"API_KEY = {'✓ definida' if API_KEY_SECRET else '✗ NO DEFINIDA'}")
+
 if not API_KEY_SECRET:
-    st.error("Falta la variable CHATBOT_MASTER_API_KEY. La aplicación no puede continuar.")
+    st.error("❌ FALLO CRÍTICO: CHATBOT_MASTER_API_KEY no está definida. La aplicación no puede continuar.")
     st.stop()
 
 # ---------------------------------------------------------------------------
@@ -186,6 +190,7 @@ if st.session_state.pending_prompt:
 
 # ---------------------------------------------------------------------------
 # 6. Comunicación con el backend (SSE, errores visibles, sin duplicados)
+#    Ahora con logs de auditoría en la UI para depuración
 # ---------------------------------------------------------------------------
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -196,9 +201,17 @@ if prompt:
         placeholder = st.empty()
         respuesta_completa = ""
 
+        # ---- Log de auditoría ----
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 📡 Última petición")
+        st.sidebar.code(f"thread_id: {st.session_state.thread_id}")
+        st.sidebar.code(f"prompt: {prompt[:50]}...")
+
         try:
             payload = {"thread_id": st.session_state.thread_id, "message": prompt}
 
+            # ---- Intento de conexión ----
+            st.sidebar.info(f"Conectando a {BACKEND_URL}/chat ...")
             response = requests.post(
                 f"{BACKEND_URL}/chat",
                 json=payload,
@@ -208,8 +221,11 @@ if prompt:
             )
 
             if response.status_code != 200:
-                st.error(f"Error backend {response.status_code}: {response.text}")
+                st.sidebar.error(f"Error HTTP {response.status_code}")
+                st.error(f"Error backend {response.status_code}: {response.text[:200]}")
                 st.stop()
+
+            st.sidebar.success("Conexión establecida ✅")
 
             if response.encoding is None:
                 response.encoding = "utf-8"
@@ -239,6 +255,7 @@ if prompt:
                     break
 
                 elif data.get("type") == "error":
+                    st.sidebar.error(f"Error en evento: {data.get('message')}")
                     st.error(data.get("message", "Error desconocido en el backend"))
                     break
 
@@ -263,7 +280,10 @@ if prompt:
                     else:
                         st.warning("Voz no disponible")
 
-        except requests.exceptions.ConnectionError:
-            st.error("Error de conexión con la API. Verifica que el backend esté corriendo.")
+        except requests.exceptions.ConnectionError as e:
+            st.sidebar.error(f"Error de conexión: {e}")
+            st.error("❌ Error de conexión con la API. Verifica que el backend esté corriendo y que BACKEND_URL sea correcta.")
+            st.sidebar.code(f"BACKEND_URL actual: {BACKEND_URL}")
         except Exception as e:
+            st.sidebar.error(f"Excepción: {type(e).__name__}: {e}")
             st.error(f"Error inesperado: {str(e)}")
