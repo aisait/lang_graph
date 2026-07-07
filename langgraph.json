@@ -1,6 +1,6 @@
 {
   "graphs": {
-    "aisa_chatbot": "./studio_graph.py:jarvi_graph_studio"
+    "aisa_chatbot": "./studio_graph.py:jarvi_graph"
   },
   "env": ".env"
 }
