@@ -227,7 +227,7 @@ async def acknowledge_dispatch(trace_id: str):
 
 # ---------------------------------------------------------------------------
 # Función auxiliar para transformar la salida del grafo en respuesta SSE
-# CORREGIDA: Recupera el estado persistido antes de ejecutar el grafo.
+# VERSIÓN NATIVA: confía en el checkpointing de LangGraph.
 # ---------------------------------------------------------------------------
 async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]:
     """
@@ -236,22 +236,11 @@ async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, No
     múltiples eventos 'data' cuyo último mensaje incluye 'contexto_tecnico'.
     """
     config = {"configurable": {"thread_id": thread_id}}
+    # Enfoque nativo: solo el mensaje nuevo. LangGraph combina con el checkpoint.
+    estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
     
-    # --- CORRECCIÓN: Obtener el estado actual del checkpoint ---
-    current_state = await graph.aget_state(config)
-    if current_state and current_state.values:
-        # Si hay estado previo, usarlo y agregar el nuevo mensaje
-        estado_inicial = current_state.values
-        # Asegurar que messages sea una lista y agregar el nuevo mensaje
-        messages = estado_inicial.get("messages", [])
-        messages.append(HumanMessage(content=mensaje))
-        estado_inicial["messages"] = messages
-        logger.info(f"Memoria recuperada: {estado_inicial.get('contexto_tecnico', {})}")
-    else:
-        # Si no hay estado (primera interacción), crear uno nuevo
-        estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
-        logger.info("Nueva sesión iniciada")
-    
+    logger.info(f"Ejecutando chat para thread_id={thread_id}")
+
     async with locks[thread_id]:
         evento_llm = False
         async for evento in graph.astream_events(estado_inicial, config=config, version="v2"):
@@ -265,6 +254,8 @@ async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, No
             elif kind == "on_chain_end" and evento["name"] == "LangGraph":
                 estado_final = evento["data"]["output"]
                 ctx = estado_final.get("contexto_tecnico") or {}
+                # Log del contexto recuperado (para depuración)
+                logger.info(f"Contexto final para thread {thread_id}: {ctx}")
                 yield f"data: {{\"contexto_tecnico\": {json.dumps(ctx)}}}\n\n"
                 break
 
