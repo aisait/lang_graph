@@ -2,6 +2,7 @@
 studio_graph.py
 Exporta el grafo completo de JARVI 2.0 con MemorySaver para LangGraph Studio.
 Garantiza que el comportamiento en Studio sea idéntico al de producción.
+Estándares: ISO/IEC 25010, ISO/IEC 29119.
 """
 
 from agent_graph import create_graph
