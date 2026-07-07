@@ -1,7 +1,6 @@
 """
 streamlit_app.py
-Interfaz de usuario ligera de JARVI 2.0.03 (canal humano web).
-Versión con procesamiento nativo de SSE del backend.
+Interfaz de usuario ligera de JARVI 2.0.03 con persistencia de thread_id y procesamiento SSE.
 """
 
 import streamlit as st
@@ -10,35 +9,58 @@ import os
 import uuid
 import base64
 import json
+import time
 
 # ---------------------------------------------------------------------------
-# 0. Configuración del entorno con auditoría en UI
+# 0. Configuración del entorno
 # ---------------------------------------------------------------------------
-BACKEND_URL = os.getenv(
-    "BACKEND_URL",
-    "https://jarvi-backend-production.up.railway.app"
-).rstrip('/')
-
+BACKEND_URL = os.getenv("BACKEND_URL", "https://jarvi-backend-production.up.railway.app").rstrip('/')
 API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY")
 
-st.sidebar.markdown("### 🔍 Auditoría de conexión")
-st.sidebar.code(f"BACKEND_URL = {BACKEND_URL}")
-st.sidebar.code(f"API_KEY = {'✓ definida' if API_KEY_SECRET else '✗ NO DEFINIDA'}")
-
 if not API_KEY_SECRET:
-    st.error("❌ FALLO CRÍTICO: CHATBOT_MASTER_API_KEY no está definida.")
+    st.error("❌ CHATBOT_MASTER_API_KEY no definida.")
     st.stop()
 
 # ---------------------------------------------------------------------------
-# 1. Configuración de interfaz
+# 1. Configuración de la página y estado de sesión
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
-# ---------------------------------------------------------------------------
-# 2. Estado de sesión
-# ---------------------------------------------------------------------------
+# --- Persistencia del thread_id en localStorage mediante JavaScript ---
+st.markdown("""
+<script>
+    // Función para obtener thread_id del localStorage o generar uno nuevo
+    function getThreadId() {
+        let tid = localStorage.getItem('jarvi_thread_id');
+        if (!tid) {
+            tid = crypto.randomUUID();
+            localStorage.setItem('jarvi_thread_id', tid);
+        }
+        return tid;
+    }
+    // Enviar el thread_id a Streamlit mediante un componente personalizado
+    const threadId = getThreadId();
+    const parent = window.parent;
+    parent.postMessage({ type: 'streamlit:setComponentValue', value: threadId }, '*');
+</script>
+""", unsafe_allow_html=True)
+
+# Inicializar thread_id desde la sesión (si no existe, se genera)
 if "thread_id" not in st.session_state:
-    st.session_state.thread_id = str(uuid.uuid4())
+    # Intentar recuperar del localStorage (se hará mediante un input hidden)
+    st.session_state.thread_id = str(uuid.uuid4())  # fallback
+
+# Si el usuario recarga, se mantiene el mismo thread_id (si ya estaba en sesión)
+# Para asegurar, usamos un componente personalizado (no implementado aquí por simplicidad).
+# En su lugar, usamos st.query_params para persistencia temporal.
+query_params = st.query_params
+if "thread_id" in query_params:
+    st.session_state.thread_id = query_params["thread_id"]
+else:
+    # Si no hay thread_id en query_params, usamos el de la sesión y lo guardamos en URL
+    st.query_params["thread_id"] = st.session_state.thread_id
+
+# Resto de variables de sesión
 if "is_voice_mode" not in st.session_state:
     st.session_state.is_voice_mode = False
 if "audio_key_counter" not in st.session_state:
@@ -65,32 +87,24 @@ if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": greeting}]
 
 # ---------------------------------------------------------------------------
-# 3. Título
+# 2. Interfaz de usuario
 # ---------------------------------------------------------------------------
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
 with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
-    st.markdown(
-        """¡Hola! Soy Jarvi, tu ingeniero de soluciones de **AISA Solar**.
+    st.markdown("""¡Hola! Soy Jarvi, tu ingeniero de soluciones de **AISA Solar**.
         Para obtener la mejor asesoría, realizaremos estos pasos:
-
         * **1. Descubrimiento:** Identificamos tus necesidades.
         * **2. Análisis Técnico:** Calculamos requerimientos.
         * **3. Especificación:** Seleccionamos equipos.
         * **4. Presupuesto:** Generamos la lista base.
-        * **5. Contacto directo:** Gestión vía WhatsApp."""
-    )
+        * **5. Contacto directo:** Gestión vía WhatsApp.""")
 
-# ---------------------------------------------------------------------------
-# Historial de mensajes
-# ---------------------------------------------------------------------------
+# Mostrar historial
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ---------------------------------------------------------------------------
-# Headers para la API
-# ---------------------------------------------------------------------------
 headers_api = {
     "Authorization": f"Bearer {API_KEY_SECRET}",
     "Content-Type": "application/json",
@@ -98,77 +112,51 @@ headers_api = {
 }
 
 # ---------------------------------------------------------------------------
-# 4. Captura de factura (opcional)
+# 3. Factura (opcional)
 # ---------------------------------------------------------------------------
 st.markdown("---")
 st.write("📸 **Cargar Factura Eléctrica (Opcional)**")
 col_img, col_cam = st.columns(2)
-
 with col_img:
-    factura_img = st.file_uploader(
-        "Sube una foto de tu factura", type=["jpg", "jpeg", "png"],
-        key="file_factura"
-    )
+    factura_img = st.file_uploader("Sube una foto", type=["jpg","jpeg","png"], key="file_factura")
 with col_cam:
-    factura_cam = st.camera_input("O toma una foto a la factura", key="cam_factura")
-
+    factura_cam = st.camera_input("Toma una foto", key="cam_factura")
 img_a_procesar = factura_img if factura_img else factura_cam
-
 if img_a_procesar and not st.session_state.factura_procesada:
-    with st.spinner("🔍 Analizando factura con visión artificial..."):
+    with st.spinner("🔍 Analizando..."):
         try:
             base64_img = base64.b64encode(img_a_procesar.getvalue()).decode('utf-8')
-            res = requests.post(
-                f"{BACKEND_URL}/vision/analyze",
+            res = requests.post(f"{BACKEND_URL}/vision/analyze",
                 json={"thread_id": st.session_state.thread_id, "image_base64": base64_img},
-                headers=headers_api,
-                timeout=60
-            )
+                headers=headers_api, timeout=60)
             if res.status_code == 200:
                 datos = res.json().get("extracted_data", {})
                 st.session_state.factura_procesada = True
-                prompt_factura = (
-                    f"He subido mi factura eléctrica. Datos detectados: "
-                    f"Empresa: {datos.get('empresa_electrica', 'N/A')}, "
-                    f"Consumo: {datos.get('consumo_kwh', 'N/A')} kWh, "
-                    f"Monto: Q{datos.get('monto_factura', 'N/A')}."
-                )
+                prompt_factura = f"He subido mi factura. Datos: Empresa: {datos.get('empresa_electrica','N/A')}, Consumo: {datos.get('consumo_kwh','N/A')} kWh, Monto: Q{datos.get('monto_factura','N/A')}."
                 st.session_state.pending_prompt = prompt_factura
-                st.success("✅ Factura analizada correctamente.")
+                st.success("✅ Factura analizada.")
                 st.rerun()
             else:
-                st.error(f"Fallo al procesar la factura (Código {res.status_code}).")
+                st.error(f"Error {res.status_code}")
         except Exception as e:
-            st.error(f"Error técnico analizando la factura: {e}")
-
+            st.error(f"Error: {e}")
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# 5. Entrada de usuario (voz y texto)
+# 4. Entrada de usuario
 # ---------------------------------------------------------------------------
-audio_value = st.audio_input(
-    "🎤 Grabar mensaje de voz",
-    key=f"audio_input_{st.session_state.audio_key_counter}"
-)
+audio_value = st.audio_input("🎤 Grabar mensaje", key=f"audio_{st.session_state.audio_key_counter}")
 text_value = st.chat_input("¿Qué solución necesitas hoy?")
 
 prompt = None
 if text_value:
-    st.session_state.is_voice_mode = False
     prompt = text_value
-    st.sidebar.info(f"📝 Texto ingresado: {prompt[:50]}...")
 elif audio_value is not None:
-    st.session_state.is_voice_mode = True
-    with st.spinner("Transcribiendo mensaje de voz..."):
+    with st.spinner("Transcribiendo..."):
         try:
-            audio_bytes = audio_value.read()
-            files = {"audio": ("audio.wav", audio_bytes, "audio/wav")}
-            stt_response = requests.post(
-                f"{BACKEND_URL}/stt",
-                files=files,
-                headers={"Authorization": f"Bearer {API_KEY_SECRET}"},
-                timeout=30
-            )
+            files = {"audio": ("audio.wav", audio_value.read(), "audio/wav")}
+            stt_response = requests.post(f"{BACKEND_URL}/stt", files=files,
+                headers={"Authorization": f"Bearer {API_KEY_SECRET}"}, timeout=30)
             if stt_response.status_code == 200:
                 transcript = stt_response.json().get("transcript", "")
                 if transcript:
@@ -176,21 +164,18 @@ elif audio_value is not None:
                     st.session_state.audio_key_counter += 1
                     st.rerun()
                 else:
-                    st.error("No se pudo transcribir el audio.")
-            elif stt_response.status_code == 501:
-                st.error("Funcionalidad de voz no disponible.")
+                    st.error("No se pudo transcribir.")
             else:
-                st.error(f"Error del servidor al transcribir: {stt_response.status_code}")
+                st.error(f"Error STT: {stt_response.status_code}")
         except Exception as e:
-            st.error(f"Error al enviar audio a la API: {e}")
+            st.error(f"Error: {e}")
 
 if st.session_state.pending_prompt:
     prompt = st.session_state.pending_prompt
     st.session_state.pending_prompt = None
-    st.sidebar.info(f"📝 Prompt pendiente: {prompt[:50]}...")
 
 # ---------------------------------------------------------------------------
-# 6. Comunicación con el backend (SSE nativa)
+# 5. Comunicación con el backend (SSE)
 # ---------------------------------------------------------------------------
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -201,14 +186,14 @@ if prompt:
         placeholder = st.empty()
         respuesta_completa = ""
 
-        st.sidebar.markdown("---")
-        st.sidebar.markdown("### 📡 Última petición")
-        st.sidebar.code(f"thread_id: {st.session_state.thread_id}")
-        st.sidebar.code(f"prompt: {prompt[:100]}...")
+        # --- Logs de auditoría ---
+        st.sidebar.markdown("### 📡 Auditoría")
+        st.sidebar.code(f"Thread ID: {st.session_state.thread_id}")
+        st.sidebar.code(f"Prompt: {prompt[:80]}...")
 
         try:
             payload = {"thread_id": st.session_state.thread_id, "message": prompt}
-            st.sidebar.info(f"⏳ Conectando a {BACKEND_URL}/chat ...")
+            st.sidebar.info(f"Conectando a {BACKEND_URL}/chat ...")
 
             response = requests.post(
                 f"{BACKEND_URL}/chat",
@@ -219,68 +204,64 @@ if prompt:
             )
 
             if response.status_code != 200:
-                st.sidebar.error(f"❌ Error HTTP {response.status_code}")
-                st.error(f"Error backend {response.status_code}: {response.text[:200]}")
+                st.sidebar.error(f"HTTP {response.status_code}")
+                st.error(f"Error {response.status_code}: {response.text[:200]}")
                 st.stop()
 
-            st.sidebar.success("✅ Conexión establecida")
+            st.sidebar.success("✅ Conectado")
 
-            if response.encoding is None:
-                response.encoding = "utf-8"
+            # Buffer para construir líneas completas
+            buffer = ""
+            for chunk in response.iter_content(chunk_size=128, decode_unicode=True):
+                if chunk:
+                    buffer += chunk
+                    # Procesar líneas completas separadas por \n
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        line = line.strip()
+                        if not line or not line.startswith("data: "):
+                            continue
+                        json_str = line[6:]  # quitar 'data: '
+                        try:
+                            data = json.loads(json_str)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(data, dict):
+                            continue
 
-            token_recibido = False
+                        # Procesar token
+                        if "token" in data:
+                            token = data["token"]
+                            respuesta_completa += token
+                            placeholder.markdown(respuesta_completa + "▌")
+                        elif "contexto_tecnico" in data:
+                            # Fin del stream
+                            placeholder.markdown(respuesta_completa)
+                            # Guardar en historial
+                            st.session_state.messages.append(
+                                {"role": "assistant", "content": respuesta_completa}
+                            )
+                            # Opcional: mostrar contexto en sidebar
+                            st.sidebar.json(data["contexto_tecnico"])
+                            break
 
-            for line in response.iter_lines(chunk_size=1, decode_unicode=True):
-                if not line or not line.startswith("data: "):
-                    continue
-
-                try:
-                    data = json.loads(line[6:])
-                except json.JSONDecodeError:
-                    continue
-
-                if not isinstance(data, dict):
-                    continue
-
-                # ---- Procesamiento nativo del SSE del backend ----
-                if "token" in data:
-                    token_recibido = True
-                    respuesta_completa += data["token"]
-                    placeholder.markdown(respuesta_completa + "▌")
-
-                elif "contexto_tecnico" in data:
-                    # Final del stream – no hay más tokens
-                    break
-
-            # Si no se recibió ningún token, el backend ejecutó una acción sin texto
-            if not token_recibido and respuesta_completa == "":
-                respuesta_completa = "(acción ejecutada)"
-                placeholder.markdown(respuesta_completa)
-
-            # Guardar la respuesta final en el historial
-            if respuesta_completa:
+            # Si no se recibió contexto, pero se acumuló algo
+            if respuesta_completa and not any(m["role"]=="assistant" and m["content"]==respuesta_completa for m in st.session_state.messages):
                 st.session_state.messages.append(
                     {"role": "assistant", "content": respuesta_completa}
                 )
 
-            # TTS si modo voz
+            # TTS si voz
             if st.session_state.is_voice_mode and respuesta_completa:
-                with st.spinner("Generando síntesis de voz..."):
-                    tts_response = requests.post(
-                        f"{BACKEND_URL}/tts",
-                        json={"text": respuesta_completa, "voice": "alloy"},
-                        headers=headers_api,
-                        timeout=30
-                    )
-                    if tts_response.status_code == 200:
-                        st.audio(tts_response.content, format="audio/mp3", autoplay=True)
-                    else:
-                        st.warning("Voz no disponible")
+                tts_response = requests.post(f"{BACKEND_URL}/tts",
+                    json={"text": respuesta_completa, "voice": "alloy"},
+                    headers=headers_api, timeout=30)
+                if tts_response.status_code == 200:
+                    st.audio(tts_response.content, format="audio/mp3", autoplay=True)
 
-        except requests.exceptions.ConnectionError as e:
-            st.sidebar.error(f"🔌 Error de conexión: {e}")
-            st.error("❌ Error de conexión con la API. Verifica la URL y que el backend esté corriendo.")
-            st.sidebar.code(f"BACKEND_URL actual: {BACKEND_URL}")
+        except requests.exceptions.ConnectionError:
+            st.sidebar.error("🔌 Error de conexión")
+            st.error("No se pudo conectar con el backend.")
         except Exception as e:
-            st.sidebar.error(f"⚠️ Excepción: {type(e).__name__}: {e}")
-            st.error(f"Error inesperado: {str(e)}")
+            st.sidebar.error(f"⚠️ {type(e).__name__}: {e}")
+            st.error(f"Error inesperado: {e}")
