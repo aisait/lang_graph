@@ -63,6 +63,7 @@ COPY . .
 # ----------------------------------------------------------------------
 # Ejecución
 # CORRECCIÓN: Se añade --allowed-origins '*' para permitir conexiones desde Studio.
+# Se usa sh -c para expandir la variable PORT y se elimina el CMD duplicado.
 # ----------------------------------------------------------------------
 EXPOSE 8080
 
