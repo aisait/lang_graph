@@ -2,12 +2,12 @@
 # DOCUMENTACIÓN DE AUDITORÍA ISO/IEC 25010
 # Componente: Jarvi Studio Visualizer
 # Justificación Técnica: 
-# - Aislamiento: Imagen 'slim' para minimizar la superficie de ataque y optimizar recursos.
-# - Portabilidad: Entorno determinista para consistencia en CI/CD.
-# - Fiabilidad: Instalación explícita de CLI para asegurar disponibilidad de comandos.
+# - Aislamiento: Imagen 'slim' para minimizar superficie de ataque.
+# - Portabilidad: Entorno determinista para CI/CD.
+# - Fiabilidad: Instalación explícita de dependencias.
 # ==============================================================================
 
-# CORRECCIÓN: Paridad de runtime con producción (3.11 en lugar de 3.12) para evitar colisiones
+# CORRECCIÓN: usar Python 3.11 para paridad con backend y frontend
 FROM python:3.11-slim
 
 LABEL maintainer="AISA Solar - Equipo de Ingeniería"
@@ -24,20 +24,19 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PATH="/usr/local/bin:${PATH}"
 
-# INYECCIÓN EPISTEMOLÓGICA (Dummy Environment)
-# Aísla el visualizador forzando el bypass de validadores ISO y bases de datos reales.
+# Variables dummy para evitar validaciones
 ENV IS_BACKEND="False"
 ENV DATABASE_URL="sqlite:///:memory:"
 ENV OPENAI_API_KEY="sk-dummy-key-for-visualizer-only"
 
-# CORRECCIÓN: Permitir todos los orígenes para LangGraph Studio (CORS)
+# Permitir CORS para LangGraph Studio
 ENV LANGGRAPH_ALLOWED_ORIGINS="*"
 
 # ----------------------------------------------------------------------
 # Instalación de dependencias
 # ----------------------------------------------------------------------
 
-# Add this line to force a rebuild
+# Argumento para forzar reconstrucción de capas de instalación
 ARG REFRESH_DATE=2026-07-07
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -47,14 +46,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 
 # Instalación optimizada:
-# 1. Actualizamos pip.
-# 2. Instalamos dependencias generales.
-# 3. Forzamos la instalación de langgraph-cli[inmem].
-# 4. Verificamos la existencia del binario en los logs del build.
+# 1. Actualizar pip.
+# 2. Instalar dependencias generales.
+# 3. Instalar google-auth y google-auth-oauthlib explícitamente.
+# 4. Instalar langgraph-cli[inmem].
+# 5. Verificar existencia del binario.
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir google-auth && \
+    pip install --no-cache-dir google-auth google-auth-oauthlib && \
     pip install --no-cache-dir --force-reinstall "langgraph-cli[inmem]" && \
     which langgraph
 
@@ -62,8 +62,6 @@ COPY . .
 
 # ----------------------------------------------------------------------
 # Ejecución
-# CORRECCIÓN: Se añade --allowed-origins '*' para permitir conexiones desde Studio.
-# Se usa sh -c para expandir la variable PORT y se elimina el CMD duplicado.
 # ----------------------------------------------------------------------
 EXPOSE 8080
 
