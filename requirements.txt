@@ -1,72 +1,49 @@
 # requirements.txt
 # Archivo de dependencias del proyecto JARVI 2.0.
-# Documenta las bibliotecas necesarias para el funcionamiento de la API
-# central, la interfaz Streamlit y los componentes de IA y persistencia.
-#
-# Estándares aplicados:
-# - ISO/IEC/IEEE 12207:2008 (Ciclo de vida): este archivo es un insumo
-#   para la gestión de la configuración y construcción del sistema.
-# - ISO/IEC 26514:2021 (Documentación): cada sección está comentada
-#   describiendo la categoría y el propósito de las dependencias.
-# - ISO/IEC 25010:2011 (Calidad): las versiones están fijadas (==) o
-#   acotadas (>=) para garantizar la estabilidad del producto.
-#
+# Actualizado para resolver conflictos entre langgraph y langgraph-api.
+# Estándares: ISO/IEC 25010, ISO/IEC 29119.
 
 # ---------------------------------------------------------------------
 # Frameworks Web
 # ---------------------------------------------------------------------
-# FastAPI: framework asíncrono para la API central.
 fastapi==0.111.0
-# Uvicorn: servidor ASGI de alto rendimiento para FastAPI.
 uvicorn[standard]==0.30.1
-# Streamlit: framework para la interfaz de usuario web (canal humano).
 streamlit>=1.38.0
-# python-multipart: requerido para manejar formularios y subida de archivos en FastAPI.
 python-multipart==0.0.9
 
 # ---------------------------------------------------------------------
 # Core Agéntico (LangChain / LangGraph / OpenAI)
 # ---------------------------------------------------------------------
-# LangChain: framework base para la construcción del agente.
-langchain==0.2.6
-# LangGraph: orquestación de grafos de estados para el agente.
-langgraph==0.2.0
-# LangGraph-API: indispensable para exponer el servidor hacia LangSmith Studio.
+langchain>=0.2.6,<0.3.0
+langgraph>=0.2.56,<0.3.0   # versión que satisface langgraph-api 0.0.12
 langgraph-api==0.0.12
-# LangGraph-CLI: herramientas de línea de comandos para ejecución.
-langgraph-cli[inmem]
-# langchain-openai: integración de LangChain con modelos OpenAI.
-langchain-openai==0.1.9
-# OpenAI: cliente oficial de la API de OpenAI (Whisper, GPT, TTS).
+langgraph-cli[inmem]>=0.4.0
+langchain-openai>=0.1.9
 openai>=1.50.0
-# langchain-community: utilidades adicionales de la comunidad LangChain.
-langchain-community==0.2.6
+langchain-community>=0.2.6
 
 # ---------------------------------------------------------------------
 # Persistencia y Base de Datos
 # ---------------------------------------------------------------------
-# Coexistencia simétrica de drivers para ORM (v2) y LangGraph Async (v3)
-# psycopg2: driver síncrono para PostgreSQL (usado por SQLAlchemy y otros).
-psycopg2-binary==2.9.9
-# psycopg v3 con extras binarios: driver asíncrono para LangGraph y FastAPI.
+psycopg2-binary>=2.9.9
 psycopg[binary]>=3.1.0
-# SQLAlchemy: ORM para interactuar con la base de datos de auditoría.
-sqlalchemy==2.0.31
+sqlalchemy>=2.0.31
 
 # ---------------------------------------------------------------------
 # Utilidades
 # ---------------------------------------------------------------------
-# Requests: cliente HTTP para llamadas a APIs externas (WhatsApp, n8n).
-requests==2.32.3
-# python-dotenv: carga variables de entorno desde archivo .env en desarrollo.
-python-dotenv==1.0.1
-# Pydantic: validación de datos y esquemas para FastAPI.
-# Se mantiene estricto para asegurar la integridad de esquemas del agente.
-pydantic==2.7.4
-# httpx: cliente HTTP asíncrono para pruebas y conexiones internas.
+requests>=2.32.3
+python-dotenv>=1.0.1
+pydantic>=2.7.4
 httpx>=0.27.2
-# psutil: monitoreo de recursos del sistema.
-psutil==5.9.8
-# google-auth y dependencias: necesarias para autenticación en servicios cloud.
-google-auth==2.30.0
-google-auth-oauthlib==1.2.0
+psutil>=5.9.8
+google-auth>=2.30.0
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.198.0
+
+# ---------------------------------------------------------------------
+# Dependencias adicionales para el visualizador
+# ---------------------------------------------------------------------
+langgraph-checkpoint>=1.0.0
+langgraph-checkpoint-postgres>=3.0.0
+langchain-core>=0.2.0
