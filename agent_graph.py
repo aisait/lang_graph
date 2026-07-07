@@ -324,8 +324,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             - Mensaje sin palabras clave → el contexto no se modifica.
         """
         ctx = dict(state.get("contexto_tecnico") or {})
+        logger = logging.getLogger("jarvi.agent")
+        logger.info(f"[clasificador] contexto recibido: {ctx}")
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
+            logger.info(f"[clasificador] contexto después (sin cambios): {ctx}")
             return {"contexto_tecnico": ctx}
         if not ctx.get("topologia"):
             if any(k in ultimo for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
@@ -334,6 +337,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             elif any(k in ultimo for k in ["aislado", "batería", "bateria", "finca", "autónomo", "off-grid"]):
                 ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
                 ctx["requiere_auditoria_electrica"] = True
+        logger.info(f"[clasificador] contexto después: {ctx}")
         return {"contexto_tecnico": ctx}
 
     # -------------------- Nodo: Validador Geográfico --------------------
@@ -349,8 +353,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             - Si además requiere auditoría eléctrica, empresa "EEGSA", tarifa 1.45.
         """
         ctx = dict(state.get("contexto_tecnico") or {})
+        logger = logging.getLogger("jarvi.agent")
+        logger.info(f"[validador] contexto recibido: {ctx}")
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
+            logger.info(f"[validador] contexto después (sin cambios): {ctx}")
             return {"contexto_tecnico": ctx}
         if not ctx.get("ciudad"):
             if any(k in ultimo for k in ["guatemala", "mixco", "capital", "ciudad", "villa nueva"]):
@@ -358,6 +365,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 if ctx.get("requiere_auditoria_electrica"):
                     ctx["empresa_electrica"] = "EEGSA"
                     ctx["tarifa_base_gtq"] = 1.45
+        logger.info(f"[validador] contexto después: {ctx}")
         return {"contexto_tecnico": ctx}
 
     # -------------------- Nodo: Chatbot (Inferencia principal) --------------------
@@ -376,7 +384,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         # --- LOG DE DEPURACIÓN: contexto recibido ---
         import logging
         logger = logging.getLogger("jarvi.agent")
-        logger.info(f"chatbot_node: contexto_tecnico recibido = {ctx}")
+        logger.info(f"[chatbot] contexto_tecnico recibido = {ctx}")
 
         # --- PRIMERA INTERACCIÓN: forzar bienvenida sin LLM ---
         if len(state.get("messages", [])) == 1:
@@ -394,7 +402,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 "Cuéntame qué te interesa y, para darte una atención personalizada, "
                 "¿podrías indicarme tu nombre y en qué zona te encuentras?"
             )
-            # Devolvemos el mensaje de bienvenida y el contexto actual (aún vacío)
+            # Devolvemos el mensaje de bienvenida y el contexto actual
+            logger.info(f"[chatbot] respuesta de bienvenida, contexto: {ctx}")
             return {
                 "messages": [AIMessage(content=bienvenida)],
                 "contexto_tecnico": ctx
@@ -454,6 +463,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         # Invocación del LLM con todo el historial
         respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
+        logger.info(f"[chatbot] contexto después de LLM: {ctx}")
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
     # -------------------- Ensamblaje del grafo --------------------
