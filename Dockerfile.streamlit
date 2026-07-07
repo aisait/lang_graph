@@ -1,59 +1,16 @@
 # Dockerfile.streamlit
-# Propósito: Imagen de contenedor para la interfaz de usuario web de JARVI 2.0 (Streamlit).
-# Estándares aplicados: ISO/IEC/IEEE 12207 (Ciclo de vida del software),
-# ISO/IEC 26514 (Documentación), ISO/IEC 25010 (Calidad del producto),
-# ISO/IEC 29119 (Pruebas de software - caja negra).
-
-# ----------------------------------------------------------------------
-# Capa base: Python 3.11 slim, optimizada para producción
-# Prueba de caja negra: Verificar que el contenedor arranque y Streamlit
-# responda en el puerto asignado por Railway.
-# ----------------------------------------------------------------------
 FROM python:3.11-slim
 
-# ----------------------------------------------------------------------
-# Metadatos de la imagen (ISO/IEC 26514 - Documentación de software)
-# ----------------------------------------------------------------------
-LABEL maintainer="AISA Solar - Equipo de Ingeniería"
-LABEL description="Interfaz de usuario ligera de JARVI 2.0. Actúa como cliente de la API central, \
-sin lógica de negocio propia. Maneja entrada de texto, voz, imágenes y renderizado de respuestas."
-LABEL version="2.0.02"
-
-# ----------------------------------------------------------------------
-# Directorio de trabajo dentro del contenedor
-# ----------------------------------------------------------------------
 WORKDIR /app
 
-# ----------------------------------------------------------------------
-# Copia e instalación de dependencias Python
-# Se copia primero requirements.txt para aprovechar la caché de Docker
-# y acelerar futuras reconstrucciones (optimización de capas).
-# Prueba de caja negra: Verificar que streamlit y las dependencias mínimas
-# se importan sin error al ejecutar 'python -c "import streamlit, requests"'.
-# ----------------------------------------------------------------------
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ----------------------------------------------------------------------
-# Copia del resto del código fuente de la interfaz (streamlit_app.py, etc.)
-# Se asume que los archivos innecesarios se excluyen mediante .dockerignore.
-# ----------------------------------------------------------------------
-COPY . .
+# Copia el nuevo archivo
+COPY frontend.py .
 
-# ----------------------------------------------------------------------
-# Exposición del puerto de escucha (configurable mediante variable PORT)
-# Streamlit se comunicará internamente con la API, expone su propia UI.
-# Prueba de caja negra: En un navegador, abrir la URL pública del servicio
-# y verificar que se carga la página de inicio con el mensaje de bienvenida.
-# ----------------------------------------------------------------------
+# Expone el puerto (Railway usará la variable PORT)
 EXPOSE 8080
 
-# ----------------------------------------------------------------------
-# Comando de arranque
-#   - streamlit run streamlit_app.py : archivo de entrada de la UI
-#   - --server.port=${PORT:-8080} : escucha en el puerto dinámico de Railway
-#   - --server.address=0.0.0.0 : permite conexiones desde fuera del contenedor
-# Prueba de caja negra: Enviar un mensaje de texto desde la interfaz y verificar
-# que la respuesta se renderiza correctamente, validando la integración con el backend.
-# ----------------------------------------------------------------------
-CMD ["sh", "-c", "streamlit run streamlit_app.py --server.port=${PORT:-8080} --server.address=0.0.0.0"]
+# Ejecuta el nuevo archivo
+CMD ["sh", "-c", "streamlit run frontend.py --server.port=${PORT:-8080} --server.address=0.0.0.0"]
