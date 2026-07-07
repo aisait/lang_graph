@@ -367,11 +367,40 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         """
         Nodo central que invoca al LLM con el contexto enriquecido.
         También intenta extraer nombre y teléfono si aún no se han capturado.
-        En la primera interacción, fuerza el mensaje de bienvenida estándar.
+        En la primera interacción, devuelve directamente el mensaje de bienvenida
+        sin pasar por el LLM para garantizar uniformidad.
         """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
+        # --- LOG DE DEPURACIÓN: contexto recibido ---
+        import logging
+        logger = logging.getLogger("jarvi.agent")
+        logger.info(f"chatbot_node: contexto_tecnico recibido = {ctx}")
+
+        # --- PRIMERA INTERACCIÓN: forzar bienvenida sin LLM ---
+        if len(state.get("messages", [])) == 1:
+            bienvenida = (
+                "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. "
+                "Estamos para ayudarte a encontrar la mejor solución energética. "
+                "¿Sobre qué producto necesitas información hoy?\n\n"
+                "1. Calentadores Solares\n"
+                "2. Paneles Solares (Fuera de la red)\n"
+                "3. Paneles Solares (Ahorro en factura eléctrica)\n"
+                "4. Bombas de Agua Solares\n"
+                "5. Bombas de Calor para piscinas\n"
+                "6. Máquinas de hacer hielo\n"
+                "7. Hieleras\n\n"
+                "Cuéntame qué te interesa y, para darte una atención personalizada, "
+                "¿podrías indicarme tu nombre y en qué zona te encuentras?"
+            )
+            # Devolvemos el mensaje de bienvenida y el contexto actual (aún vacío)
+            return {
+                "messages": [AIMessage(content=bienvenida)],
+                "contexto_tecnico": ctx
+            }
+
+        # --- INTERACCIONES POSTERIORES ---
         # Extracción de contacto vía modelo estructurado si no se tiene aún
         if ultimo_mensaje and (
             not ctx.get("nombre")
@@ -422,25 +451,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 f"ONTOLOGÍA: {ontologia_dinamica}"
             )
         )
-
-        # --- CORRECCIÓN: Si es la primera interacción, forzar mensaje de bienvenida estándar ---
-        if len(state.get("messages", [])) == 1:
-            bienvenida = (
-                "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. "
-                "Estamos para ayudarte a encontrar la mejor solución energética. "
-                "¿Sobre qué producto necesitas información hoy?\n\n"
-                "1. Calentadores Solares\n"
-                "2. Paneles Solares (Fuera de la red)\n"
-                "3. Paneles Solares (Ahorro en factura eléctrica)\n"
-                "4. Bombas de Agua Solares\n"
-                "5. Bombas de Calor para piscinas\n"
-                "6. Máquinas de hacer hielo\n"
-                "7. Hieleras\n\n"
-                "Cuéntame qué te interesa y, para darte una atención personalizada, "
-                "¿podrías indicarme tu nombre y en qué zona te encuentras?"
-            )
-            # Agregamos la instrucción al system prompt para que el LLM genere ese mensaje exacto.
-            prompt_sistema.content += f"\n\nEsta es la primera interacción. Debes responder exactamente con el siguiente mensaje:\n{bienvenida}"
 
         # Invocación del LLM con todo el historial
         respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
