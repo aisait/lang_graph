@@ -227,6 +227,7 @@ async def acknowledge_dispatch(trace_id: str):
 
 # ---------------------------------------------------------------------------
 # Función auxiliar para transformar la salida del grafo en respuesta SSE
+# CORREGIDA: No sobrescribe contexto_tecnico, solo envía el mensaje nuevo.
 # ---------------------------------------------------------------------------
 async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]:
     """
@@ -235,10 +236,9 @@ async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, No
     múltiples eventos 'data' cuyo último mensaje incluye 'contexto_tecnico'.
     """
     config = {"configurable": {"thread_id": thread_id}}
-    estado_inicial = {
-        "messages": [HumanMessage(content=mensaje)],
-        "contexto_tecnico": {},
-    }
+    # CORRECCIÓN: NO incluir 'contexto_tecnico' en el estado inicial.
+    # El checkpointer se encarga de recuperar el estado previo completo.
+    estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
 
     async with locks[thread_id]:
         evento_llm = False
