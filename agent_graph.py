@@ -7,6 +7,7 @@ Incorpora el decorador CTFOM de telemetría cognitiva para la observabilidad
 de cada nodo del grafo (trazas, latencia, errores).
 
 Estándares: ISO/IEC/IEEE 12207, ISO/IEC 26514, ISO/IEC 25010, ISO/IEC 29119.
+Pruebas de caja negra: BC-T01 (On-Grid), BC-T02 (Off-Grid), BC-T03 (Falla Odoo).
 """
 
 import os
@@ -36,7 +37,6 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 import config
 from audit import auditar_fase
 from ontology import obtener_fragmento_ontologia
-# comentario de prueba
 # --- CTFOM: módulo de telemetría cognitiva ---
 from telemetry import trace_id_var, span_id_var, parent_span_id_var, schedule_telemetry_event
 
@@ -134,9 +134,6 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     """
     Decorador síncrono que envuelve funciones del grafo para registrar eventos
     de telemetría (inicio/fin/error) con trace_id, span_id, latencia, etc.
-
-    Requiere que el contexto de traza haya sido inicializado (desde el middleware HTTP).
-    Agenda la telemetria sin bloquear el flujo del grafo.
     """
     def decorator(func):
         @functools.wraps(func)
@@ -150,7 +147,6 @@ def observe_node(layer: str = "graph", node_name: str = ""):
             try:
                 result = func(*args, **kwargs)
                 elapsed = (time.perf_counter() - start) * 1000
-                # Registrar evento exitoso de forma asíncrona no bloqueante
                 schedule_telemetry_event(
                     trace_id, span_id, parent,
                     layer=layer, node_name=node_name,
@@ -174,6 +170,7 @@ def observe_node(layer: str = "graph", node_name: str = ""):
 
 # ---------------------------------------------------------------------------
 # Herramienta de persistencia de oportunidades comerciales
+# BC-T01, BC-T02, BC-T03
 # ---------------------------------------------------------------------------
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
@@ -190,12 +187,6 @@ def procesar_oportunidad_backend(
     """
     Envía de forma asíncrona los leads estructurados capturados por la IA
     hacia los canales del Controller (correo Gmail y webhook de WhatsApp).
-
-    Prueba de caja negra (ISO/IEC 29119):
-        - Verificar que se envíe un correo al Controller y un mensaje de WhatsApp
-          usando los parámetros de entrada.
-        - Verificar que, aunque falle uno de los canales, el otro se ejecute.
-        - La herramienta debe retornar un mensaje de éxito incluyendo el contacto normalizado.
     """
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
 
@@ -252,7 +243,6 @@ def procesar_oportunidad_backend(
         except Exception as e:
             print(f"Fallo en envío de webhook: {e}")
 
-    # Ejecución en hilo separado para no bloquear la respuesta al usuario
     threading.Thread(target=tarea_background).start()
     return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
 
@@ -260,28 +250,23 @@ def procesar_oportunidad_backend(
 def extraer_intencion_humana(messages: list) -> str:
     """
     Extrae el último mensaje de texto enviado por el usuario.
-
-    Parámetros:
-        messages (list): lista de mensajes del estado del grafo.
-
-    Retorna:
-        str: contenido textual del último mensaje humano, en minúsculas.
-
-    Prueba de caja negra:
-        - Si el último mensaje es HumanMessage con contenido de texto, retorna ese texto.
-        - Si es de tipo lista (multimodal), concatena los fragmentos de texto.
-        - Si no hay mensaje humano, retorna cadena vacía.
+    Soporta tanto strings como listas de contenido (multimodal/WhatsApp).
+    Prueba de caja negra: BC-T01, BC-T02.
     """
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
-            if isinstance(msg.content, str):
-                return msg.content.lower()
-            if isinstance(msg.content, list):
-                return " ".join([
-                    str(b.get("text", "")).lower()
-                    for b in msg.content
-                    if isinstance(b, dict) and "text" in b
-                ])
+            content = msg.content
+            if isinstance(content, str):
+                return content.lower()
+            elif isinstance(content, list):
+                # Extraer texto de contenido multimodal (WhatsApp, imágenes, etc.)
+                textos = []
+                for item in content:
+                    if isinstance(item, dict) and "text" in item:
+                        textos.append(item["text"])
+                    elif isinstance(item, str):
+                        textos.append(item)
+                return " ".join(textos).lower()
     return ""
 
 
@@ -291,18 +276,6 @@ def extraer_intencion_humana(messages: list) -> str:
 def create_graph(checkpointer: BaseCheckpointSaver):
     """
     Crea y compila el grafo de estados del agente JARVI.
-
-    Parámetros:
-        checkpointer (BaseCheckpointSaver): instancia de persistencia (AsyncPostgresSaver).
-
-    Retorna:
-        CompiledStateGraph: grafo compilado listo para invocar.
-
-    Prueba de caja negra (ISO/IEC 29119):
-        - Inyectar una secuencia de mensajes y verificar que el estado
-          'contexto_tecnico' se actualice correctamente tras cada nodo.
-        - Comprobar que la herramienta de persistencia se invoca solo cuando el LLM
-          decide llamarla (tools_condition).
     """
     graph_builder = StateGraph(AgentState)
 
@@ -317,11 +290,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         """
         Infiere la topología del sistema (On‑Grid / Off‑Grid) a partir
         de las palabras clave detectadas en el último mensaje del usuario.
-
-        Prueba de caja negra:
-            - Mensaje "quiero ahorrar en mi factura" → topologia On‑Grid, auditoría True.
-            - Mensaje "vivo en una finca sin luz" → topologia Off‑Grid, auditoría True.
-            - Mensaje sin palabras clave → el contexto no se modifica.
+        BC-T01 (On-Grid) y BC-T02 (Off-Grid).
         """
         ctx = dict(state.get("contexto_tecnico") or {})
         logger = logging.getLogger("jarvi.agent")
@@ -347,10 +316,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         """
         Determina la ciudad y, si corresponde, la empresa eléctrica y tarifa,
         basándose en la ubicación detectada en el último mensaje.
-
-        Prueba de caja negra:
-            - Mensaje "vivo en Mixco" → ciudad "Guatemala Metropolitana".
-            - Si además requiere auditoría eléctrica, empresa "EEGSA", tarifa 1.45.
         """
         ctx = dict(state.get("contexto_tecnico") or {})
         logger = logging.getLogger("jarvi.agent")
@@ -381,8 +346,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
-        # --- LOG DE DEPURACIÓN: contexto recibido ---
-        import logging
         logger = logging.getLogger("jarvi.agent")
         logger.info(f"[chatbot] contexto_tecnico recibido = {ctx}")
 
@@ -402,7 +365,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 "Cuéntame qué te interesa y, para darte una atención personalizada, "
                 "¿podrías indicarme tu nombre y en qué zona te encuentras?"
             )
-            # Devolvemos el mensaje de bienvenida y el contexto actual
             logger.info(f"[chatbot] respuesta de bienvenida, contexto: {ctx}")
             return {
                 "messages": [AIMessage(content=bienvenida)],
@@ -425,7 +387,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 if extraccion.telefono and (not ctx.get("whatsapp") or ctx["whatsapp"] == "Pendiente"):
                     ctx["whatsapp"] = extraccion.telefono
             except Exception:
-                pass  # Si falla la extracción estructurada, continuamos sin detener el flujo
+                pass
 
         # Reglas de recolección de datos según topología
         if ctx.get("requiere_auditoria_electrica"):
@@ -433,22 +395,18 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         else:
             regla_datos = ("1. DEBES recopilar sutilmente: Nombre, Ubicación y Necesidad exacta.")
 
-        # Carga dinámica de la ontología según la topología detectada
         ontologia_dinamica = obtener_fragmento_ontologia(ctx.get('topologia'))
 
-        # Normalización de contacto para el run_name y metadatos de LangSmith
         nombre_ctx = ctx.get("nombre", "Usuario")
         whatsapp_ctx = ctx.get("whatsapp", "Pendiente")
         nombre_run, whatsapp_run = normalizar_contacto(nombre_ctx, whatsapp_ctx, ctx.get("ciudad", ""))
 
-        # Inyección de trazabilidad en el config (LangSmith)
         config["run_name"] = f"Lead: {nombre_run}"
         if "metadata" not in config:
             config["metadata"] = {}
         config["metadata"]["whatsapp"] = whatsapp_run
         config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
 
-        # Construcción del system prompt con todos los datos acumulados
         prompt_sistema = SystemMessage(
             content=(
                 f"Eres Jarvi, Ingeniero de Preventa de AISA Solar. "
@@ -461,7 +419,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             )
         )
 
-        # Invocación del LLM con todo el historial
         respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
         logger.info(f"[chatbot] contexto después de LLM: {ctx}")
         return {"messages": [respuesta], "contexto_tecnico": ctx}
@@ -481,9 +438,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     return graph_builder.compile(checkpointer=checkpointer)
 
 # ---------------------------------------------------------------------------
-# PASO 1: Exportación limpia para LangGraph Studio (Servicio Visualizador)
-# El validador y el auditor verán esto como una exportación limpia de tooling.
-# Se mapea directo a: "aisa_chatbot": "./agent_graph.py:jarvi_graph"
+# Exportación para LangGraph Studio
 # ---------------------------------------------------------------------------
 from langgraph.checkpoint.memory import MemorySaver
 
