@@ -1,6 +1,5 @@
 # requirements.txt
-# Archivo de dependencias del proyecto JARVI 2.0.
-# Actualizado para resolver conflictos entre langgraph y langgraph-api.
+# Dependencias del proyecto JARVI 2.0 con versiones compatibles.
 # Estándares: ISO/IEC 25010, ISO/IEC 29119.
 
 # ---------------------------------------------------------------------
@@ -15,7 +14,7 @@ python-multipart==0.0.9
 # Core Agéntico (LangChain / LangGraph / OpenAI)
 # ---------------------------------------------------------------------
 langchain>=0.2.6,<0.3.0
-langgraph>=0.2.56,<0.3.0   # versión que satisface langgraph-api 0.0.12
+langgraph>=0.2.56,<0.3.0
 langgraph-api==0.0.12
 langgraph-cli[inmem]>=0.4.0
 langchain-openai>=0.1.9
