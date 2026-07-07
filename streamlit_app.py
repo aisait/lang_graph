@@ -1,6 +1,9 @@
 """
 streamlit_app.py
-Interfaz de usuario ligera de JARVI 2.0.03 con persistencia de thread_id y procesamiento SSE.
+Interfaz de usuario ligera de JARVI 2.0.03 (canal humano web).
+Procesamiento SSE nativo, persistencia de thread_id y auditoría en UI.
+Estándares: ISO/IEC 25010, ISO/IEC 29119, ISO/IEC 26514.
+Pruebas de caja negra: BC-T01 a BC-T10 (ver anexo).
 """
 
 import streamlit as st
@@ -12,52 +15,31 @@ import json
 import time
 
 # ---------------------------------------------------------------------------
-# 0. Configuración del entorno
+# 0. Configuración del entorno con auditoría en UI
 # ---------------------------------------------------------------------------
 BACKEND_URL = os.getenv("BACKEND_URL", "https://jarvi-backend-production.up.railway.app").rstrip('/')
 API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY")
 
+st.sidebar.markdown("### 🔍 Auditoría de conexión")
+st.sidebar.code(f"BACKEND_URL = {BACKEND_URL}")
+st.sidebar.code(f"API_KEY = {'✓ definida' if API_KEY_SECRET else '✗ NO DEFINIDA'}")
+
 if not API_KEY_SECRET:
-    st.error("❌ CHATBOT_MASTER_API_KEY no definida.")
+    st.error("❌ FALLO CRÍTICO: CHATBOT_MASTER_API_KEY no está definida.")
     st.stop()
 
 # ---------------------------------------------------------------------------
-# 1. Configuración de la página y estado de sesión
+# 1. Configuración de página y estado de sesión
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="Jarvi ⚡ AISA Solar", page_icon="⚡", layout="wide")
 
-# --- Persistencia del thread_id en localStorage mediante JavaScript ---
-st.markdown("""
-<script>
-    // Función para obtener thread_id del localStorage o generar uno nuevo
-    function getThreadId() {
-        let tid = localStorage.getItem('jarvi_thread_id');
-        if (!tid) {
-            tid = crypto.randomUUID();
-            localStorage.setItem('jarvi_thread_id', tid);
-        }
-        return tid;
-    }
-    // Enviar el thread_id a Streamlit mediante un componente personalizado
-    const threadId = getThreadId();
-    const parent = window.parent;
-    parent.postMessage({ type: 'streamlit:setComponentValue', value: threadId }, '*');
-</script>
-""", unsafe_allow_html=True)
-
-# Inicializar thread_id desde la sesión (si no existe, se genera)
-if "thread_id" not in st.session_state:
-    # Intentar recuperar del localStorage (se hará mediante un input hidden)
-    st.session_state.thread_id = str(uuid.uuid4())  # fallback
-
-# Si el usuario recarga, se mantiene el mismo thread_id (si ya estaba en sesión)
-# Para asegurar, usamos un componente personalizado (no implementado aquí por simplicidad).
-# En su lugar, usamos st.query_params para persistencia temporal.
+# Persistencia del thread_id en query_params (compartible entre recargas)
 query_params = st.query_params
 if "thread_id" in query_params:
     st.session_state.thread_id = query_params["thread_id"]
 else:
-    # Si no hay thread_id en query_params, usamos el de la sesión y lo guardamos en URL
+    if "thread_id" not in st.session_state:
+        st.session_state.thread_id = str(uuid.uuid4())
     st.query_params["thread_id"] = st.session_state.thread_id
 
 # Resto de variables de sesión
@@ -112,7 +94,7 @@ headers_api = {
 }
 
 # ---------------------------------------------------------------------------
-# 3. Factura (opcional)
+# 3. Factura (opcional) – BC-T06
 # ---------------------------------------------------------------------------
 st.markdown("---")
 st.write("📸 **Cargar Factura Eléctrica (Opcional)**")
@@ -175,7 +157,7 @@ if st.session_state.pending_prompt:
     st.session_state.pending_prompt = None
 
 # ---------------------------------------------------------------------------
-# 5. Comunicación con el backend (SSE)
+# 5. Comunicación con el backend (SSE nativo) – BC-T01 a BC-T10
 # ---------------------------------------------------------------------------
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -186,14 +168,15 @@ if prompt:
         placeholder = st.empty()
         respuesta_completa = ""
 
-        # --- Logs de auditoría ---
-        st.sidebar.markdown("### 📡 Auditoría")
+        # Auditoría en sidebar
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 📡 Última petición")
         st.sidebar.code(f"Thread ID: {st.session_state.thread_id}")
         st.sidebar.code(f"Prompt: {prompt[:80]}...")
 
         try:
             payload = {"thread_id": st.session_state.thread_id, "message": prompt}
-            st.sidebar.info(f"Conectando a {BACKEND_URL}/chat ...")
+            st.sidebar.info(f"⏳ Conectando a {BACKEND_URL}/chat ...")
 
             response = requests.post(
                 f"{BACKEND_URL}/chat",
@@ -204,7 +187,7 @@ if prompt:
             )
 
             if response.status_code != 200:
-                st.sidebar.error(f"HTTP {response.status_code}")
+                st.sidebar.error(f"❌ HTTP {response.status_code}")
                 st.error(f"Error {response.status_code}: {response.text[:200]}")
                 st.stop()
 
@@ -229,7 +212,7 @@ if prompt:
                         if not isinstance(data, dict):
                             continue
 
-                        # Procesar token
+                        # Procesar token (nativo del backend)
                         if "token" in data:
                             token = data["token"]
                             respuesta_completa += token
@@ -241,7 +224,7 @@ if prompt:
                             st.session_state.messages.append(
                                 {"role": "assistant", "content": respuesta_completa}
                             )
-                            # Opcional: mostrar contexto en sidebar
+                            # Mostrar contexto en sidebar
                             st.sidebar.json(data["contexto_tecnico"])
                             break
 
