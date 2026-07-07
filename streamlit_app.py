@@ -1,9 +1,13 @@
 """
 streamlit_app.py
-Interfaz tipo WhatsApp para JARVI 2.0.
-Barra de entrada con herramientas integradas (cámara, archivo, voz).
-Procesamiento SSE, persistencia de thread_id, auditoría compacta.
-Cumple ISO/IEC 25010, 29119 y BC‑T01 a BC‑T10.
+Interfaz tipo WhatsApp para JARVI 2.0 con todas las funcionalidades aprobadas:
+- Chat conversacional con burbujas
+- Entrada de voz (STT) y salida de voz (TTS)
+- Carga de factura (archivo o cámara) para OCR
+- Procesamiento SSE nativo
+- Persistencia de thread_id en URL
+- Auditoría compacta (expander)
+Cumple ISO/IEC 25010, 29119 y las pruebas BC‑T01 a BC‑T10.
 """
 
 import streamlit as st
@@ -12,7 +16,6 @@ import os
 import uuid
 import base64
 import json
-import time
 
 # ---------------------------------------------------------------------------
 # Configuración y seguridad
@@ -25,16 +28,14 @@ if not API_KEY:
     st.stop()
 
 # ---------------------------------------------------------------------------
-# CSS personalizado para estilo WhatsApp
+# Estilo CSS para apariencia de chat
 # ---------------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* Fondo suave y tipografía */
     .stApp {
         background-color: #ece5dd;
         font-family: 'Segoe UI', sans-serif;
     }
-    /* Burbujas de mensaje */
     .stChatMessage {
         padding: 0.5rem 1rem;
         border-radius: 20px;
@@ -52,7 +53,6 @@ st.markdown("""
         margin-right: auto;
         box-shadow: 0 1px 2px rgba(0,0,0,0.1);
     }
-    /* Barra de entrada fija */
     .stChatInput {
         position: fixed;
         bottom: 0;
@@ -63,29 +63,17 @@ st.markdown("""
         border-top: 1px solid #ddd;
         z-index: 100;
     }
-    /* Ocultar elementos innecesarios */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    /* Ajustes de márgenes */
     .main > div {
         padding-bottom: 80px;
     }
-    /* Íconos de herramientas en la barra */
-    .tool-icon {
-        font-size: 1.8rem;
-        cursor: pointer;
-        margin: 0 8px;
-        color: #555;
-    }
-    .tool-icon:hover {
-        color: #25D366;
+    #MainMenu, footer, header {
+        visibility: hidden;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Estado de sesión y persistencia del thread_id
+# Estado de sesión y thread_id persistente en URL
 # ---------------------------------------------------------------------------
 if "thread_id" not in st.session_state:
     tid = st.query_params.get("thread_id")
@@ -98,7 +86,17 @@ if "thread_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = [{
         "role": "assistant",
-        "content": "👋 ¡Hola! Soy Jarvi, tu asesor técnico de AISA Solar.\n\n¿Sobre qué producto necesitas información?\n\n1️⃣ Calentadores Solares\n2️⃣ Paneles Solares (On‑Grid / Off‑Grid)\n3️⃣ Bombas de Agua Solares\n4️⃣ Bombas de Calor\n5️⃣ Máquinas de Hielo\n6️⃣ Hieleras\n\nPuedes escribir, grabar voz 🎤 o subir tu factura eléctrica 📸."
+        "content": (
+            "👋 ¡Hola! Soy Jarvi, tu asesor técnico de AISA Solar.\n\n"
+            "¿Sobre qué producto necesitas información?\n"
+            "1️⃣ Calentadores Solares\n"
+            "2️⃣ Paneles Solares (On‑Grid / Off‑Grid)\n"
+            "3️⃣ Bombas de Agua Solares\n"
+            "4️⃣ Bombas de Calor\n"
+            "5️⃣ Máquinas de Hielo\n"
+            "6️⃣ Hieleras\n\n"
+            "Puedes escribir, grabar voz 🎤 o subir tu factura eléctrica 📸."
+        )
     }]
 
 if "factura_procesada" not in st.session_state:
@@ -109,28 +107,27 @@ if "audio_key" not in st.session_state:
     st.session_state.audio_key = 0
 
 # ---------------------------------------------------------------------------
-# Cabecera compacta
+# Cabecera
 # ---------------------------------------------------------------------------
 st.markdown("<h2 style='text-align: center; color: #075e54;'>⚡ Jarvi · Asesor Solar</h2>", unsafe_allow_html=True)
 st.caption(f"Sesión: `{st.session_state.thread_id[:8]}`")
 
 # ---------------------------------------------------------------------------
-# Mostrar historial de mensajes (burbujas)
+# Mostrar historial (burbujas)
 # ---------------------------------------------------------------------------
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 # ---------------------------------------------------------------------------
-# Entrada de usuario con herramientas integradas
+# Barra de entrada: chat_input + botones de adjunto
 # ---------------------------------------------------------------------------
-# Usamos un contenedor fijo para la barra de entrada
 with st.container():
-    col_input, col_tools = st.columns([5, 1], gap="small")
+    col_input, col_attach = st.columns([5, 1], gap="small")
     with col_input:
         prompt = st.chat_input("Escribe tu mensaje...", key="chat_input")
-    with col_tools:
-        # Popover de herramientas (clip)
+    with col_attach:
+        # Popover con opciones de adjunto
         with st.popover("📎", use_container_width=False):
             st.caption("Adjuntar")
             factura_file = st.file_uploader(
@@ -140,11 +137,11 @@ with st.container():
                 label_visibility="collapsed"
             )
             factura_cam = st.camera_input("📸 Tomar foto", key="factura_cam", label_visibility="collapsed")
-        # Botón de grabar voz (abre el input de audio)
+        # Botón de grabación de voz
         audio_bytes = st.audio_input("🎤", key=f"audio_{st.session_state.audio_key}", label_visibility="collapsed")
 
 # ---------------------------------------------------------------------------
-# Procesar factura (OCR)
+# Procesar factura (OCR) – BC‑T06
 # ---------------------------------------------------------------------------
 factura_img = factura_file if factura_file else factura_cam
 if factura_img and not st.session_state.factura_procesada:
@@ -160,14 +157,13 @@ if factura_img and not st.session_state.factura_procesada:
             if res.status_code == 200:
                 datos = res.json().get("extracted_data", {})
                 st.session_state.factura_procesada = True
-                prompt_factura = (
+                st.session_state.pending_prompt = (
                     f"📄 Factura detectada:\n"
                     f"- Empresa: {datos.get('empresa_electrica', 'N/A')}\n"
                     f"- Consumo: {datos.get('consumo_kwh', 'N/A')} kWh\n"
                     f"- Monto: Q{datos.get('monto_factura', 'N/A')}"
                 )
-                st.session_state.pending_prompt = prompt_factura
-                st.success("✅ Factura analizada.")
+                st.success("✅ Factura analizada. Envía el mensaje.")
                 st.rerun()
             else:
                 st.error(f"Error OCR: {res.status_code}")
@@ -175,7 +171,7 @@ if factura_img and not st.session_state.factura_procesada:
             st.error(f"Error: {e}")
 
 # ---------------------------------------------------------------------------
-# Procesar entrada de voz (STT)
+# Procesar entrada de voz (STT) – BC‑T07
 # ---------------------------------------------------------------------------
 if audio_bytes is not None:
     with st.spinner("🔄 Transcribiendo..."):
@@ -218,7 +214,6 @@ if prompt:
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Preparar respuesta del asistente
     with st.chat_message("assistant"):
         placeholder = st.empty()
         respuesta_completa = ""
@@ -244,7 +239,7 @@ if prompt:
                 st.error(f"Error {response.status_code}: {response.text[:200]}")
                 st.stop()
 
-            # Procesar SSE
+            # Procesar SSE (eventos: {"token": ...} y {"contexto_tecnico": ...})
             buffer = ""
             for chunk in response.iter_content(chunk_size=128, decode_unicode=True):
                 if chunk:
@@ -252,20 +247,21 @@ if prompt:
                     while "\n" in buffer:
                         line, buffer = buffer.split("\n", 1)
                         line = line.strip()
-                        if line.startswith("data: "):
-                            json_str = line[6:]
-                            try:
-                                data = json.loads(json_str)
-                            except:
-                                continue
-                            if "token" in data:
-                                token = data["token"]
-                                respuesta_completa += token
-                                placeholder.markdown(respuesta_completa + "▌")
-                            elif "contexto_tecnico" in data:
-                                contexto = data["contexto_tecnico"]
-                                placeholder.markdown(respuesta_completa)
-                                break
+                        if not line.startswith("data: "):
+                            continue
+                        json_str = line[6:]
+                        try:
+                            data = json.loads(json_str)
+                        except:
+                            continue
+                        if "token" in data:
+                            token = data["token"]
+                            respuesta_completa += token
+                            placeholder.markdown(respuesta_completa + "▌")
+                        elif "contexto_tecnico" in data:
+                            contexto = data["contexto_tecnico"]
+                            placeholder.markdown(respuesta_completa)
+                            break
 
             if respuesta_completa:
                 st.session_state.messages.append(
@@ -273,7 +269,7 @@ if prompt:
                 )
                 # Auditoría compacta
                 if contexto:
-                    with st.expander("🔍 Datos técnicos", expanded=False):
+                    with st.expander("🔍 Datos técnicos extraídos", expanded=False):
                         st.json(contexto)
 
                 # TTS si el usuario usó voz
@@ -295,7 +291,7 @@ if prompt:
         except Exception as e:
             st.error(f"Error: {e}")
 
-    # Reiniciar estado de factura
+    # Reiniciar estado de factura para permitir nuevas subidas
     st.session_state.factura_procesada = False
     st.rerun()
 
