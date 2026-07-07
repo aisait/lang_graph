@@ -227,7 +227,7 @@ async def acknowledge_dispatch(trace_id: str):
 
 # ---------------------------------------------------------------------------
 # Función auxiliar para transformar la salida del grafo en respuesta SSE
-# CORREGIDA: No sobrescribe contexto_tecnico, solo envía el mensaje nuevo.
+# CORREGIDA: Recupera el estado persistido antes de ejecutar el grafo.
 # ---------------------------------------------------------------------------
 async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]:
     """
@@ -236,10 +236,22 @@ async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, No
     múltiples eventos 'data' cuyo último mensaje incluye 'contexto_tecnico'.
     """
     config = {"configurable": {"thread_id": thread_id}}
-    # CORRECCIÓN: NO incluir 'contexto_tecnico' en el estado inicial.
-    # El checkpointer se encarga de recuperar el estado previo completo.
-    estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
-
+    
+    # --- CORRECCIÓN: Obtener el estado actual del checkpoint ---
+    current_state = await graph.aget_state(config)
+    if current_state and current_state.values:
+        # Si hay estado previo, usarlo y agregar el nuevo mensaje
+        estado_inicial = current_state.values
+        # Asegurar que messages sea una lista y agregar el nuevo mensaje
+        messages = estado_inicial.get("messages", [])
+        messages.append(HumanMessage(content=mensaje))
+        estado_inicial["messages"] = messages
+        logger.info(f"Memoria recuperada: {estado_inicial.get('contexto_tecnico', {})}")
+    else:
+        # Si no hay estado (primera interacción), crear uno nuevo
+        estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
+        logger.info("Nueva sesión iniciada")
+    
     async with locks[thread_id]:
         evento_llm = False
         async for evento in graph.astream_events(estado_inicial, config=config, version="v2"):
