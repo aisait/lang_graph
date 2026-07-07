@@ -1,7 +1,7 @@
 """
 streamlit_app.py
 Interfaz de usuario ligera de JARVI 2.0.03 (canal humano web).
-Versión con logs de auditoría en la UI para depuración.
+Versión con procesamiento nativo de SSE del backend.
 """
 
 import streamlit as st
@@ -12,7 +12,7 @@ import base64
 import json
 
 # ---------------------------------------------------------------------------
-# 0. Configuración del entorno con logs de auditoría
+# 0. Configuración del entorno con auditoría en UI
 # ---------------------------------------------------------------------------
 BACKEND_URL = os.getenv(
     "BACKEND_URL",
@@ -21,13 +21,12 @@ BACKEND_URL = os.getenv(
 
 API_KEY_SECRET = os.getenv("CHATBOT_MASTER_API_KEY")
 
-# ---- Auditoría en UI ----
 st.sidebar.markdown("### 🔍 Auditoría de conexión")
 st.sidebar.code(f"BACKEND_URL = {BACKEND_URL}")
 st.sidebar.code(f"API_KEY = {'✓ definida' if API_KEY_SECRET else '✗ NO DEFINIDA'}")
 
 if not API_KEY_SECRET:
-    st.error("❌ FALLO CRÍTICO: CHATBOT_MASTER_API_KEY no está definida. La aplicación no puede continuar.")
+    st.error("❌ FALLO CRÍTICO: CHATBOT_MASTER_API_KEY no está definida.")
     st.stop()
 
 # ---------------------------------------------------------------------------
@@ -66,7 +65,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": greeting}]
 
 # ---------------------------------------------------------------------------
-# 3. Título e instrucciones
+# 3. Título
 # ---------------------------------------------------------------------------
 st.title("Jarvi ⚡ Agente de Soluciones de AISA Solar")
 
@@ -83,14 +82,14 @@ with st.expander("ℹ️ ¿Cómo usar Jarvi?"):
     )
 
 # ---------------------------------------------------------------------------
-# Historial
+# Historial de mensajes
 # ---------------------------------------------------------------------------
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 # ---------------------------------------------------------------------------
-# Headers unificados
+# Headers para la API
 # ---------------------------------------------------------------------------
 headers_api = {
     "Authorization": f"Bearer {API_KEY_SECRET}",
@@ -99,7 +98,7 @@ headers_api = {
 }
 
 # ---------------------------------------------------------------------------
-# 4. Captura multimodal: factura eléctrica
+# 4. Captura de factura (opcional)
 # ---------------------------------------------------------------------------
 st.markdown("---")
 st.write("📸 **Cargar Factura Eléctrica (Opcional)**")
@@ -191,7 +190,7 @@ if st.session_state.pending_prompt:
     st.sidebar.info(f"📝 Prompt pendiente: {prompt[:50]}...")
 
 # ---------------------------------------------------------------------------
-# 6. Comunicación con el backend (SSE, errores visibles)
+# 6. Comunicación con el backend (SSE nativa)
 # ---------------------------------------------------------------------------
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -202,7 +201,6 @@ if prompt:
         placeholder = st.empty()
         respuesta_completa = ""
 
-        # ---- Log detallado en sidebar ----
         st.sidebar.markdown("---")
         st.sidebar.markdown("### 📡 Última petición")
         st.sidebar.code(f"thread_id: {st.session_state.thread_id}")
@@ -230,6 +228,8 @@ if prompt:
             if response.encoding is None:
                 response.encoding = "utf-8"
 
+            token_recibido = False
+
             for line in response.iter_lines(chunk_size=1, decode_unicode=True):
                 if not line or not line.startswith("data: "):
                     continue
@@ -242,31 +242,28 @@ if prompt:
                 if not isinstance(data, dict):
                     continue
 
-                if data.get("type") == "token":
-                    respuesta_completa += data["data"]
+                # ---- Procesamiento nativo del SSE del backend ----
+                if "token" in data:
+                    token_recibido = True
+                    respuesta_completa += data["token"]
                     placeholder.markdown(respuesta_completa + "▌")
 
-                elif data.get("type") == "final":
-                    respuesta_final = data.get("response") or respuesta_completa
-                    placeholder.markdown(respuesta_final)
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": respuesta_final}
-                    )
+                elif "contexto_tecnico" in data:
+                    # Final del stream – no hay más tokens
                     break
 
-                elif data.get("type") == "error":
-                    st.sidebar.error(f"❌ Error en evento: {data.get('message')}")
-                    st.error(data.get("message", "Error desconocido en el backend"))
-                    break
+            # Si no se recibió ningún token, el backend ejecutó una acción sin texto
+            if not token_recibido and respuesta_completa == "":
+                respuesta_completa = "(acción ejecutada)"
+                placeholder.markdown(respuesta_completa)
 
-            else:
-                # si no hubo evento final, guardamos lo acumulado
-                if respuesta_completa:
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": respuesta_completa}
-                    )
+            # Guardar la respuesta final en el historial
+            if respuesta_completa:
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": respuesta_completa}
+                )
 
-            # TTS si modo voz activo
+            # TTS si modo voz
             if st.session_state.is_voice_mode and respuesta_completa:
                 with st.spinner("Generando síntesis de voz..."):
                     tts_response = requests.post(
@@ -282,7 +279,7 @@ if prompt:
 
         except requests.exceptions.ConnectionError as e:
             st.sidebar.error(f"🔌 Error de conexión: {e}")
-            st.error("❌ Error de conexión con la API. Verifica que el backend esté corriendo y que BACKEND_URL sea correcta.")
+            st.error("❌ Error de conexión con la API. Verifica la URL y que el backend esté corriendo.")
             st.sidebar.code(f"BACKEND_URL actual: {BACKEND_URL}")
         except Exception as e:
             st.sidebar.error(f"⚠️ Excepción: {type(e).__name__}: {e}")
