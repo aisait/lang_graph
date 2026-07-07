@@ -1,13 +1,6 @@
 """
-streamlit_app.py
-Interfaz tipo WhatsApp para JARVI 2.0 con todas las funcionalidades aprobadas:
-- Chat conversacional con burbujas
-- Entrada de voz (STT) y salida de voz (TTS)
-- Carga de factura (archivo o cámara) para OCR
-- Procesamiento SSE nativo
-- Persistencia de thread_id en URL
-- Auditoría compacta (expander)
-Cumple ISO/IEC 25010, 29119 y las pruebas BC‑T01 a BC‑T10.
+streamlit_app.py - Interfaz JARVI con depuración SSE visible.
+Muestra los eventos recibidos y la respuesta final.
 """
 
 import streamlit as st
@@ -16,6 +9,7 @@ import os
 import uuid
 import base64
 import json
+import time
 
 # ---------------------------------------------------------------------------
 # Configuración y seguridad
@@ -28,75 +22,17 @@ if not API_KEY:
     st.stop()
 
 # ---------------------------------------------------------------------------
-# Estilo CSS para apariencia de chat
-# ---------------------------------------------------------------------------
-st.markdown("""
-<style>
-    .stApp {
-        background-color: #ece5dd;
-        font-family: 'Segoe UI', sans-serif;
-    }
-    .stChatMessage {
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-        max-width: 80%;
-        margin-bottom: 0.3rem;
-    }
-    .stChatMessage[data-testid="user"] {
-        background-color: #dcf8c6;
-        align-self: flex-end;
-        margin-left: auto;
-    }
-    .stChatMessage[data-testid="assistant"] {
-        background-color: white;
-        align-self: flex-start;
-        margin-right: auto;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-    }
-    .stChatInput {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: white;
-        padding: 10px 20px;
-        border-top: 1px solid #ddd;
-        z-index: 100;
-    }
-    .main > div {
-        padding-bottom: 80px;
-    }
-    #MainMenu, footer, header {
-        visibility: hidden;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ---------------------------------------------------------------------------
-# Estado de sesión y thread_id persistente en URL
+# Estado de sesión y thread_id persistente
 # ---------------------------------------------------------------------------
 if "thread_id" not in st.session_state:
     tid = st.query_params.get("thread_id")
-    if tid:
-        st.session_state.thread_id = tid
-    else:
-        st.session_state.thread_id = str(uuid.uuid4())
-        st.query_params["thread_id"] = st.session_state.thread_id
+    st.session_state.thread_id = tid if tid else str(uuid.uuid4())
+    st.query_params["thread_id"] = st.session_state.thread_id
 
 if "messages" not in st.session_state:
     st.session_state.messages = [{
         "role": "assistant",
-        "content": (
-            "👋 ¡Hola! Soy Jarvi, tu asesor técnico de AISA Solar.\n\n"
-            "¿Sobre qué producto necesitas información?\n"
-            "1️⃣ Calentadores Solares\n"
-            "2️⃣ Paneles Solares (On‑Grid / Off‑Grid)\n"
-            "3️⃣ Bombas de Agua Solares\n"
-            "4️⃣ Bombas de Calor\n"
-            "5️⃣ Máquinas de Hielo\n"
-            "6️⃣ Hieleras\n\n"
-            "Puedes escribir, grabar voz 🎤 o subir tu factura eléctrica 📸."
-        )
+        "content": "👋 ¡Hola! Soy Jarvi, tu asesor técnico de AISA Solar.\n\n¿Sobre qué producto necesitas información?\n1️⃣ Calentadores Solares\n2️⃣ Paneles Solares (On‑Grid / Off‑Grid)\n3️⃣ Bombas de Agua Solares\n4️⃣ Bombas de Calor\n5️⃣ Máquinas de Hielo\n6️⃣ Hieleras\n\nPuedes escribir, grabar voz 🎤 o subir tu factura eléctrica 📸."
     }]
 
 if "factura_procesada" not in st.session_state:
@@ -107,82 +43,70 @@ if "audio_key" not in st.session_state:
     st.session_state.audio_key = 0
 
 # ---------------------------------------------------------------------------
-# Cabecera
+# Estilo CSS simple
 # ---------------------------------------------------------------------------
+st.markdown("""
+<style>
+    .stApp { background-color: #ece5dd; }
+    .stChatMessage { border-radius: 20px; padding: 8px 16px; max-width: 80%; }
+    .stChatMessage[data-testid="user"] { background-color: #dcf8c6; margin-left: auto; }
+    .stChatMessage[data-testid="assistant"] { background-color: white; margin-right: auto; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+    .main > div { padding-bottom: 80px; }
+    footer, header { visibility: hidden; }
+</style>
+""", unsafe_allow_html=True)
+
 st.markdown("<h2 style='text-align: center; color: #075e54;'>⚡ Jarvi · Asesor Solar</h2>", unsafe_allow_html=True)
 st.caption(f"Sesión: `{st.session_state.thread_id[:8]}`")
 
-# ---------------------------------------------------------------------------
-# Mostrar historial (burbujas)
-# ---------------------------------------------------------------------------
+# Mostrar historial
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 # ---------------------------------------------------------------------------
-# Barra de entrada: chat_input + botones de adjunto
+# Barra de entrada
 # ---------------------------------------------------------------------------
 with st.container():
-    col_input, col_attach = st.columns([5, 1], gap="small")
+    col_input, col_attach = st.columns([5, 1])
     with col_input:
-        prompt = st.chat_input("Escribe tu mensaje...", key="chat_input")
+        prompt = st.chat_input("Escribe tu mensaje...")
     with col_attach:
-        # Popover con opciones de adjunto
-        with st.popover("📎", use_container_width=False):
-            st.caption("Adjuntar")
-            factura_file = st.file_uploader(
-                "📄 Factura (JPG/PNG)",
-                type=["jpg", "jpeg", "png"],
-                key="factura_upload",
-                label_visibility="collapsed"
-            )
-            factura_cam = st.camera_input("📸 Tomar foto", key="factura_cam", label_visibility="collapsed")
-        # Botón de grabación de voz
+        with st.popover("📎"):
+            factura_file = st.file_uploader("📄 Factura", type=["jpg","jpeg","png"], label_visibility="collapsed")
+            factura_cam = st.camera_input("📸 Tomar foto", label_visibility="collapsed")
         audio_bytes = st.audio_input("🎤", key=f"audio_{st.session_state.audio_key}", label_visibility="collapsed")
 
-# ---------------------------------------------------------------------------
-# Procesar factura (OCR) – BC‑T06
-# ---------------------------------------------------------------------------
+# Procesar factura (OCR)
 factura_img = factura_file if factura_file else factura_cam
 if factura_img and not st.session_state.factura_procesada:
-    with st.spinner("🔍 Analizando factura..."):
+    with st.spinner("Analizando factura..."):
         try:
-            base64_img = base64.b64encode(factura_img.getvalue()).decode('utf-8')
-            res = requests.post(
-                f"{BACKEND_URL}/vision/analyze",
-                json={"thread_id": st.session_state.thread_id, "image_base64": base64_img},
-                headers={"Authorization": f"Bearer {API_KEY}"},
-                timeout=60
-            )
+            b64 = base64.b64encode(factura_img.getvalue()).decode()
+            res = requests.post(f"{BACKEND_URL}/vision/analyze",
+                json={"thread_id": st.session_state.thread_id, "image_base64": b64},
+                headers={"Authorization": f"Bearer {API_KEY}"}, timeout=60)
             if res.status_code == 200:
                 datos = res.json().get("extracted_data", {})
                 st.session_state.factura_procesada = True
                 st.session_state.pending_prompt = (
-                    f"📄 Factura detectada:\n"
-                    f"- Empresa: {datos.get('empresa_electrica', 'N/A')}\n"
-                    f"- Consumo: {datos.get('consumo_kwh', 'N/A')} kWh\n"
-                    f"- Monto: Q{datos.get('monto_factura', 'N/A')}"
+                    f"📄 Factura: {datos.get('empresa_electrica','N/A')}, "
+                    f"{datos.get('consumo_kwh','N/A')} kWh, Q{datos.get('monto_factura','N/A')}"
                 )
-                st.success("✅ Factura analizada. Envía el mensaje.")
+                st.success("✅ Factura analizada.")
                 st.rerun()
             else:
-                st.error(f"Error OCR: {res.status_code}")
+                st.error(f"Error: {res.status_code}")
         except Exception as e:
             st.error(f"Error: {e}")
 
-# ---------------------------------------------------------------------------
-# Procesar entrada de voz (STT) – BC‑T07
-# ---------------------------------------------------------------------------
+# Procesar voz (STT)
 if audio_bytes is not None:
-    with st.spinner("🔄 Transcribiendo..."):
+    with st.spinner("Transcribiendo..."):
         try:
             files = {"audio": ("audio.wav", audio_bytes, "audio/wav")}
-            res = requests.post(
-                f"{BACKEND_URL}/stt",
-                files=files,
-                headers={"Authorization": f"Bearer {API_KEY}"},
-                timeout=30
-            )
+            res = requests.post(f"{BACKEND_URL}/stt", files=files,
+                headers={"Authorization": f"Bearer {API_KEY}"}, timeout=30)
             if res.status_code == 200:
                 transcript = res.json().get("transcript", "")
                 if transcript:
@@ -196,20 +120,16 @@ if audio_bytes is not None:
         except Exception as e:
             st.error(f"Error: {e}")
 
-# ---------------------------------------------------------------------------
-# Manejar el prompt final (texto, factura o voz)
-# ---------------------------------------------------------------------------
+# Obtener prompt final
 if st.session_state.pending_prompt:
     prompt = st.session_state.pending_prompt
     st.session_state.pending_prompt = None
-else:
-    prompt = prompt  # del chat_input
 
 # ---------------------------------------------------------------------------
-# Enviar mensaje al backend y mostrar respuesta
+# Enviar mensaje y mostrar respuesta con depuración visible
 # ---------------------------------------------------------------------------
 if prompt:
-    # Mostrar mensaje del usuario
+    # Añadir mensaje del usuario
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -218,84 +138,67 @@ if prompt:
         placeholder = st.empty()
         respuesta_completa = ""
         contexto = {}
+        eventos = []  # para depuración
 
-        headers = {
-            "Authorization": f"Bearer {API_KEY}",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
+        headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
         payload = {"thread_id": st.session_state.thread_id, "message": prompt}
 
         try:
-            response = requests.post(
-                f"{BACKEND_URL}/chat",
-                json=payload,
-                headers=headers,
-                stream=True,
-                timeout=120
-            )
-
+            response = requests.post(f"{BACKEND_URL}/chat", json=payload, headers=headers, stream=True, timeout=120)
             if response.status_code != 200:
                 st.error(f"Error {response.status_code}: {response.text[:200]}")
                 st.stop()
 
-            # Procesar SSE (eventos: {"token": ...} y {"contexto_tecnico": ...})
-            buffer = ""
-            for chunk in response.iter_content(chunk_size=128, decode_unicode=True):
-                if chunk:
-                    buffer += chunk
-                    while "\n" in buffer:
-                        line, buffer = buffer.split("\n", 1)
-                        line = line.strip()
-                        if not line.startswith("data: "):
-                            continue
-                        json_str = line[6:]
-                        try:
-                            data = json.loads(json_str)
-                        except:
-                            continue
-                        if "token" in data:
-                            token = data["token"]
-                            respuesta_completa += token
-                            placeholder.markdown(respuesta_completa + "▌")
-                        elif "contexto_tecnico" in data:
-                            contexto = data["contexto_tecnico"]
-                            placeholder.markdown(respuesta_completa)
-                            break
+            # Procesar SSE de forma simple: leer línea por línea
+            for line in response.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data: "):
+                    continue
+                json_str = line[6:]
+                try:
+                    data = json.loads(json_str)
+                except:
+                    continue
 
+                # Guardar para depuración
+                eventos.append(data)
+
+                if "token" in data:
+                    respuesta_completa += data["token"]
+                    placeholder.markdown(respuesta_completa + "▌")
+                elif "contexto_tecnico" in data:
+                    contexto = data["contexto_tecnico"]
+                    # Una vez recibido el contexto, finaliza el stream
+                    placeholder.markdown(respuesta_completa)
+                    break
+
+            # Mostrar eventos de depuración en un expander
+            with st.expander("🔍 Depuración SSE (eventos recibidos)"):
+                st.json(eventos)
+
+            # Guardar respuesta en historial
             if respuesta_completa:
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": respuesta_completa}
-                )
-                # Auditoría compacta
+                st.session_state.messages.append({"role": "assistant", "content": respuesta_completa})
                 if contexto:
-                    with st.expander("🔍 Datos técnicos extraídos", expanded=False):
+                    with st.expander("📊 Datos técnicos extraídos"):
                         st.json(contexto)
 
-                # TTS si el usuario usó voz
+                # TTS si hubo voz
                 if audio_bytes is not None:
-                    with st.spinner("🔊 Generando voz..."):
-                        tts_res = requests.post(
-                            f"{BACKEND_URL}/tts",
+                    with st.spinner("Generando voz..."):
+                        tts_res = requests.post(f"{BACKEND_URL}/tts",
                             json={"text": respuesta_completa, "voice": "alloy"},
-                            headers={"Authorization": f"Bearer {API_KEY}"},
-                            timeout=30
-                        )
+                            headers={"Authorization": f"Bearer {API_KEY}"}, timeout=30)
                         if tts_res.status_code == 200:
                             st.audio(tts_res.content, format="audio/mp3", autoplay=True)
             else:
-                st.warning("No se recibió respuesta.")
+                st.warning("No se recibió respuesta del asistente.")
 
         except requests.exceptions.ConnectionError:
             st.error("❌ No se pudo conectar con el backend.")
         except Exception as e:
             st.error(f"Error: {e}")
 
-    # Reiniciar estado de factura para permitir nuevas subidas
     st.session_state.factura_procesada = False
     st.rerun()
 
-# ---------------------------------------------------------------------------
-# Pie de página
-# ---------------------------------------------------------------------------
 st.caption("⚡ Jarvi 2.0 · AISA Solar")
