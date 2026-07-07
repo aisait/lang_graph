@@ -1,6 +1,6 @@
 {
-  "dependencies": ["."],
   "graphs": {
-    "aisa_chatbot": "./agent_graph.py:jarvi_graph"
-  }
+    "aisa_chatbot": "./studio_graph.py:jarvi_graph_studio"
+  },
+  "env": ".env"
 }
