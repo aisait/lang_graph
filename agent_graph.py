@@ -367,12 +367,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         """
         Nodo central que invoca al LLM con el contexto enriquecido.
         También intenta extraer nombre y teléfono si aún no se han capturado.
-
-        Prueba de caja negra:
-            - Verificar que el system prompt incluya la ontología correcta según topología.
-            - Verificar que los metadatos del run (nombre, whatsapp, topología) se
-              inyecten en el config para trazabilidad en LangSmith.
-            - Comprobar que el LLM recibe todo el historial de mensajes más el system prompt.
+        En la primera interacción, fuerza el mensaje de bienvenida estándar.
         """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
@@ -427,6 +422,25 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 f"ONTOLOGÍA: {ontologia_dinamica}"
             )
         )
+
+        # --- CORRECCIÓN: Si es la primera interacción, forzar mensaje de bienvenida estándar ---
+        if len(state.get("messages", [])) == 1:
+            bienvenida = (
+                "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. "
+                "Estamos para ayudarte a encontrar la mejor solución energética. "
+                "¿Sobre qué producto necesitas información hoy?\n\n"
+                "1. Calentadores Solares\n"
+                "2. Paneles Solares (Fuera de la red)\n"
+                "3. Paneles Solares (Ahorro en factura eléctrica)\n"
+                "4. Bombas de Agua Solares\n"
+                "5. Bombas de Calor para piscinas\n"
+                "6. Máquinas de hacer hielo\n"
+                "7. Hieleras\n\n"
+                "Cuéntame qué te interesa y, para darte una atención personalizada, "
+                "¿podrías indicarme tu nombre y en qué zona te encuentras?"
+            )
+            # Agregamos la instrucción al system prompt para que el LLM genere ese mensaje exacto.
+            prompt_sistema.content += f"\n\nEsta es la primera interacción. Debes responder exactamente con el siguiente mensaje:\n{bienvenida}"
 
         # Invocación del LLM con todo el historial
         respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
