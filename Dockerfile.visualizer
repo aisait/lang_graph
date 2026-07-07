@@ -1,13 +1,7 @@
 # ==============================================================================
 # DOCUMENTACIÓN DE AUDITORÍA ISO/IEC 25010
 # Componente: Jarvi Studio Visualizer
-# Justificación Técnica: 
-# - Aislamiento: Imagen 'slim' para minimizar superficie de ataque.
-# - Portabilidad: Entorno determinista para CI/CD.
-# - Fiabilidad: Instalación explícita de dependencias.
 # ==============================================================================
-
-# CORRECCIÓN: usar Python 3.11 para paridad con backend y frontend
 FROM python:3.11-slim
 
 LABEL maintainer="AISA Solar - Equipo de Ingeniería"
@@ -17,26 +11,16 @@ LABEL compliance="ISO/IEC-25010-Ready"
 
 WORKDIR /app
 
-# ----------------------------------------------------------------------
-# Configuración del entorno
-# ----------------------------------------------------------------------
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PATH="/usr/local/bin:${PATH}"
 
-# Variables dummy para evitar validaciones
+# Variables dummy
 ENV IS_BACKEND="False"
 ENV DATABASE_URL="sqlite:///:memory:"
 ENV OPENAI_API_KEY="sk-dummy-key-for-visualizer-only"
-
-# Permitir CORS para LangGraph Studio
 ENV LANGGRAPH_ALLOWED_ORIGINS="*"
 
-# ----------------------------------------------------------------------
-# Instalación de dependencias
-# ----------------------------------------------------------------------
-
-# Argumento para forzar reconstrucción de capas de instalación
 ARG REFRESH_DATE=2026-07-07
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -45,13 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 
-# Instalación optimizada:
-# 1. Actualizar pip.
-# 2. Instalar dependencias generales.
-# 3. Instalar google-auth y google-auth-oauthlib explícitamente.
-# 4. Instalar langgraph-cli[inmem].
-# 5. Verificar existencia del binario.
-
+# Instalación con prioridad para google-auth
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir google-auth google-auth-oauthlib && \
@@ -60,9 +38,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 COPY . .
 
-# ----------------------------------------------------------------------
-# Ejecución
-# ----------------------------------------------------------------------
 EXPOSE 8080
 
 CMD ["sh", "-c", "python -m langgraph_api.cli --host 0.0.0.0 --port ${PORT:-8080} --allowed-origins '*'"]
