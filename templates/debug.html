@@ -117,6 +117,7 @@
 
             let currentAssistantMessage = '';
             let assistantDiv = null;
+            let tokenBuffer = '';
 
             function appendLog(text, type = 'assistant') {
                 const div = document.createElement('div');
@@ -220,8 +221,7 @@
                             const jsonStr = line.slice(6);
                             try {
                                 const data = JSON.parse(jsonStr);
-
-                                if (data.token) {
+                                if (data.token !== undefined) {
                                     appendToken(data.token);
                                 } else if (data.info) {
                                     appendLog(`[INFO] ${data.info}`, 'system');
@@ -231,11 +231,12 @@
                                     contexto = data.contexto_tecnico;
                                     finishAssistantMessage(contexto);
                                 } else {
-                                    // Evento no clasificado: mostrarlo como raw para depuración
+                                    // Mostrar cualquier otro evento como raw
                                     appendLog(`[RAW] ${jsonStr}`, 'raw');
                                 }
                             } catch (e) {
-                                appendLog(`[PARSE_ERROR] ${jsonStr}`, 'error');
+                                // Si falla el parseo, mostrar el evento crudo
+                                appendLog(`[EVENT] ${jsonStr}`, 'raw');
                             }
                         }
                     }
