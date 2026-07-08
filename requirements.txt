@@ -43,6 +43,10 @@ google-auth-oauthlib>=1.2.0
 google-api-python-client>=2.198.0
 Flask>=2.2.0                   # Para cliente-debug
 tenacity>=8.2.0                # Para reintentos robustos (opcional, pero recomendado)
+Flask>=2.2.0
+requests>=2.32.3
+openai>=1.50.0
+python-dotenv>=1.0.0
 
 # ---------------------------------------------------------------------
 # Dependencias adicionales para el visualizador
