@@ -44,7 +44,7 @@
         #output .assistant { color: #00ff99; }
         #output .error { color: #ff4444; background: #331111; padding: 2px 6px; border-radius: 4px; }
         #output .context { color: #8888ff; font-style: italic; border-top: 1px solid #333; margin-top: 8px; padding-top: 8px; }
-        #output .message-block { margin-bottom: 8px; border-bottom: 1px solid #1a1a1a; padding-bottom: 6px; }
+        #output .raw { color: #aa66ff; font-size: 0.8rem; }
         #input-area {
             display: flex;
             gap: 10px;
@@ -103,7 +103,6 @@
             const sendBtn = document.getElementById('send-btn');
             const threadDisplay = document.getElementById('thread-id');
 
-            // --- Gestión del thread_id persistente ---
             let currentThreadId = null;
             function getThreadId() {
                 let tid = localStorage.getItem('debug_thread_id');
@@ -116,7 +115,6 @@
             currentThreadId = getThreadId();
             threadDisplay.textContent = currentThreadId;
 
-            // --- Funciones de UI ---
             let currentAssistantMessage = '';
             let assistantDiv = null;
 
@@ -168,7 +166,6 @@
                 currentAssistantMessage = '';
             }
 
-            // --- Envío de mensaje ---
             async function sendMessage() {
                 const message = input.value.trim();
                 if (!message) return;
@@ -178,7 +175,6 @@
                 input.disabled = true;
                 sendBtn.disabled = true;
 
-                // Indicador de carga
                 const loadingDiv = document.createElement('div');
                 loadingDiv.className = 'log-line assistant';
                 loadingDiv.textContent = '...';
@@ -235,16 +231,15 @@
                                     contexto = data.contexto_tecnico;
                                     finishAssistantMessage(contexto);
                                 } else {
-                                    // Evento no clasificado (no mostrar para no saturar)
-                                    // console.log('[DEBUG]', data);
+                                    // Evento no clasificado: mostrarlo como raw para depuración
+                                    appendLog(`[RAW] ${jsonStr}`, 'raw');
                                 }
                             } catch (e) {
-                                // Si no es JSON válido, ignorar
+                                appendLog(`[PARSE_ERROR] ${jsonStr}`, 'error');
                             }
                         }
                     }
 
-                    // Si no se recibió contexto pero hay mensaje, finalizar igual
                     if (currentAssistantMessage) {
                         finishAssistantMessage();
                     }
