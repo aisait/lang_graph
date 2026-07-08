@@ -177,3 +177,43 @@ def obtener_fragmento_ontologia(topologia: Optional[str]) -> str:
             )
 
     return "\n\n".join(resultado)
+
+
+# =============================================================================
+# NUEVA FUNCIÓN: Búsqueda de productos por mensaje (para recolección de datos)
+# =============================================================================
+def buscar_productos_por_mensaje(mensaje: str, top_n: int = 5) -> List[str]:
+    """
+    Busca en el catálogo los productos cuyas keywords coincidan con el mensaje del usuario.
+    Retorna hasta top_n nombres de productos (según el campo 'nombre' de cada categoría).
+
+    Esta función reutiliza el caché de cargar_ontologia(), por lo que es eficiente
+    y consistente con el resto del sistema.
+
+    Parámetros:
+        mensaje (str): texto del usuario (en minúsculas o no).
+        top_n (int): número máximo de productos a retornar.
+
+    Retorna:
+        List[str]: lista de nombres de productos encontrados.
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. Mensaje "quiero paneles solares y calentadores": debe devolver al menos
+           los nombres que contengan "panel solar" y "calentador".
+        2. Mensaje sin coincidencias: devuelve lista vacía.
+        3. top_n=2: devuelve máximo 2 productos.
+    """
+    ontologia = cargar_ontologia()
+    productos_encontrados = []
+    mensaje_lower = mensaje.lower()
+    for key, item in ontologia.items():
+        if isinstance(item, dict) and "nombre" in item:
+            palabras_clave = item.get("keywords", [])
+            for keyword in palabras_clave:
+                if keyword.lower() in mensaje_lower:
+                    if item["nombre"] not in productos_encontrados:
+                        productos_encontrados.append(item["nombre"])
+                        if len(productos_encontrados) >= top_n:
+                            return productos_encontrados
+                    break
+    return productos_encontrados
