@@ -148,10 +148,14 @@ async def acknowledge_dispatch(trace_id: str):
 # Función de generación de tokens (con checkpointing garantizado)
 # ---------------------------------------------------------------------------
 async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]:
+    # Inyectar trace_id en el config para que esté disponible en el grafo
+    trace_id = trace_id_var.get()
     config = {"configurable": {"thread_id": thread_id}}
-    estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
+    config["metadata"] = config.get("metadata", {})
+    config["metadata"]["trace_id"] = trace_id
 
-    logger.info(f"Ejecutando chat para thread_id={thread_id}")
+    estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
+    logger.info(f"Ejecutando chat para thread_id={thread_id}, trace_id={trace_id}")
 
     async with locks[thread_id]:
         # 1. Invocar el grafo (ainvoke garantiza checkpoint)
