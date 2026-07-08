@@ -145,7 +145,7 @@ async def acknowledge_dispatch(trace_id: str):
     return {"status": "ACK received", "trace_id": trace_id}
 
 # ---------------------------------------------------------------------------
-# Función de generación de tokens (con checkpointing garantizado)
+# Función de generación de tokens (con checkpointing garantizado y sin delays)
 # ---------------------------------------------------------------------------
 async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]:
     # Inyectar trace_id en el config para que esté disponible en el grafo
@@ -172,15 +172,12 @@ async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, No
                 respuesta_final = msg.content
                 break
 
-        # 3. Simular streaming de tokens (dividir en palabras)
-        # --- CORRECCIÓN: Si la respuesta está vacía, emitir un mensaje de fallback ---
+        # 3. Simular streaming de tokens (sin sleeps, rápido)
         if respuesta_final:
             tokens = respuesta_final.split()
             for i, token in enumerate(tokens):
-                # Añadir espacio entre palabras
                 sep = " " if i < len(tokens)-1 else ""
                 yield f"data: {json.dumps({'token': token + sep})}\n\n"
-                await asyncio.sleep(0.03)
         else:
             yield f"data: {json.dumps({'token': 'No se pudo generar una respuesta. Por favor, intenta de nuevo.'})}\n\n"
 
