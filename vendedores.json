@@ -1,0 +1,25 @@
+{
+  "vendedores": [
+    {
+      "id": 1,
+      "nombre": "Gerencia",
+      "email": "gerencia@aisa.com.gt",
+      "default": true
+    },
+    {
+      "id": 2,
+      "nombre": "Vendedor A",
+      "email": "vendedor1@aisa.com.gt"
+    },
+    {
+      "id": 3,
+      "nombre": "Vendedor B",
+      "email": "vendedor2@aisa.com.gt"
+    },
+    {
+      "id": 4,
+      "nombre": "Vendedor C",
+      "email": "vendedor3@aisa.com.gt"
+    }
+  ]
+}
