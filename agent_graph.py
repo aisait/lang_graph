@@ -38,7 +38,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 import config
 from audit import auditar_fase
-from ontology import obtener_fragmento_ontologia, buscar_productos_por_mensaje  # <-- NUEVA IMPORTACIÓN
+from ontology import obtener_fragmento_ontologia, buscar_productos_por_mensaje
 # --- CTFOM: módulo de telemetría cognitiva ---
 from telemetry import trace_id_var, span_id_var, parent_span_id_var, schedule_telemetry_event
 
@@ -87,8 +87,35 @@ CODIGOS_AREA = {
 
 
 def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) -> tuple:
-    # ... (código original, sin cambios) ...
-    pass  # (omitido por brevedad, se mantiene exactamente igual)
+    """
+    Normaliza el nombre, el número de WhatsApp y el código de área del cliente.
+    """
+    nombre_str = str(nombre_raw).strip() if nombre_raw else "Usuario"
+    nombre_partes = nombre_str.split()
+    nombre_normalizado = " ".join([p.capitalize() for p in nombre_partes]) if nombre_partes else "Usuario"
+
+    codigo_area = "+502"
+    ubicacion_lower = str(ubicacion_raw).lower() if ubicacion_raw else ""
+    for pais, codigo in CODIGOS_AREA.items():
+        if pais in ubicacion_lower:
+            codigo_area = codigo
+            break
+
+    whatsapp_str = str(whatsapp_raw) if whatsapp_raw else ""
+    digits = re.sub(r'\D', '', whatsapp_str)
+    if not digits:
+        whatsapp_formateado = "Pendiente"
+    else:
+        codigo_limpio = codigo_area.replace('+', '')
+        if digits.startswith(codigo_limpio) and len(digits) > len(codigo_limpio) + 5:
+            base = digits[len(codigo_limpio):]
+        else:
+            base = digits
+        if len(base) >= 8:
+            whatsapp_formateado = f"{codigo_area} {base[:4]}-{base[4:]}"
+        else:
+            whatsapp_formateado = f"{codigo_area} {base}"
+    return nombre_normalizado, whatsapp_formateado
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +124,7 @@ def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) 
 class ExtractorContacto(BaseModel):
     nombre: Optional[str] = Field(None, description="Nombre de pila y apellidos.")
     telefono: Optional[str] = Field(None, description="Número telefónico.")
-    email: Optional[str] = Field(None, description="Correo electrónico.")  # NUEVO
+    email: Optional[str] = Field(None, description="Correo electrónico.")
 
 
 class InferenciaEnergetica(TypedDict):
@@ -126,8 +153,37 @@ class AgentState(TypedDict):
 # Decorador CTFOM
 # ---------------------------------------------------------------------------
 def observe_node(layer: str = "graph", node_name: str = ""):
-    # ... (sin cambios) ...
-    pass
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            trace_id = trace_id_var.get()
+            span_id = str(uuid.uuid4())
+            parent = span_id_var.get()
+            span_id_var.set(span_id)
+
+            start = time.perf_counter()
+            try:
+                result = func(*args, **kwargs)
+                elapsed = (time.perf_counter() - start) * 1000
+                schedule_telemetry_event(
+                    trace_id, span_id, parent,
+                    layer=layer, node_name=node_name,
+                    event_type="END", latency_ms=elapsed
+                )
+                return result
+            except Exception as e:
+                elapsed = (time.perf_counter() - start) * 1000
+                schedule_telemetry_event(
+                    trace_id, span_id, parent,
+                    layer=layer, node_name=node_name,
+                    event_type="ERROR", latency_ms=elapsed,
+                    error_code=f"SWR-LGG-{type(e).__name__}"
+                )
+                raise
+            finally:
+                span_id_var.set(parent)
+        return wrapper
+    return decorator
 
 
 # ---------------------------------------------------------------------------
@@ -135,14 +191,87 @@ def observe_node(layer: str = "graph", node_name: str = ""):
 # ---------------------------------------------------------------------------
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
-def procesar_oportunidad_backend(...):
-    # ... (sin cambios) ...
-    pass
+def procesar_oportunidad_backend(
+    nombre_apellidos: str,
+    departamento_municipio: str,
+    consumo_actual: str,
+    empresa_electrica: str,
+    definicion_necesidad: str,
+    listado_equipos_html: str,
+    numero_whatsapp: str,
+    resumen_18_palabras: str
+) -> str:
+    nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
+
+    def tarea_background():
+        num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
+        try:
+            msg = MIMEMultipart()
+            msg['To'] = config.CONTROLLER_EMAIL
+            msg['From'] = config.SMTP_USER
+            msg['Subject'] = resumen_18_palabras
+            cuerpo = (
+                f"Oportunidad Validada por Auditoría ISO:\n\n"
+                f"Cliente: {nombre_norm}\nWhatsApp: {whatsapp_norm}\n"
+                f"Ubicación: {departamento_municipio}\nConsumo: {consumo_actual}\n"
+                f"Distribuidora: {empresa_electrica}\nEspecificación: {definicion_necesidad}\n\n"
+                f"Equipos Propuestos:\n{listado_equipos_html}"
+            )
+            msg.attach(MIMEText(cuerpo, 'plain'))
+            creds = Credentials(
+                token=None,
+                refresh_token=os.getenv("GMAIL_REFRESH_TOKEN"),
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=os.getenv("GMAIL_CLIENT_ID"),
+                client_secret=os.getenv("GMAIL_CLIENT_SECRET")
+            )
+            service = build('gmail', 'v1', credentials=creds)
+            raw = base64.urlsafe_b64encode(msg.as_bytes()).decode('utf-8')
+            service.users().messages().send(userId="me", body={'raw': raw}).execute()
+        except Exception as e:
+            print(f"Fallo en envío de correo: {e}")
+
+        payload_wa = {
+            "instance_id": os.getenv("APICHAT_INSTANCE", ""),
+            "number": num_limpio,
+            "text": (
+                f"🚨 Lead Calificado:\n\n"
+                f"Cliente: {nombre_norm}\nWhatsApp: {whatsapp_norm}\n"
+                f"Ubicación: {departamento_municipio}\nEquipos:\n{listado_equipos_html}"
+            )
+        }
+        try:
+            requests.post(
+                os.getenv("APICHAT_ENDPOINT", ""),
+                json=payload_wa,
+                headers={
+                    "Authorization": f"Bearer {os.getenv('APICHAT_TOKEN', '')}",
+                    "Content-Type": "application/json"
+                },
+                timeout=15
+            )
+        except Exception as e:
+            print(f"Fallo en envío de webhook: {e}")
+
+    threading.Thread(target=tarea_background).start()
+    return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
 
 
 def extraer_intencion_humana(messages: list) -> str:
-    # ... (sin cambios) ...
-    pass
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            content = msg.content
+            if isinstance(content, str):
+                return content.lower()
+            elif isinstance(content, list):
+                textos = []
+                for item in content:
+                    if isinstance(item, dict) and "text" in item:
+                        textos.append(item["text"])
+                    elif isinstance(item, str):
+                        textos.append(item)
+                return " ".join(textos).lower()
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -150,22 +279,56 @@ def extraer_intencion_humana(messages: list) -> str:
 # ---------------------------------------------------------------------------
 def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
+
+    # Modelo de lenguaje principal (GPT-4o mini) con reintentos para rate limit
+    llm = ChatOpenAI(
+        model="gpt-4o-mini",
+        temperature=0.1,
+        max_retries=5  # ← Añadido para manejar errores 429
+    ).bind_tools([procesar_oportunidad_backend])
+
     extractor_llm = llm.with_structured_output(ExtractorContacto)
 
     # -------------------- Nodo: Clasificador Topológico --------------------
     @auditar_fase(nombre_fase="Clasificador Topológico", criticidad="MEDIA")
     @observe_node(node_name="clasificador_topologia")
     def clasificador_topologia_node(state: AgentState):
-        # ... (sin cambios) ...
-        pass
+        ctx = dict(state.get("contexto_tecnico") or {})
+        logger = logging.getLogger("jarvi.agent")
+        logger.info(f"[clasificador] contexto recibido: {ctx}")
+        ultimo = extraer_intencion_humana(state.get("messages", []))
+        if not ultimo:
+            logger.info(f"[clasificador] contexto después (sin cambios): {ctx}")
+            return {"contexto_tecnico": ctx}
+        if not ctx.get("topologia"):
+            if any(k in ultimo for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
+                ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
+                ctx["requiere_auditoria_electrica"] = True
+            elif any(k in ultimo for k in ["aislado", "batería", "bateria", "finca", "autónomo", "off-grid"]):
+                ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
+                ctx["requiere_auditoria_electrica"] = True
+        logger.info(f"[clasificador] contexto después: {ctx}")
+        return {"contexto_tecnico": ctx}
 
     # -------------------- Nodo: Validador Geográfico --------------------
     @auditar_fase(nombre_fase="Validador Geográfico", criticidad="MEDIA")
     @observe_node(node_name="validador_geolocalizacion")
     def validador_geolocalizacion_node(state: AgentState):
-        # ... (sin cambios) ...
-        pass
+        ctx = dict(state.get("contexto_tecnico") or {})
+        logger = logging.getLogger("jarvi.agent")
+        logger.info(f"[validador] contexto recibido: {ctx}")
+        ultimo = extraer_intencion_humana(state.get("messages", []))
+        if not ultimo:
+            logger.info(f"[validador] contexto después (sin cambios): {ctx}")
+            return {"contexto_tecnico": ctx}
+        if not ctx.get("ciudad"):
+            if any(k in ultimo for k in ["guatemala", "mixco", "capital", "ciudad", "villa nueva"]):
+                ctx["ciudad"] = "Guatemala Metropolitana"
+                if ctx.get("requiere_auditoria_electrica"):
+                    ctx["empresa_electrica"] = "EEGSA"
+                    ctx["tarifa_base_gtq"] = 1.45
+        logger.info(f"[validador] contexto después: {ctx}")
+        return {"contexto_tecnico": ctx}
 
     # -------------------- Nodo: Chatbot --------------------
     @auditar_fase(nombre_fase="Inferencia del Chatbot", criticidad="ALTA")
@@ -175,8 +338,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
         logger = logging.getLogger("jarvi.agent")
         logger.info(f"[chatbot] contexto_tecnico recibido = {ctx}")
+        logger.info(f"[chatbot] último mensaje: {ultimo_mensaje[:100] if ultimo_mensaje else ''}")
 
-        # --- PRIMERA INTERACCIÓN ---
+        # --- PRIMERA INTERACCIÓN: bienvenida guiada ---
         if len(state.get("messages", [])) == 1:
             bienvenida = (
                 "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar.\n"
@@ -187,14 +351,16 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 "4️⃣ ¿Qué productos te interesan? (ej. paneles solares, calentadores, bombas)\n\n"
                 "¡Empecemos! ¿Cómo te llamas?"
             )
+            logger.info(f"[chatbot] respuesta de bienvenida, contexto: {ctx}")
             return {"messages": [AIMessage(content=bienvenida)], "contexto_tecnico": ctx}
 
-        # --- RECOLECCIÓN DE DATOS ---
+        # --- RECOLECCIÓN DE DATOS (ejecutar siempre) ---
         if ultimo_mensaje:
             try:
                 extraccion = extractor_llm.invoke(
-                    f"Extrae nombre, teléfono y email de este mensaje: {ultimo_mensaje}. "
-                    "Devuelve solo JSON con los campos nombre, telefono, email."
+                    f"Del siguiente mensaje, extrae el nombre (campo 'nombre'), "
+                    f"teléfono (campo 'telefono') y email (campo 'email'). "
+                    f"Mensaje: {ultimo_mensaje}"
                 )
                 if extraccion.nombre:
                     ctx["nombre"] = extraccion.nombre
@@ -205,7 +371,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             except Exception as e:
                 logger.warning(f"Fallo en extracción LLM: {e}")
 
-            # Ciudad (lógica existente)
+            # Ciudad manual
             if not ctx.get("ciudad"):
                 ciudades = ["guatemala", "mixco", "capital", "villa nueva", "escuintla",
                             "jalapa", "chimaltenango", "chiquimula", "sacatepéquez",
@@ -218,7 +384,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                             ctx["tarifa_base_gtq"] = 1.45
                         break
 
-            # Topología (lógica existente)
+            # Topología manual
             if not ctx.get("topologia"):
                 if any(k in ultimo_mensaje for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
                     ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
@@ -227,30 +393,38 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
                     ctx["requiere_auditoria_electrica"] = True
 
-        # --- PREGUNTAS GUIADAS ---
+        # --- PREGUNTAS GUIADAS PARA CAMPOS FALTANTES ---
         if not ctx.get("whatsapp") or ctx["whatsapp"] == "Pendiente":
             if not ctx.get("preguntando_whatsapp"):
                 ctx["preguntando_whatsapp"] = True
-                return {"messages": [AIMessage(content="Para poder enviarte la cotización, necesito tu número de WhatsApp con código de país (ej. +502 1234-5678).")], "contexto_tecnico": ctx}
+                return {
+                    "messages": [AIMessage(content="Para poder enviarte la cotización, necesito tu número de WhatsApp con código de país (ej. +502 1234-5678).")],
+                    "contexto_tecnico": ctx
+                }
         else:
             ctx["preguntando_whatsapp"] = False
 
         if not ctx.get("email"):
             if not ctx.get("preguntando_email"):
                 ctx["preguntando_email"] = True
-                return {"messages": [AIMessage(content="¿A qué correo electrónico te gustaría que te enviemos la cotización?")], "contexto_tecnico": ctx}
+                return {
+                    "messages": [AIMessage(content="¿A qué correo electrónico te gustaría que te enviemos la cotización?")],
+                    "contexto_tecnico": ctx
+                }
         else:
             ctx["preguntando_email"] = False
 
         if not ctx.get("productos") or len(ctx["productos"]) == 0:
-            # === USAR LA ONTOLOGÍA EXISTENTE ===
             productos = buscar_productos_por_mensaje(ultimo_mensaje)
             if productos:
                 ctx["productos"] = productos
             else:
                 if not ctx.get("preguntando_productos"):
                     ctx["preguntando_productos"] = True
-                    return {"messages": [AIMessage(content="¿Qué tipo de sistemas solares te interesan? Por ejemplo: paneles solares, calentadores, bombas de agua, etc.")], "contexto_tecnico": ctx}
+                    return {
+                        "messages": [AIMessage(content="¿Qué tipo de sistemas solares te interesan? Por ejemplo: paneles solares, calentadores, bombas de agua, etc.")],
+                        "contexto_tecnico": ctx
+                    }
         else:
             ctx["preguntando_productos"] = False
 
@@ -260,7 +434,13 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if ctx.get("whatsapp") and ctx["whatsapp"] != "Pendiente":
             _, ctx["whatsapp"] = normalizar_contacto("", ctx["whatsapp"], "")
 
-        # --- PERSISTENCIA (si todos los campos están completos) ---
+        # --- LOGS DE DEPURACIÓN ---
+        logger.info(f"[chatbot] Extracción: nombre={ctx.get('nombre')}, whatsapp={ctx.get('whatsapp')}, email={ctx.get('email')}")
+        logger.info(f"[chatbot] Productos: {ctx.get('productos')}")
+        logger.info(f"[chatbot] Vendedor: {ctx.get('vendedor')}")
+        logger.info(f"[chatbot] Campos completos: {validar_campos_obligatorios(ctx)}")
+
+        # --- PERSISTIR EN BD SI TODOS LOS CAMPOS ESTÁN COMPLETOS ---
         if validar_campos_obligatorios(ctx):
             try:
                 import asyncio
@@ -282,6 +462,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                         source="chatbot_node",
                         payload=ctx
                     ))
+                    logger.info(f"Datos del cliente persistidos: {ctx['nombre']} ({ctx['whatsapp']})")
             except Exception as e:
                 logger.error(f"Error al persistir datos del cliente: {e}")
 
