@@ -35,15 +35,16 @@
             white-space: pre-wrap;
             word-wrap: break-word;
             font-size: 0.9rem;
-            line-height: 1.5;
+            line-height: 1.6;
             min-height: 0;
             margin-bottom: 20px;
         }
         #output .system { color: #66aaff; }
-        #output .user { color: #ffcc00; }
+        #output .user { color: #ffcc00; font-weight: bold; }
         #output .assistant { color: #00ff99; }
         #output .error { color: #ff4444; background: #331111; padding: 2px 6px; border-radius: 4px; }
-        #output .context { color: #8888ff; font-style: italic; }
+        #output .context { color: #8888ff; font-style: italic; border-top: 1px solid #333; margin-top: 8px; padding-top: 8px; }
+        #output .message-block { margin-bottom: 8px; border-bottom: 1px solid #1a1a1a; padding-bottom: 6px; }
         #input-area {
             display: flex;
             gap: 10px;
@@ -77,6 +78,7 @@
         #input-area button:hover { background: #66ffaa; }
         #input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
         .log-line { padding: 2px 0; border-bottom: 1px solid #1a1a1a; }
+        .separator { border: none; border-top: 1px dashed #2a4a2a; margin: 6px 0; }
     </style>
 </head>
 <body>
@@ -86,9 +88,9 @@
     </div>
     <div id="output">
         <div class="system">[Sistema] Consola de depuración iniciada.</div>
-        <div class="system">[Sistema] Presiona Enter o haz clic en Enviar.</div>
+        <div class="system">[Sistema] Escribe tu mensaje y presiona Enter.</div>
         <div class="system" id="thread-display">[Sistema] Thread ID: <span id="thread-id">(cargando...)</span></div>
-        <hr style="border-color: #2a2a2a; margin: 10px 0;">
+        <hr class="separator">
     </div>
     <div id="input-area">
         <input type="text" id="user-input" placeholder="Escribe tu mensaje de depuración..." autofocus>
@@ -100,8 +102,9 @@
             const input = document.getElementById('user-input');
             const sendBtn = document.getElementById('send-btn');
             const threadDisplay = document.getElementById('thread-id');
-            let currentThreadId = null;
 
+            // --- Gestión del thread_id persistente ---
+            let currentThreadId = null;
             function getThreadId() {
                 let tid = localStorage.getItem('debug_thread_id');
                 if (!tid) {
@@ -110,9 +113,11 @@
                 }
                 return tid;
             }
-
             currentThreadId = getThreadId();
             threadDisplay.textContent = currentThreadId;
+
+            // --- Funciones de UI ---
+            let currentAssistantMessage = '';
 
             function appendLog(text, type = 'assistant') {
                 const div = document.createElement('div');
@@ -120,16 +125,66 @@
                 div.textContent = text;
                 output.appendChild(div);
                 output.scrollTop = output.scrollHeight;
+                return div;
             }
 
+            function appendUserMessage(text) {
+                appendLog(`> ${text}`, 'user');
+            }
+
+            function startAssistantMessage() {
+                currentAssistantMessage = '';
+                const div = document.createElement('div');
+                div.className = 'log-line assistant';
+                div.id = 'assistant-current';
+                div.textContent = '▌';
+                output.appendChild(div);
+                output.scrollTop = output.scrollHeight;
+                return div;
+            }
+
+            function appendToken(token) {
+                currentAssistantMessage += token;
+                const div = document.getElementById('assistant-current');
+                if (div) {
+                    div.textContent = currentAssistantMessage + '▌';
+                } else {
+                    // Fallback: crear uno nuevo
+                    const newDiv = startAssistantMessage();
+                    newDiv.textContent = currentAssistantMessage + '▌';
+                }
+                output.scrollTop = output.scrollHeight;
+            }
+
+            function finishAssistantMessage(contexto = null) {
+                const div = document.getElementById('assistant-current');
+                if (div) {
+                    div.textContent = currentAssistantMessage;
+                    div.id = ''; // eliminar id para que no se reutilice
+                }
+                // Mostrar contexto si existe
+                if (contexto && Object.keys(contexto).length > 0) {
+                    const ctxDiv = document.createElement('div');
+                    ctxDiv.className = 'log-line context';
+                    ctxDiv.textContent = `[CONTEXTO] ${JSON.stringify(contexto, null, 2)}`;
+                    output.appendChild(ctxDiv);
+                    output.scrollTop = output.scrollHeight;
+                }
+                currentAssistantMessage = '';
+            }
+
+            // --- Envío de mensaje ---
             async function sendMessage() {
                 const message = input.value.trim();
                 if (!message) return;
-                appendLog(`> ${message}`, 'user');
+
+                // Mostrar mensaje del usuario
+                appendUserMessage(message);
                 input.value = '';
                 input.disabled = true;
                 sendBtn.disabled = true;
 
+                // Indicador de carga
                 const loadingDiv = document.createElement('div');
                 loadingDiv.className = 'log-line assistant';
                 loadingDiv.textContent = '...';
@@ -144,14 +199,19 @@
                         body: JSON.stringify({ thread_id: currentThreadId, message: message })
                     });
 
+                    // Eliminar indicador de carga
+                    const loader = document.getElementById('loading-indicator');
+                    if (loader) loader.remove();
+
                     if (!response.ok) {
                         const errText = await response.text();
                         appendLog(`[ERROR] HTTP ${response.status}: ${errText}`, 'error');
                         return;
                     }
 
-                    const loader = document.getElementById('loading-indicator');
-                    if (loader) loader.remove();
+                    // Preparar para recibir tokens
+                    startAssistantMessage();
+                    let contexto = {};
 
                     const reader = response.body.getReader();
                     const decoder = new TextDecoder('utf-8');
@@ -160,6 +220,7 @@
                     while (true) {
                         const { done, value } = await reader.read();
                         if (done) break;
+
                         buffer += decoder.decode(value, { stream: true });
                         let lines = buffer.split('\n');
                         buffer = lines.pop() || '';
@@ -167,26 +228,43 @@
                         for (let line of lines) {
                             line = line.trim();
                             if (!line || !line.startsWith('data: ')) continue;
+
                             const jsonStr = line.slice(6);
                             try {
                                 const data = JSON.parse(jsonStr);
+
                                 if (data.token) {
-                                    appendLog(data.token, 'assistant');
+                                    appendToken(data.token);
                                 } else if (data.info) {
                                     appendLog(`[INFO] ${data.info}`, 'system');
                                 } else if (data.error) {
                                     appendLog(`[ERROR] ${data.error}`, 'error');
                                 } else if (data.contexto_tecnico) {
-                                    appendLog(`[CONTEXTO] ${JSON.stringify(data.contexto_tecnico)}`, 'context');
+                                    contexto = data.contexto_tecnico;
+                                    // Finalizar el mensaje con el contexto
+                                    finishAssistantMessage(contexto);
                                 } else {
-                                    appendLog(`[EVENT] ${jsonStr}`, 'system');
+                                    // Evento no clasificado (como los de LangGraph)
+                                    // No mostrar para no saturar, pero se puede debuggear
+                                    // console.log('[DEBUG]', data);
                                 }
                             } catch (e) {
-                                appendLog(`[PARSE] ${jsonStr}`, 'system');
+                                // Si no es JSON válido, mostrar como evento crudo
+                                if (!line.includes('"token"')) {
+                                    appendLog(`[EVENT] ${jsonStr}`, 'system');
+                                }
                             }
                         }
                     }
+
+                    // Si no se recibió contexto pero se acumularon tokens, finalizar igual
+                    if (currentAssistantMessage) {
+                        finishAssistantMessage();
+                    }
+
                 } catch (error) {
+                    const loader = document.getElementById('loading-indicator');
+                    if (loader) loader.remove();
                     appendLog(`[EXCEPCIÓN] ${error.message}`, 'error');
                 } finally {
                     input.disabled = false;
@@ -195,6 +273,7 @@
                 }
             }
 
+            // --- Event listeners ---
             sendBtn.addEventListener('click', sendMessage);
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -202,6 +281,8 @@
                     sendMessage();
                 }
             });
+
+            // Enfoque inicial
             input.focus();
             console.log('Debug CLI cargado. Thread ID:', currentThreadId);
         })();
