@@ -1,9 +1,11 @@
 """
 vision.py - Procesamiento de imágenes para extraer datos de facturas eléctricas.
 Usa OpenAI GPT-4o-mini con visión.
+Soporta imagen en base64 o URL.
 """
 import os
 import base64
+import requests
 import json
 from openai import OpenAI
 
@@ -13,10 +15,15 @@ def _obtener_cliente_openai() -> OpenAI:
         raise RuntimeError("No se encontró ninguna API Key de OpenAI.")
     return OpenAI(api_key=api_key)
 
+def descargar_imagen_desde_url(url: str) -> bytes:
+    """Descarga una imagen desde una URL y retorna los bytes."""
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.content
+
 def procesar_imagen_factura(base64_image: str) -> dict:
     """
-    Analiza una imagen de factura eléctrica de Guatemala (en formato Base64)
-    y extrae datos estructurados: empresa eléctrica, consumo en kWh y monto en quetzales.
+    Analiza una imagen de factura eléctrica (en Base64) y extrae datos.
     """
     client = _obtener_cliente_openai()
     respuesta = client.chat.completions.create(
@@ -54,3 +61,9 @@ def procesar_imagen_factura(base64_image: str) -> dict:
         "consumo_kwh": datos.get("consumo_kwh", None),
         "monto_factura": datos.get("monto_factura", None)
     }
+
+def procesar_imagen_desde_url(url: str) -> dict:
+    """Descarga la imagen desde una URL y la procesa."""
+    img_bytes = descargar_imagen_desde_url(url)
+    base64_img = base64.b64encode(img_bytes).decode('utf-8')
+    return procesar_imagen_factura(base64_img)
