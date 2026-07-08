@@ -39,6 +39,8 @@ psutil>=5.9.8
 google-auth>=2.30.0
 google-auth-oauthlib>=1.2.0
 google-api-python-client>=2.198.0
+Flask>=2.2.0
+requests>=2.32.3
 
 # ---------------------------------------------------------------------
 # Dependencias adicionales para el visualizador
