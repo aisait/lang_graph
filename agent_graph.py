@@ -224,10 +224,10 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA DE PERSISTENCIA DE OPORTUNIDADES (con orden de decoradores corregido)
+# HERRAMIENTA DE PERSISTENCIA DE OPORTUNIDADES (CORREGIDA)
 # =============================================================================
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
-@tool(description="Envía los datos del lead al backend a través de correo y WhatsApp")
+@tool   # <--- CORRECCIÓN: eliminado el argumento 'description'
 def procesar_oportunidad_backend(
     nombre_apellidos: str,
     departamento_municipio: str,
