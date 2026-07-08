@@ -118,6 +118,7 @@
 
             // --- Funciones de UI ---
             let currentAssistantMessage = '';
+            let assistantDiv = null;
 
             function appendLog(text, type = 'assistant') {
                 const div = document.createElement('div');
@@ -134,35 +135,29 @@
 
             function startAssistantMessage() {
                 currentAssistantMessage = '';
-                const div = document.createElement('div');
-                div.className = 'log-line assistant';
-                div.id = 'assistant-current';
-                div.textContent = '▌';
-                output.appendChild(div);
+                assistantDiv = document.createElement('div');
+                assistantDiv.className = 'log-line assistant';
+                assistantDiv.id = 'assistant-current';
+                assistantDiv.textContent = '▌';
+                output.appendChild(assistantDiv);
                 output.scrollTop = output.scrollHeight;
-                return div;
             }
 
             function appendToken(token) {
-                currentAssistantMessage += token;
-                const div = document.getElementById('assistant-current');
-                if (div) {
-                    div.textContent = currentAssistantMessage + '▌';
-                } else {
-                    // Fallback: crear uno nuevo
-                    const newDiv = startAssistantMessage();
-                    newDiv.textContent = currentAssistantMessage + '▌';
+                if (!assistantDiv) {
+                    startAssistantMessage();
                 }
+                currentAssistantMessage += token;
+                assistantDiv.textContent = currentAssistantMessage + '▌';
                 output.scrollTop = output.scrollHeight;
             }
 
             function finishAssistantMessage(contexto = null) {
-                const div = document.getElementById('assistant-current');
-                if (div) {
-                    div.textContent = currentAssistantMessage;
-                    div.id = ''; // eliminar id para que no se reutilice
+                if (assistantDiv) {
+                    assistantDiv.textContent = currentAssistantMessage;
+                    assistantDiv.id = '';
+                    assistantDiv = null;
                 }
-                // Mostrar contexto si existe
                 if (contexto && Object.keys(contexto).length > 0) {
                     const ctxDiv = document.createElement('div');
                     ctxDiv.className = 'log-line context';
@@ -178,7 +173,6 @@
                 const message = input.value.trim();
                 if (!message) return;
 
-                // Mostrar mensaje del usuario
                 appendUserMessage(message);
                 input.value = '';
                 input.disabled = true;
@@ -199,7 +193,6 @@
                         body: JSON.stringify({ thread_id: currentThreadId, message: message })
                     });
 
-                    // Eliminar indicador de carga
                     const loader = document.getElementById('loading-indicator');
                     if (loader) loader.remove();
 
@@ -209,7 +202,6 @@
                         return;
                     }
 
-                    // Preparar para recibir tokens
                     startAssistantMessage();
                     let contexto = {};
 
@@ -241,23 +233,18 @@
                                     appendLog(`[ERROR] ${data.error}`, 'error');
                                 } else if (data.contexto_tecnico) {
                                     contexto = data.contexto_tecnico;
-                                    // Finalizar el mensaje con el contexto
                                     finishAssistantMessage(contexto);
                                 } else {
-                                    // Evento no clasificado (como los de LangGraph)
-                                    // No mostrar para no saturar, pero se puede debuggear
+                                    // Evento no clasificado (no mostrar para no saturar)
                                     // console.log('[DEBUG]', data);
                                 }
                             } catch (e) {
-                                // Si no es JSON válido, mostrar como evento crudo
-                                if (!line.includes('"token"')) {
-                                    appendLog(`[EVENT] ${jsonStr}`, 'system');
-                                }
+                                // Si no es JSON válido, ignorar
                             }
                         }
                     }
 
-                    // Si no se recibió contexto pero se acumularon tokens, finalizar igual
+                    // Si no se recibió contexto pero hay mensaje, finalizar igual
                     if (currentAssistantMessage) {
                         finishAssistantMessage();
                     }
@@ -273,7 +260,6 @@
                 }
             }
 
-            // --- Event listeners ---
             sendBtn.addEventListener('click', sendMessage);
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -282,7 +268,6 @@
                 }
             });
 
-            // Enfoque inicial
             input.focus();
             console.log('Debug CLI cargado. Thread ID:', currentThreadId);
         })();
