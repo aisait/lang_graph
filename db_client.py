@@ -3,6 +3,7 @@ db_client.py
 Cliente de base de datos para operaciones CRUD sobre threads, audit_events y telemetry_events.
 Cumple con ISO/IEC 25010 (Fiabilidad) y 29119 (Pruebas).
 """
+
 import os
 import json
 import asyncpg
@@ -34,20 +35,20 @@ async def actualizar_thread(
         # Normalizar WhatsApp
         from agent_graph import normalizar_contacto
         _, whatsapp_norm = normalizar_contacto("", whatsapp, "")
-        
+
         # Verificar si existe por whatsapp_id
         existing = await conn.fetchrow(
             "SELECT thread_id, metadata FROM threads WHERE whatsapp_id = $1",
             whatsapp_norm
         )
-        
+
         metadata = {
             "email": email,
             "productos": productos or [],
             "vendedor": vendedor,
             "trace_id": trace_id
         }
-        
+
         if existing:
             # Actualizar
             await conn.execute(
