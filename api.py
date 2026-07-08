@@ -173,6 +173,7 @@ async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, No
                 break
 
         # 3. Simular streaming de tokens (dividir en palabras)
+        # --- CORRECCIÓN: Si la respuesta está vacía, emitir un mensaje de fallback ---
         if respuesta_final:
             tokens = respuesta_final.split()
             for i, token in enumerate(tokens):
@@ -181,7 +182,7 @@ async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, No
                 yield f"data: {json.dumps({'token': token + sep})}\n\n"
                 await asyncio.sleep(0.03)
         else:
-            yield f"data: {json.dumps({'token': '(acción ejecutada)'})}\n\n"
+            yield f"data: {json.dumps({'token': 'No se pudo generar una respuesta. Por favor, intenta de nuevo.'})}\n\n"
 
         # Enviar contexto al final
         yield f"data: {json.dumps({'contexto_tecnico': ctx})}\n\n"
