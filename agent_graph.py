@@ -500,7 +500,15 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             )
         )
 
+        # Invocar el LLM y manejar respuesta vacía
         respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
+        # --- CORRECCIÓN: Si el LLM no devuelve contenido, asignar mensaje de fallback ---
+        if not respuesta.content:
+            logger.warning("El LLM devolvió una respuesta vacía. Usando mensaje de fallback.")
+            respuesta = AIMessage(
+                content="Lo siento, no pude generar una respuesta en este momento. Por favor, intenta de nuevo."
+            )
+
         logger.info(f"[chatbot] contexto después de LLM: {ctx}")
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
