@@ -56,7 +56,13 @@ OPENAI_KEYS = [
 ]
 OPENAI_KEYS = [k for k in OPENAI_KEYS if k]  # Filtrar vacías
 
-PRICE_INPUT = 0.150   # $0.150 por 1M input tokens (gpt-4o-mini)
+if not OPENAI_KEYS:
+    raise RuntimeError("No se encontró ninguna API Key de OpenAI. "
+                       "Asegúrate de definir OPENAI_API_KEY_1, _2 o _3 en las variables de entorno.")
+
+DEFAULT_API_KEY = OPENAI_KEYS[0]
+
+PRICE_INPUT = 0.150   # $0.150 por 1M input tokens
 PRICE_OUTPUT = 0.600  # $0.600 por 1M output tokens
 
 def calcular_costo_llm(response) -> float:
@@ -306,9 +312,20 @@ def extraer_intencion_humana(messages: list) -> str:
 def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
 
-    # Modelos de lenguaje (se crearán con failover en cada invocación)
-    # No creamos un llm fijo para poder cambiar la clave dinámicamente.
-    # Usamos la función invoke_llm_with_failover directamente.
+    # ---------- Modelos base (con la clave por defecto) ----------
+    llm = ChatOpenAI(
+        api_key=DEFAULT_API_KEY,
+        model="gpt-4o-mini",
+        temperature=0.1,
+        max_retries=3
+    ).bind_tools([procesar_oportunidad_backend])
+
+    extractor_llm = ChatOpenAI(
+        api_key=DEFAULT_API_KEY,
+        model="gpt-4o-mini",
+        temperature=0.1,
+        max_retries=3
+    ).with_structured_output(ExtractorContacto)
 
     # ---------- Nodo: Clasificador Topológico ----------
     @auditar_fase(nombre_fase="Clasificador Topológico", criticidad="MEDIA")
