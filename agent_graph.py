@@ -284,7 +284,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     llm = ChatOpenAI(
         model="gpt-4o-mini",
         temperature=0.1,
-        max_retries=5  # ← Añadido para manejar errores 429
+        max_retries=5
     ).bind_tools([procesar_oportunidad_backend])
 
     extractor_llm = llm.with_structured_output(ExtractorContacto)
@@ -330,7 +330,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         logger.info(f"[validador] contexto después: {ctx}")
         return {"contexto_tecnico": ctx}
 
-    # -------------------- Nodo: Chatbot --------------------
+    # -------------------- Nodo: Chatbot (extracción inmediata) --------------------
     @auditar_fase(nombre_fase="Inferencia del Chatbot", criticidad="ALTA")
     @observe_node(node_name="chatbot")
     def chatbot_node(state: AgentState, config: RunnableConfig):
@@ -340,21 +340,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         logger.info(f"[chatbot] contexto_tecnico recibido = {ctx}")
         logger.info(f"[chatbot] último mensaje: {ultimo_mensaje[:100] if ultimo_mensaje else ''}")
 
-        # --- PRIMERA INTERACCIÓN: bienvenida guiada ---
-        if len(state.get("messages", [])) == 1:
-            bienvenida = (
-                "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar.\n"
-                "Antes de comenzar, necesito algunos datos para poder ayudarte mejor:\n\n"
-                "1️⃣ Tu nombre completo\n"
-                "2️⃣ Tu número de WhatsApp (con código de país, ej. +502 1234-5678)\n"
-                "3️⃣ Tu correo electrónico (para enviarte la cotización)\n"
-                "4️⃣ ¿Qué productos te interesan? (ej. paneles solares, calentadores, bombas)\n\n"
-                "¡Empecemos! ¿Cómo te llamas?"
-            )
-            logger.info(f"[chatbot] respuesta de bienvenida, contexto: {ctx}")
-            return {"messages": [AIMessage(content=bienvenida)], "contexto_tecnico": ctx}
-
-        # --- RECOLECCIÓN DE DATOS (ejecutar siempre) ---
+        # --- EXTRACCIÓN DE DATOS SIEMPRE (incluso en primera interacción) ---
         if ultimo_mensaje:
             try:
                 extraccion = extractor_llm.invoke(
@@ -392,6 +378,32 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 elif any(k in ultimo_mensaje for k in ["aislado", "batería", "bateria", "finca", "autónomo", "off-grid"]):
                     ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
                     ctx["requiere_auditoria_electrica"] = True
+
+        # --- ACTUALIZAR run_name CON EL WHATSAPP NORMALIZADO ---
+        nombre_ctx = ctx.get("nombre", "Usuario")
+        whatsapp_ctx = ctx.get("whatsapp", "Pendiente")
+        nombre_run, whatsapp_run = normalizar_contacto(nombre_ctx, whatsapp_ctx, ctx.get("ciudad", ""))
+
+        config["run_name"] = f"Lead: {nombre_run}"
+        if "metadata" not in config:
+            config["metadata"] = {}
+        config["metadata"]["whatsapp"] = whatsapp_run
+        config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
+        config["metadata"]["vendedor"] = ctx.get("vendedor", "gerencia@aisa.com.gt")
+
+        # --- PRIMERA INTERACCIÓN: bienvenida guiada (con datos ya extraídos) ---
+        if len(state.get("messages", [])) == 1:
+            bienvenida = (
+                "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar.\n"
+                "Antes de comenzar, necesito algunos datos para poder ayudarte mejor:\n\n"
+                "1️⃣ Tu nombre completo\n"
+                "2️⃣ Tu número de WhatsApp (con código de país, ej. +502 1234-5678)\n"
+                "3️⃣ Tu correo electrónico (para enviarte la cotización)\n"
+                "4️⃣ ¿Qué productos te interesan? (ej. paneles solares, calentadores, bombas)\n\n"
+                "¡Empecemos! ¿Cómo te llamas?"
+            )
+            logger.info(f"[chatbot] respuesta de bienvenida con datos extraídos: {ctx}")
+            return {"messages": [AIMessage(content=bienvenida)], "contexto_tecnico": ctx}
 
         # --- PREGUNTAS GUIADAS PARA CAMPOS FALTANTES ---
         if not ctx.get("whatsapp") or ctx["whatsapp"] == "Pendiente":
@@ -434,13 +446,12 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if ctx.get("whatsapp") and ctx["whatsapp"] != "Pendiente":
             _, ctx["whatsapp"] = normalizar_contacto("", ctx["whatsapp"], "")
 
-        # --- LOGS DE DEPURACIÓN ---
-        logger.info(f"[chatbot] Extracción: nombre={ctx.get('nombre')}, whatsapp={ctx.get('whatsapp')}, email={ctx.get('email')}")
+        # --- LOGS Y PERSISTENCIA ---
+        logger.info(f"[chatbot] Extracción final: nombre={ctx.get('nombre')}, whatsapp={ctx.get('whatsapp')}, email={ctx.get('email')}")
         logger.info(f"[chatbot] Productos: {ctx.get('productos')}")
         logger.info(f"[chatbot] Vendedor: {ctx.get('vendedor')}")
         logger.info(f"[chatbot] Campos completos: {validar_campos_obligatorios(ctx)}")
 
-        # --- PERSISTIR EN BD SI TODOS LOS CAMPOS ESTÁN COMPLETOS ---
         if validar_campos_obligatorios(ctx):
             try:
                 import asyncio
@@ -474,17 +485,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         ontologia_dinamica = obtener_fragmento_ontologia(ctx.get("topologia"))
 
-        nombre_ctx = ctx.get("nombre", "Usuario")
-        whatsapp_ctx = ctx.get("whatsapp", "Pendiente")
-        nombre_run, whatsapp_run = normalizar_contacto(nombre_ctx, whatsapp_ctx, ctx.get("ciudad", ""))
-
-        config["run_name"] = f"Lead: {nombre_run}"
-        if "metadata" not in config:
-            config["metadata"] = {}
-        config["metadata"]["whatsapp"] = whatsapp_run
-        config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
-        config["metadata"]["vendedor"] = ctx.get("vendedor", "gerencia@aisa.com.gt")
-
         prompt_sistema = SystemMessage(
             content=(
                 f"Eres Jarvi, Ingeniero de Preventa de AISA Solar.\n"
@@ -500,11 +500,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             )
         )
 
-        # Invocar el LLM y manejar respuesta vacía
         respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
-        # --- CORRECCIÓN: Si el LLM no devuelve contenido, asignar mensaje de fallback ---
         if not respuesta.content:
-            logger.warning("El LLM devolvió una respuesta vacía. Usando mensaje de fallback.")
+            logger.warning("El LLM devolvió respuesta vacía. Usando fallback.")
             respuesta = AIMessage(
                 content="Lo siento, no pude generar una respuesta en este momento. Por favor, intenta de nuevo."
             )
