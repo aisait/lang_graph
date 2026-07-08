@@ -42,11 +42,14 @@ from ontology import obtener_fragmento_ontologia, buscar_productos_por_mensaje
 # --- CTFOM: módulo de telemetría cognitiva ---
 from telemetry import trace_id_var, span_id_var, parent_span_id_var, schedule_telemetry_event
 
-# === NUEVO: Importación del cliente de base de datos ===
+# --- Cliente de base de datos ---
 from db_client import actualizar_thread, obtener_thread_por_whatsapp, registrar_evento_auditoria
 
+# --- Nuevo módulo de ubicación ---
+from ubicacion import buscar_ubicacion
+
 # =============================================================================
-# === NUEVO: CONFIGURACIÓN DE VENDEDORES ===
+# CONFIGURACIÓN DE VENDEDORES
 # =============================================================================
 VENDEDORES_PATH = os.path.join(os.path.dirname(__file__), "vendedores.json")
 
@@ -67,13 +70,25 @@ def asignar_vendedor(whatsapp: str = None) -> str:
             return v["email"]
     return "gerencia@aisa.com.gt"
 
+def buscar_vendedor_por_nombre(texto: str) -> Optional[Dict[str, Any]]:
+    """Busca un vendedor por nombre en el JSON de vendedores."""
+    if not texto:
+        return None
+    vendedores = cargar_vendedores()
+    texto = texto.lower().strip()
+    for v in vendedores:
+        nombre = v.get("nombre", "").lower()
+        if nombre == texto or texto in nombre or nombre in texto:
+            return v
+    return None
+
 def validar_campos_obligatorios(ctx: dict) -> bool:
     """Verifica que todos los campos obligatorios estén presentes en el contexto."""
-    required = ["nombre", "whatsapp", "email", "productos", "vendedor"]
+    required = ["nombre", "whatsapp", "ubicacion", "productos", "vendedor"]
     return all(ctx.get(field) for field in required)
 
 # =============================================================================
-# FIN DE LAS NUEVAS FUNCIONES
+# FIN DE LAS FUNCIONES DE CONFIGURACIÓN
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -84,7 +99,6 @@ CODIGOS_AREA = {
     "guatemala": "+502", "honduras": "+504", "nicaragua": "+505",
     "panama": "+507", "panamá": "+507"
 }
-
 
 def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) -> tuple:
     """
@@ -117,7 +131,6 @@ def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) 
             whatsapp_formateado = f"{codigo_area} {base}"
     return nombre_normalizado, whatsapp_formateado
 
-
 # ---------------------------------------------------------------------------
 # Esquemas de datos
 # ---------------------------------------------------------------------------
@@ -125,7 +138,6 @@ class ExtractorContacto(BaseModel):
     nombre: Optional[str] = Field(None, description="Nombre de pila y apellidos.")
     telefono: Optional[str] = Field(None, description="Número telefónico.")
     email: Optional[str] = Field(None, description="Correo electrónico.")
-
 
 class InferenciaEnergetica(TypedDict):
     ciudad: Optional[str]
@@ -139,15 +151,16 @@ class InferenciaEnergetica(TypedDict):
     email: Optional[str]
     productos: Optional[List[str]]
     vendedor: Optional[str]
-    preguntando_whatsapp: Optional[bool]
-    preguntando_email: Optional[bool]
-    preguntando_productos: Optional[bool]
-
+    ubicacion: Optional[str]   # Label normalizado (Municipio, Departamento)
+    preguntando_whatsapp: bool
+    preguntando_email: bool
+    preguntando_productos: bool
+    preguntando_ubicacion: bool
+    preguntando_vendedor: bool
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     contexto_tecnico: InferenciaEnergetica
-
 
 # ---------------------------------------------------------------------------
 # Decorador CTFOM
@@ -160,7 +173,6 @@ def observe_node(layer: str = "graph", node_name: str = ""):
             span_id = str(uuid.uuid4())
             parent = span_id_var.get()
             span_id_var.set(span_id)
-
             start = time.perf_counter()
             try:
                 result = func(*args, **kwargs)
@@ -184,7 +196,6 @@ def observe_node(layer: str = "graph", node_name: str = ""):
                 span_id_var.set(parent)
         return wrapper
     return decorator
-
 
 # ---------------------------------------------------------------------------
 # Herramienta de persistencia de oportunidades
@@ -256,7 +267,6 @@ def procesar_oportunidad_backend(
     threading.Thread(target=tarea_background).start()
     return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
 
-
 def extraer_intencion_humana(messages: list) -> str:
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
@@ -273,14 +283,12 @@ def extraer_intencion_humana(messages: list) -> str:
                 return " ".join(textos).lower()
     return ""
 
-
 # ---------------------------------------------------------------------------
 # Construcción del grafo
 # ---------------------------------------------------------------------------
 def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
 
-    # Modelo de lenguaje principal (GPT-4o mini) con reintentos para rate limit
     llm = ChatOpenAI(
         model="gpt-4o-mini",
         temperature=0.1,
@@ -298,7 +306,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         logger.info(f"[clasificador] contexto recibido: {ctx}")
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
-            logger.info(f"[clasificador] contexto después (sin cambios): {ctx}")
             return {"contexto_tecnico": ctx}
         if not ctx.get("topologia"):
             if any(k in ultimo for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
@@ -319,18 +326,23 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         logger.info(f"[validador] contexto recibido: {ctx}")
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
-            logger.info(f"[validador] contexto después (sin cambios): {ctx}")
             return {"contexto_tecnico": ctx}
-        if not ctx.get("ciudad"):
-            if any(k in ultimo for k in ["guatemala", "mixco", "capital", "ciudad", "villa nueva"]):
-                ctx["ciudad"] = "Guatemala Metropolitana"
-                if ctx.get("requiere_auditoria_electrica"):
-                    ctx["empresa_electrica"] = "EEGSA"
-                    ctx["tarifa_base_gtq"] = 1.45
+        # Si ya tenemos ubicación validada, no hacemos nada
+        if ctx.get("ubicacion"):
+            return {"contexto_tecnico": ctx}
+        # Intentar validar ubicación con el JSON
+        ubicacion = buscar_ubicacion(ultimo)
+        if ubicacion:
+            ctx["ubicacion"] = ubicacion["label"]
+            # También podemos usar ciudad para compatibilidad
+            ctx["ciudad"] = ubicacion["municipio"]
+            if ctx.get("requiere_auditoria_electrica"):
+                ctx["empresa_electrica"] = "EEGSA"
+                ctx["tarifa_base_gtq"] = 1.45
         logger.info(f"[validador] contexto después: {ctx}")
         return {"contexto_tecnico": ctx}
 
-    # -------------------- Nodo: Chatbot (extracción inmediata) --------------------
+    # -------------------- Nodo: Chatbot (con recolección de datos) --------------------
     @auditar_fase(nombre_fase="Inferencia del Chatbot", criticidad="ALTA")
     @observe_node(node_name="chatbot")
     def chatbot_node(state: AgentState, config: RunnableConfig):
@@ -357,20 +369,29 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             except Exception as e:
                 logger.warning(f"Fallo en extracción LLM: {e}")
 
-            # Ciudad manual
-            if not ctx.get("ciudad"):
-                ciudades = ["guatemala", "mixco", "capital", "villa nueva", "escuintla",
-                            "jalapa", "chimaltenango", "chiquimula", "sacatepéquez",
-                            "sololá", "quetzaltenango", "retalhuleu", "suchitepéquez"]
-                for ciudad in ciudades:
-                    if ciudad in ultimo_mensaje:
-                        ctx["ciudad"] = ciudad.capitalize()
-                        if ctx.get("requiere_auditoria_electrica"):
-                            ctx["empresa_electrica"] = "EEGSA"
-                            ctx["tarifa_base_gtq"] = 1.45
-                        break
+            # Intentar extraer ubicación si no está
+            if not ctx.get("ubicacion"):
+                ubicacion = buscar_ubicacion(ultimo_mensaje)
+                if ubicacion:
+                    ctx["ubicacion"] = ubicacion["label"]
+                    ctx["ciudad"] = ubicacion["municipio"]
+                    if ctx.get("requiere_auditoria_electrica"):
+                        ctx["empresa_electrica"] = "EEGSA"
+                        ctx["tarifa_base_gtq"] = 1.45
 
-            # Topología manual
+            # Intentar extraer productos
+            if not ctx.get("productos") or len(ctx["productos"]) == 0:
+                productos = buscar_productos_por_mensaje(ultimo_mensaje)
+                if productos:
+                    ctx["productos"] = productos
+
+            # Intentar extraer vendedor
+            if not ctx.get("vendedor"):
+                vendedor = buscar_vendedor_por_nombre(ultimo_mensaje)
+                if vendedor:
+                    ctx["vendedor"] = vendedor["email"]
+
+            # Topología manual (si no está)
             if not ctx.get("topologia"):
                 if any(k in ultimo_mensaje for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
                     ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
@@ -379,70 +400,80 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
                     ctx["requiere_auditoria_electrica"] = True
 
-        # --- ACTUALIZAR run_name CON EL WHATSAPP NORMALIZADO ---
+        # --- ACTUALIZAR run_name Y METADATOS CON WHATSAPP NORMALIZADO ---
         nombre_ctx = ctx.get("nombre", "Usuario")
         whatsapp_ctx = ctx.get("whatsapp", "Pendiente")
         nombre_run, whatsapp_run = normalizar_contacto(nombre_ctx, whatsapp_ctx, ctx.get("ciudad", ""))
 
-        config["run_name"] = f"Lead: {nombre_run}"
+        config["run_name"] = whatsapp_run  # Número normalizado
         if "metadata" not in config:
             config["metadata"] = {}
         config["metadata"]["whatsapp"] = whatsapp_run
         config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
         config["metadata"]["vendedor"] = ctx.get("vendedor", "gerencia@aisa.com.gt")
+        config["metadata"]["tags"] = ctx.get("productos", [])
+        config["metadata"]["ubicacion"] = ctx.get("ubicacion", "PENDIENTE")
 
-        # --- PRIMERA INTERACCIÓN: bienvenida guiada (con datos ya extraídos) ---
+        # --- PRIMERA INTERACCIÓN: bienvenida (con datos ya extraídos) ---
         if len(state.get("messages", [])) == 1:
             bienvenida = (
                 "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar.\n"
                 "Antes de comenzar, necesito algunos datos para poder ayudarte mejor:\n\n"
                 "1️⃣ Tu nombre completo\n"
                 "2️⃣ Tu número de WhatsApp (con código de país, ej. +502 1234-5678)\n"
-                "3️⃣ Tu correo electrónico (para enviarte la cotización)\n"
-                "4️⃣ ¿Qué productos te interesan? (ej. paneles solares, calentadores, bombas)\n\n"
+                "3️⃣ ¿De qué municipio y departamento nos hablas?\n"
+                "4️⃣ ¿Qué productos o sistemas solares te interesan?\n\n"
                 "¡Empecemos! ¿Cómo te llamas?"
             )
-            logger.info(f"[chatbot] respuesta de bienvenida con datos extraídos: {ctx}")
+            logger.info(f"[chatbot] bienvenida con datos extraídos: {ctx}")
             return {"messages": [AIMessage(content=bienvenida)], "contexto_tecnico": ctx}
 
-        # --- PREGUNTAS GUIADAS PARA CAMPOS FALTANTES ---
+        # --- PREGUNTAS GUIADAS PARA DATOS FALTANTES (flujo estructurado) ---
+        # 1. Nombre
+        if not ctx.get("nombre") or ctx["nombre"] == "Usuario":
+            if not ctx.get("preguntando_nombre"):
+                ctx["preguntando_nombre"] = True
+                return {"messages": [AIMessage(content="¿Cómo te llamas?")], "contexto_tecnico": ctx}
+        else:
+            ctx["preguntando_nombre"] = False
+
+        # 2. WhatsApp
         if not ctx.get("whatsapp") or ctx["whatsapp"] == "Pendiente":
             if not ctx.get("preguntando_whatsapp"):
                 ctx["preguntando_whatsapp"] = True
-                return {
-                    "messages": [AIMessage(content="Para poder enviarte la cotización, necesito tu número de WhatsApp con código de país (ej. +502 1234-5678).")],
-                    "contexto_tecnico": ctx
-                }
+                return {"messages": [AIMessage(content="¿Cuál es tu número de WhatsApp con código de país?")], "contexto_tecnico": ctx}
         else:
             ctx["preguntando_whatsapp"] = False
 
-        if not ctx.get("email"):
-            if not ctx.get("preguntando_email"):
-                ctx["preguntando_email"] = True
-                return {
-                    "messages": [AIMessage(content="¿A qué correo electrónico te gustaría que te enviemos la cotización?")],
-                    "contexto_tecnico": ctx
-                }
+        # 3. Ubicación (validada contra JSON)
+        if not ctx.get("ubicacion"):
+            if not ctx.get("preguntando_ubicacion"):
+                ctx["preguntando_ubicacion"] = True
+                return {"messages": [AIMessage(content="¿De qué municipio y departamento nos hablas?")], "contexto_tecnico": ctx}
         else:
-            ctx["preguntando_email"] = False
+            ctx["preguntando_ubicacion"] = False
 
+        # 4. Productos
         if not ctx.get("productos") or len(ctx["productos"]) == 0:
-            productos = buscar_productos_por_mensaje(ultimo_mensaje)
-            if productos:
-                ctx["productos"] = productos
-            else:
-                if not ctx.get("preguntando_productos"):
-                    ctx["preguntando_productos"] = True
-                    return {
-                        "messages": [AIMessage(content="¿Qué tipo de sistemas solares te interesan? Por ejemplo: paneles solares, calentadores, bombas de agua, etc.")],
-                        "contexto_tecnico": ctx
-                    }
+            if not ctx.get("preguntando_productos"):
+                ctx["preguntando_productos"] = True
+                return {"messages": [AIMessage(content="¿Qué productos o sistemas solares te interesan? (ej. paneles, calentadores, bombas)")], "contexto_tecnico": ctx}
         else:
             ctx["preguntando_productos"] = False
 
+        # 5. Vendedor (pregunta sutil)
         if not ctx.get("vendedor"):
-            ctx["vendedor"] = asignar_vendedor(ctx.get("whatsapp"))
+            if not ctx.get("preguntando_vendedor"):
+                ctx["preguntando_vendedor"] = True
+                # Preguntar sin que parezca una encuesta
+                return {"messages": [AIMessage(content="¿Ya has recibido atención de algún vendedor de AISA Solar?")], "contexto_tecnico": ctx}
+        else:
+            ctx["preguntando_vendedor"] = False
+            # Si no se mencionó, asignar default
+            if not ctx.get("vendedor"):
+                ctx["vendedor"] = asignar_vendedor(ctx.get("whatsapp"))
 
+        # Normalizar WhatsApp después de las preguntas
         if ctx.get("whatsapp") and ctx["whatsapp"] != "Pendiente":
             _, ctx["whatsapp"] = normalizar_contacto("", ctx["whatsapp"], "")
 
@@ -450,8 +481,10 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         logger.info(f"[chatbot] Extracción final: nombre={ctx.get('nombre')}, whatsapp={ctx.get('whatsapp')}, email={ctx.get('email')}")
         logger.info(f"[chatbot] Productos: {ctx.get('productos')}")
         logger.info(f"[chatbot] Vendedor: {ctx.get('vendedor')}")
+        logger.info(f"[chatbot] Ubicación: {ctx.get('ubicacion')}")
         logger.info(f"[chatbot] Campos completos: {validar_campos_obligatorios(ctx)}")
 
+        # Persistir si todos los campos están completos
         if validar_campos_obligatorios(ctx):
             try:
                 import asyncio
@@ -461,7 +494,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                         thread_id=thread_id,
                         nombre=ctx["nombre"],
                         whatsapp=ctx["whatsapp"],
-                        email=ctx["email"],
+                        email=ctx.get("email"),
                         productos=ctx["productos"],
                         vendedor=ctx["vendedor"],
                         trace_id=trace_id_var.get()
@@ -477,7 +510,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             except Exception as e:
                 logger.error(f"Error al persistir datos del cliente: {e}")
 
-        # --- CONTINUAR CON EL FLUJO NORMAL DEL CHATBOT ---
+        # --- CONTINUAR CON EL FLUJO NORMAL DEL CHATBOT (resolver dudas) ---
+        # Reglas de recolección de datos según topología
         if ctx.get("requiere_auditoria_electrica"):
             regla_datos = "1. DEBES recopilar sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta."
         else:
@@ -489,7 +523,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             content=(
                 f"Eres Jarvi, Ingeniero de Preventa de AISA Solar.\n"
                 f"Responde con los datos auditados:\n"
-                f"- Ubicación: {ctx.get('ciudad', 'PENDIENTE')}\n"
+                f"- Ubicación: {ctx.get('ubicacion', 'PENDIENTE')}\n"
                 f"- Distribuidora: {ctx.get('empresa_electrica', 'PENDIENTE')}\n"
                 f"- Tarifa: GTQ {ctx.get('tarifa_base_gtq', 'PENDIENTE')} /kWh\n"
                 f"REGLAS: {regla_datos}\n"
@@ -500,6 +534,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             )
         )
 
+        # Invocar LLM y manejar respuesta vacía
         respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
         if not respuesta.content:
             logger.warning("El LLM devolvió respuesta vacía. Usando fallback.")
