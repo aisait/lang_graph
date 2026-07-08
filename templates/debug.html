@@ -37,7 +37,7 @@
             font-size: 0.9rem;
             line-height: 1.6;
             min-height: 0;
-            margin-bottom: 20px;
+            margin-bottom: 10px;
         }
         #output .system { color: #66aaff; }
         #output .user { color: #ffcc00; font-weight: bold; }
@@ -79,6 +79,32 @@
         #input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
         .log-line { padding: 2px 0; border-bottom: 1px solid #1a1a1a; }
         .separator { border: none; border-top: 1px dashed #2a4a2a; margin: 6px 0; }
+        .tool-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #2a2a2a;
+            margin-bottom: 10px;
+        }
+        .tool-row input[type="text"] {
+            flex: 1;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            color: #00ff99;
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+        .tool-row button {
+            background: #0066cc;
+            color: white;
+            border: none;
+            padding: 6px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .tool-row button:hover { background: #0055aa; }
     </style>
 </head>
 <body>
@@ -86,9 +112,16 @@
         <span class="title">⚡ JARVI · DEBUG CONSOLE</span>
         <span class="status" id="status">🟢 Conectado a: <span id="backend-url">{{ backend_url }}</span></span>
     </div>
+    <!-- Barra de herramientas para pegar enlaces -->
+    <div class="tool-row">
+        <input type="text" id="url-input" placeholder="Pega aquí el enlace de imagen (.jpg, .png) o audio (.mp3, .wav)">
+        <button id="process-url-btn">Procesar</button>
+        <span style="color: #aaa; font-size: 0.8rem;">|</span>
+        <button id="clear-btn" style="background: #663333;">Limpiar</button>
+    </div>
     <div id="output">
         <div class="system">[Sistema] Consola de depuración iniciada.</div>
-        <div class="system">[Sistema] Escribe tu mensaje y presiona Enter.</div>
+        <div class="system">[Sistema] Escribe tu mensaje o pega un enlace de archivo multimedia.</div>
         <div class="system" id="thread-display">[Sistema] Thread ID: <span id="thread-id">(cargando...)</span></div>
         <hr class="separator">
     </div>
@@ -102,6 +135,9 @@
             const input = document.getElementById('user-input');
             const sendBtn = document.getElementById('send-btn');
             const threadDisplay = document.getElementById('thread-id');
+            const urlInput = document.getElementById('url-input');
+            const processUrlBtn = document.getElementById('process-url-btn');
+            const clearBtn = document.getElementById('clear-btn');
 
             let currentThreadId = null;
             function getThreadId() {
@@ -117,7 +153,6 @@
 
             let currentAssistantMessage = '';
             let assistantDiv = null;
-            let tokenBuffer = '';
 
             function appendLog(text, type = 'assistant') {
                 const div = document.createElement('div');
@@ -143,9 +178,7 @@
             }
 
             function appendToken(token) {
-                if (!assistantDiv) {
-                    startAssistantMessage();
-                }
+                if (!assistantDiv) { startAssistantMessage(); }
                 currentAssistantMessage += token;
                 assistantDiv.textContent = currentAssistantMessage + '▌';
                 output.scrollTop = output.scrollHeight;
@@ -167,10 +200,8 @@
                 currentAssistantMessage = '';
             }
 
-            async function sendMessage() {
-                const message = input.value.trim();
+            async function sendMessage(message) {
                 if (!message) return;
-
                 appendUserMessage(message);
                 input.value = '';
                 input.disabled = true;
@@ -209,7 +240,6 @@
                     while (true) {
                         const { done, value } = await reader.read();
                         if (done) break;
-
                         buffer += decoder.decode(value, { stream: true });
                         let lines = buffer.split('\n');
                         buffer = lines.pop() || '';
@@ -217,7 +247,6 @@
                         for (let line of lines) {
                             line = line.trim();
                             if (!line || !line.startsWith('data: ')) continue;
-
                             const jsonStr = line.slice(6);
                             try {
                                 const data = JSON.parse(jsonStr);
@@ -231,20 +260,16 @@
                                     contexto = data.contexto_tecnico;
                                     finishAssistantMessage(contexto);
                                 } else {
-                                    // Mostrar cualquier otro evento como raw
                                     appendLog(`[RAW] ${jsonStr}`, 'raw');
                                 }
                             } catch (e) {
-                                // Si falla el parseo, mostrar el evento crudo
                                 appendLog(`[EVENT] ${jsonStr}`, 'raw');
                             }
                         }
                     }
-
                     if (currentAssistantMessage) {
                         finishAssistantMessage();
                     }
-
                 } catch (error) {
                     const loader = document.getElementById('loading-indicator');
                     if (loader) loader.remove();
@@ -256,12 +281,92 @@
                 }
             }
 
-            sendBtn.addEventListener('click', sendMessage);
+            // Enviar mensaje de texto
+            sendBtn.addEventListener('click', () => {
+                const msg = input.value.trim();
+                if (msg) sendMessage(msg);
+            });
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    sendMessage();
+                    const msg = input.value.trim();
+                    if (msg) sendMessage(msg);
                 }
+            });
+
+            // Procesar URL pegada (imagen o audio)
+            processUrlBtn.addEventListener('click', async () => {
+                const url = urlInput.value.trim();
+                if (!url) {
+                    appendLog('[ERROR] Por favor, pega una URL válida.', 'error');
+                    return;
+                }
+
+                // Detectar tipo por extensión
+                const lower = url.toLowerCase();
+                let endpoint = '';
+                let desc = '';
+
+                if (lower.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/)) {
+                    endpoint = '/api/vision/analyze';
+                    desc = 'Imagen';
+                } else if (lower.match(/\.(mp3|wav|m4a|flac|ogg|aac)$/)) {
+                    endpoint = '/api/stt';
+                    desc = 'Audio';
+                } else {
+                    appendLog('[ERROR] El enlace no parece ser de imagen o audio válido.', 'error');
+                    return;
+                }
+
+                appendLog(`[INFO] Procesando ${desc} desde URL: ${url}`, 'system');
+
+                try {
+                    const response = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: url })
+                    });
+
+                    const data = await response.json();
+                    if (response.ok) {
+                        if (endpoint === '/api/vision/analyze') {
+                            const extracted = data.extracted_data || {};
+                            appendLog(`[RESULTADO] Factura: Empresa: ${extracted.empresa_electrica || 'N/A'}, Consumo: ${extracted.consumo_kwh || 'N/A'} kWh, Monto: Q${extracted.monto_factura || 'N/A'}`, 'context');
+                        } else if (endpoint === '/api/stt') {
+                            const transcript = data.transcript || '';
+                            appendLog(`[TRANSCRIPCIÓN] ${transcript}`, 'assistant');
+                        }
+                        urlInput.value = '';
+                    } else {
+                        appendLog(`[ERROR] ${data.error || 'Error desconocido'}`, 'error');
+                    }
+                } catch (error) {
+                    appendLog(`[EXCEPCIÓN] ${error.message}`, 'error');
+                }
+            });
+
+            // Limpiar output
+            clearBtn.addEventListener('click', () => {
+                while (output.children.length > 0) {
+                    output.removeChild(output.lastChild);
+                }
+                // Reinsertar mensajes de sistema
+                const sys = document.createElement('div');
+                sys.className = 'system';
+                sys.textContent = '[Sistema] Consola limpiada.';
+                output.appendChild(sys);
+                const sys2 = document.createElement('div');
+                sys2.className = 'system';
+                sys2.textContent = '[Sistema] Escribe tu mensaje o pega un enlace de archivo multimedia.';
+                output.appendChild(sys2);
+                const sys3 = document.createElement('div');
+                sys3.className = 'system';
+                sys3.id = 'thread-display';
+                sys3.innerHTML = '[Sistema] Thread ID: <span id="thread-id">' + currentThreadId + '</span>';
+                output.appendChild(sys3);
+                const sep = document.createElement('hr');
+                sep.className = 'separator';
+                output.appendChild(sep);
             });
 
             input.focus();
