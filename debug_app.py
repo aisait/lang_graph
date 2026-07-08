@@ -1,12 +1,7 @@
 """
-debug_app.py
-Consola de depuración CLI para JARVI 2.0.
-Proxy SSE entre el frontend (HTML) y el backend (FastAPI).
-Mantiene la misma lógica de recolección de datos (nombre, WhatsApp, email, productos, vendedor)
-al reenviar las peticiones al backend, que es el encargado de ejecutar el grafo y persistir.
-Cumple con ISO/IEC 25010 (Fiabilidad) y 29119 (Pruebas).
+debug_app.py - Consola de depuración CLI para JARVI 2.0.
+Proxy SSE y endpoints para procesamiento de imágenes y audio (archivo o URL).
 """
-
 import os
 import json
 import uuid
@@ -14,6 +9,10 @@ import logging
 from flask import Flask, render_template, request, Response, jsonify, stream_with_context
 import requests
 from urllib.parse import urljoin
+import base64
+
+import vision
+import audio
 
 # ---------------------------------------------------------------------------
 # Configuración
@@ -31,28 +30,21 @@ if not API_KEY:
 app = Flask(__name__)
 
 # ---------------------------------------------------------------------------
-# Ruta principal: sirve la interfaz CLI
+# Ruta principal
 # ---------------------------------------------------------------------------
 @app.route('/')
 def index():
     return render_template('debug.html', backend_url=BACKEND_URL)
 
-# ---------------------------------------------------------------------------
-# Health check
-# ---------------------------------------------------------------------------
 @app.route('/health')
 def health():
     return jsonify({"status": "ok", "service": "cliente-debug", "backend": BACKEND_URL})
 
 # ---------------------------------------------------------------------------
-# Proxy SSE: recibe mensaje del frontend y lo reenvía al backend
+# Proxy SSE
 # ---------------------------------------------------------------------------
 @app.route('/api/chat/stream', methods=['POST'])
 def chat_stream():
-    """
-    Recibe el mensaje del usuario y el thread_id (si no se envía, se genera uno).
-    Reenvía la petición al backend y retransmite el SSE tal cual.
-    """
     data = request.get_json()
     if not data or 'message' not in data:
         return jsonify({"error": "Mensaje requerido"}), 400
@@ -62,15 +54,9 @@ def chat_stream():
     logger.info(f"Debug request | thread: {thread_id} | msg: {message[:50]}...")
 
     def generate():
-        # Evento de inicio
         yield f"data: {json.dumps({'info': f'[DEBUG] Conectando a {BACKEND_URL}'})}\n\n"
-
-        headers = {
-            "Authorization": f"Bearer {API_KEY}",
-            "Content-Type": "application/json"
-        }
+        headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
         payload = {"thread_id": thread_id, "message": message}
-
         try:
             resp = requests.post(
                 urljoin(BACKEND_URL, '/chat'),
@@ -79,16 +65,12 @@ def chat_stream():
                 stream=True,
                 timeout=120
             )
-
             if resp.status_code != 200:
                 yield f"data: {json.dumps({'error': f'HTTP {resp.status_code}: {resp.text[:200]}'})}\n\n"
                 return
-
-            # Retransmitir cada línea del SSE sin modificaciones
             for line in resp.iter_lines(decode_unicode=True):
                 if line:
                     yield f"data: {line}\n\n"
-
         except requests.exceptions.ConnectionError:
             yield f"data: {json.dumps({'error': '[ERROR] No se pudo conectar al backend'})}\n\n"
         except Exception as e:
@@ -97,18 +79,103 @@ def chat_stream():
     return Response(
         stream_with_context(generate()),
         mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no'
-        }
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
     )
 
 # ---------------------------------------------------------------------------
-# Endpoint de historial (para futura implementación)
+# ENDPOINT: Análisis de imágenes (archivo o URL)
+# ---------------------------------------------------------------------------
+@app.route('/api/vision/analyze', methods=['POST'])
+def analyze_image():
+    """
+    Acepta:
+      - multipart/form-data con campo 'image'
+      - JSON con campo 'url'
+    """
+    # Caso 1: URL en JSON
+    if request.is_json:
+        data = request.get_json()
+        if 'url' in data:
+            try:
+                datos = vision.procesar_imagen_desde_url(data['url'])
+                return jsonify({"extracted_data": datos})
+            except Exception as e:
+                logger.error(f"Error en vision desde URL: {e}")
+                return jsonify({"error": str(e)}), 500
+        else:
+            return jsonify({"error": "Se requiere campo 'url'"}), 400
+
+    # Caso 2: Archivo subido
+    if 'image' not in request.files:
+        return jsonify({"error": "No se envió ninguna imagen"}), 400
+    file = request.files['image']
+    if file.filename == '':
+        return jsonify({"error": "Nombre de archivo vacío"}), 400
+    img_bytes = file.read()
+    base64_img = base64.b64encode(img_bytes).decode('utf-8')
+    try:
+        datos = vision.procesar_imagen_factura(base64_img)
+        return jsonify({"extracted_data": datos})
+    except Exception as e:
+        logger.error(f"Error en vision: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------------------------------------------------------
+# ENDPOINT: Speech-to-Text (archivo o URL)
+# ---------------------------------------------------------------------------
+@app.route('/api/stt', methods=['POST'])
+def speech_to_text():
+    # Caso 1: URL en JSON
+    if request.is_json:
+        data = request.get_json()
+        if 'url' in data:
+            try:
+                transcript = audio.transcribir_audio_desde_url(data['url'])
+                return jsonify({"transcript": transcript})
+            except Exception as e:
+                logger.error(f"Error en STT desde URL: {e}")
+                return jsonify({"error": str(e)}), 500
+        else:
+            return jsonify({"error": "Se requiere campo 'url'"}), 400
+
+    # Caso 2: Archivo subido
+    if 'audio' not in request.files:
+        return jsonify({"error": "No se envió ningún archivo de audio"}), 400
+    file = request.files['audio']
+    if file.filename == '':
+        return jsonify({"error": "Nombre de archivo vacío"}), 400
+    audio_bytes = file.read()
+    try:
+        transcript = audio.transcribir_audio(audio_bytes, file.filename)
+        return jsonify({"transcript": transcript})
+    except Exception as e:
+        logger.error(f"Error en STT: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------------------------------------------------------
+# ENDPOINT: Text-to-Speech (siempre JSON)
+# ---------------------------------------------------------------------------
+@app.route('/api/tts', methods=['POST'])
+def text_to_speech():
+    data = request.get_json()
+    if not data or 'text' not in data:
+        return jsonify({"error": "Se requiere campo 'text'"}), 400
+    text = data['text']
+    voice = data.get('voice', 'alloy')
+    try:
+        audio_bytes = audio.sintetizar_voz(text, voice)
+        return Response(audio_bytes, mimetype='audio/mpeg', headers={
+            'Content-Disposition': 'attachment; filename="speech.mp3"'
+        })
+    except Exception as e:
+        logger.error(f"Error en TTS: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------------------------------------------------------
+# Historial (mock)
 # ---------------------------------------------------------------------------
 @app.route('/api/history/<thread_id>', methods=['GET'])
 def get_history(thread_id):
-    """Devuelve el historial de mensajes (mock)."""
     return jsonify({"thread_id": thread_id, "messages": []})
 
 # ---------------------------------------------------------------------------
