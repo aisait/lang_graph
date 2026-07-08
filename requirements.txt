@@ -1,21 +1,22 @@
 # requirements.txt
 # Dependencias del proyecto JARVI 2.0 con versiones compatibles.
 # Estándares: ISO/IEC 25010, ISO/IEC 29119.
+# Corregido para resolver conflicto entre fastapi y langgraph-api.
 
 # ---------------------------------------------------------------------
 # Frameworks Web
 # ---------------------------------------------------------------------
-fastapi==0.111.0
-uvicorn[standard]==0.30.1
+fastapi>=0.115.0               # Se actualiza para usar starlette >= 0.38.6
+uvicorn[standard]>=0.30.1
 streamlit>=1.38.0
-python-multipart==0.0.9
+python-multipart>=0.0.9
 
 # ---------------------------------------------------------------------
 # Core Agéntico (LangChain / LangGraph / OpenAI)
 # ---------------------------------------------------------------------
 langchain>=0.2.6,<0.3.0
 langgraph>=0.2.56,<0.3.0
-langgraph-api==0.0.12
+langgraph-api==0.0.12          # Versión fija, se requiere starlette>=0.38.6
 langgraph-cli[inmem]>=0.4.0
 langchain-openai>=0.1.9
 openai>=1.50.0
@@ -40,8 +41,8 @@ psutil>=5.9.8
 google-auth>=2.30.0
 google-auth-oauthlib>=1.2.0
 google-api-python-client>=2.198.0
-Flask>=2.2.0
-requests>=2.32.3
+Flask>=2.2.0                   # Para cliente-debug
+tenacity>=8.2.0                # Para reintentos robustos (opcional, pero recomendado)
 
 # ---------------------------------------------------------------------
 # Dependencias adicionales para el visualizador
