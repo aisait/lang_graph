@@ -224,10 +224,10 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA DE PERSISTENCIA DE OPORTUNIDADES
+# HERRAMIENTA DE PERSISTENCIA DE OPORTUNIDADES (con orden de decoradores corregido)
 # =============================================================================
-@tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
+@tool(description="Envía los datos del lead al backend a través de correo y WhatsApp")
 def procesar_oportunidad_backend(
     nombre_apellidos: str,
     departamento_municipio: str,
@@ -238,6 +238,10 @@ def procesar_oportunidad_backend(
     numero_whatsapp: str,
     resumen_18_palabras: str
 ) -> str:
+    """
+    Envía de forma asíncrona los leads estructurados capturados por la IA
+    hacia los canales del Controller (correo Gmail y webhook de WhatsApp).
+    """
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
     def tarea_background():
         num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
