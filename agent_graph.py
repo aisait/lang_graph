@@ -123,7 +123,7 @@ class InferenciaEnergetica(TypedDict):
     productos: Optional[List[str]]
     vendedor: Optional[str]
     ubicacion: Optional[str]
-    paso_actual: int  # 0=inicio, 1=nombre, 2=whatsapp, 3=ubicacion, 4=productos, 5=vendedor, 6=completo
+    paso_actual: int  # 1=nombre, 2=whatsapp, 3=ubicacion, 4=productos, 5=vendedor, 6=completo
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -234,13 +234,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
         logger = logging.getLogger("jarvi.agent")
 
-        # --- Inicializar paso actual ---
+        # --- Inicializar paso_actual si no existe ---
         if "paso_actual" not in ctx:
             ctx["paso_actual"] = 0
 
-        logger.info(f"[chatbot] Paso actual: {ctx['paso_actual']}, contexto: {ctx}")
-
-        # --- PRIMERA INTERACCIÓN: iniciar flujo con Paso 1 ---
+        # --- SI ES LA PRIMERA INTERACCIÓN, INICIAR FLUJO ---
         if len(state.get("messages", [])) == 1 and ctx["paso_actual"] == 0:
             ctx["paso_actual"] = 1
             return {
@@ -250,6 +248,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         # --- EXTRACCIÓN DE DATOS DEL MENSAJE ACTUAL ---
         if ultimo_mensaje:
+            # Intentar extraer nombre, teléfono y email con el extractor LLM
             try:
                 extraccion = extractor_llm.invoke(
                     f"Del mensaje, extrae nombre (campo 'nombre'), teléfono (campo 'telefono') y email (campo 'email'). "
@@ -263,6 +262,18 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     ctx["email"] = extraccion.email
             except Exception as e:
                 logger.warning(f"Extractor LLM falló: {e}")
+
+            # Si el extractor falló, usar regex simple para nombre y teléfono
+            if not ctx.get("nombre"):
+                # Buscar patrones como "me llamo X", "soy X", "mi nombre es X"
+                match = re.search(r"(?:me llamo|soy|mi nombre es|nombre:|llamo)\s*([A-Za-záéíóúñ\s]+)", ultimo_mensaje, re.IGNORECASE)
+                if match:
+                    ctx["nombre"] = match.group(1).strip().title()
+            if not ctx.get("whatsapp"):
+                # Buscar número de teléfono (simple)
+                match = re.search(r"(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}", ultimo_mensaje)
+                if match:
+                    _, ctx["whatsapp"] = normalizar_contacto("", match.group(0), "")
 
             # Ubicación
             if not ctx.get("ubicacion"):
@@ -283,7 +294,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 if vendedor:
                     ctx["vendedor"] = vendedor["email"]
 
-            # Topología
+            # Topología (solo si no está)
             if not ctx.get("topologia"):
                 if any(k in ultimo_mensaje for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
                     ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
@@ -292,7 +303,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
                     ctx["requiere_auditoria_electrica"] = True
 
-            # --- Avanzar al siguiente paso si ya tenemos el dato ---
+            # --- AVANZAR AL SIGUIENTE PASO SI EL DATO YA ESTÁ ---
             if ctx.get("nombre") and ctx["paso_actual"] == 1:
                 ctx["paso_actual"] = 2
             if ctx.get("whatsapp") and ctx["paso_actual"] == 2:
@@ -305,7 +316,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["paso_actual"] = 6
 
         # --- PREGUNTAS SEGÚN EL PASO ACTUAL ---
-        paso = ctx.get("paso_actual", 1)
+        paso = ctx["paso_actual"]
 
         if paso == 1 and not ctx.get("nombre"):
             return {"messages": [AIMessage(content="¿Cómo te llamas?")], "contexto_tecnico": ctx}
@@ -320,9 +331,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             return {"messages": [AIMessage(content="¿Qué productos o sistemas solares te interesan? (ej. paneles, calentadores, bombas)")], "contexto_tecnico": ctx}
 
         if paso == 5 and not ctx.get("vendedor"):
-            # Asignar vendedor por defecto si el usuario no menciona ninguno
-            if not ctx.get("vendedor"):
-                ctx["vendedor"] = asignar_vendedor_default()
+            # Asignar vendedor por defecto si no se mencionó
+            ctx["vendedor"] = asignar_vendedor_default()
             return {"messages": [AIMessage(content="Perfecto, ya tengo todos los datos necesarios. ¿En qué más puedo ayudarte?")], "contexto_tecnico": ctx}
 
         # --- FLUJO COMPLETO (paso 6): responder preguntas técnicas ---
@@ -390,8 +400,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 respuesta = AIMessage(content="Lo siento, no pude generar una respuesta. Intenta de nuevo.")
             return {"messages": [respuesta], "contexto_tecnico": ctx}
 
-        # --- Si llegamos aquí sin pasar a paso 6, forzar finalización ---
-        # Esto evita bucles infinitos
+        # --- Si llegamos aquí sin haber completado, forzar paso 6 (seguridad) ---
         if paso < 6:
             ctx["paso_actual"] = 6
             return {"messages": [AIMessage(content="Vamos a finalizar la recolección de datos.")], "contexto_tecnico": ctx}
