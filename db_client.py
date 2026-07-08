@@ -1,6 +1,7 @@
 """
 db_client.py
 Cliente de base de datos para operaciones CRUD sobre threads, audit_events y telemetry_events.
+Incluye función atómica para acumular costo por thread.
 Cumple con ISO/IEC 25010 (Fiabilidad) y 29119 (Pruebas).
 """
 
@@ -46,11 +47,15 @@ async def actualizar_thread(
             "email": email,
             "productos": productos or [],
             "vendedor": vendedor,
-            "trace_id": trace_id
+            "trace_id": trace_id,
+            "cumulative_cost": 0.0  # Inicializar acumulador de costo
         }
 
         if existing:
-            # Actualizar
+            # Actualizar (preservar cumulative_cost existente)
+            old_metadata = existing["metadata"] or {}
+            if "cumulative_cost" in old_metadata:
+                metadata["cumulative_cost"] = old_metadata["cumulative_cost"]
             await conn.execute(
                 """
                 UPDATE threads
@@ -145,6 +150,60 @@ async def registrar_evento_auditoria(
     except Exception as e:
         logger.error(f"Error al registrar evento de auditoría: {e}")
         return False
+    finally:
+        if conn:
+            await conn.close()
+
+# =============================================================================
+# NUEVA FUNCIÓN: ACUMULACIÓN DE COSTO POR THREAD
+# =============================================================================
+async def acumular_costo_thread(thread_id: str, costo: float) -> bool:
+    """
+    Acumula el costo de una llamada al LLM en el metadata del thread.
+    Usa jsonb_set para actualizar atómicamente sin leer primero.
+    """
+    conn = None
+    try:
+        conn = await get_db_connection()
+        await conn.execute(
+            """
+            UPDATE threads
+            SET metadata = jsonb_set(
+                metadata,
+                '{cumulative_cost}',
+                to_jsonb(COALESCE((metadata->>'cumulative_cost')::numeric, 0) + $1)
+            )
+            WHERE thread_id = $2
+            """,
+            costo,
+            thread_id
+        )
+        logger.info(f"Costo acumulado {costo:.6f} para thread {thread_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Error al acumular costo para thread {thread_id}: {e}")
+        return False
+    finally:
+        if conn:
+            await conn.close()
+
+async def obtener_costo_acumulado(thread_id: str) -> float:
+    """
+    Obtiene el costo acumulado actual de un thread.
+    """
+    conn = None
+    try:
+        conn = await get_db_connection()
+        row = await conn.fetchrow(
+            "SELECT metadata->>'cumulative_cost' as cost FROM threads WHERE thread_id = $1",
+            thread_id
+        )
+        if row and row["cost"]:
+            return float(row["cost"])
+        return 0.0
+    except Exception as e:
+        logger.error(f"Error al obtener costo acumulado para thread {thread_id}: {e}")
+        return 0.0
     finally:
         if conn:
             await conn.close()
