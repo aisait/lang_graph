@@ -1,6 +1,8 @@
 """
 agent_graph.py - Módulo central del grafo agéntico de JARVI 2.0.
-Implementa un flujo de recolección de datos en 5 pasos (nombre → WhatsApp → ubicación → productos → vendedor).
+Implementa flujo de recolección de datos en 5 pasos (nombre → WhatsApp → ubicación → productos → vendedor),
+failover con 3 API Keys de OpenAI y acumulación de costo por thread.
+Estándares: ISO/IEC 25010, ISO/IEC 29119, ISO/IEC 27001.
 """
 
 import os
@@ -17,6 +19,7 @@ from email.mime.multipart import MIMEMultipart
 import base64
 import requests
 from pydantic import BaseModel, Field
+from openai import RateLimitError
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -34,8 +37,64 @@ import config
 from audit import auditar_fase
 from ontology import obtener_fragmento_ontologia, buscar_productos_por_mensaje
 from telemetry import trace_id_var, span_id_var, parent_span_id_var, schedule_telemetry_event
-from db_client import actualizar_thread, registrar_evento_auditoria
+from db_client import (
+    actualizar_thread,
+    registrar_evento_auditoria,
+    acumular_costo_thread,
+    obtener_costo_acumulado,
+    get_db_connection
+)
 from ubicacion import buscar_ubicacion
+
+# =============================================================================
+# CONFIGURACIÓN DE API KEYS Y PRECIOS
+# =============================================================================
+OPENAI_KEYS = [
+    os.getenv("OPENAI_API_KEY_1"),
+    os.getenv("OPENAI_API_KEY_2"),
+    os.getenv("OPENAI_API_KEY_3")
+]
+OPENAI_KEYS = [k for k in OPENAI_KEYS if k]  # Filtrar vacías
+
+PRICE_INPUT = 0.150   # $0.150 por 1M input tokens (gpt-4o-mini)
+PRICE_OUTPUT = 0.600  # $0.600 por 1M output tokens
+
+def calcular_costo_llm(response) -> float:
+    """Calcula el costo de una respuesta de OpenAI basado en el consumo de tokens."""
+    try:
+        token_usage = response.response_metadata.get("token_usage", {})
+        prompt_tokens = token_usage.get("prompt_tokens", 0)
+        completion_tokens = token_usage.get("completion_tokens", 0)
+        costo = (prompt_tokens * PRICE_INPUT + completion_tokens * PRICE_OUTPUT) / 1_000_000
+        return costo
+    except Exception:
+        return 0.0
+
+def invoke_llm_with_failover(messages, config, model="gpt-4o-mini", temperature=0.1, max_retries=3):
+    """
+    Intenta invocar a OpenAI con las claves en orden hasta que una funcione.
+    Retorna (respuesta, costo).
+    """
+    if not OPENAI_KEYS:
+        raise RuntimeError("No hay API Keys de OpenAI configuradas.")
+    
+    last_error = None
+    for key in OPENAI_KEYS:
+        try:
+            llm = ChatOpenAI(api_key=key, model=model, temperature=temperature, max_retries=max_retries)
+            response = llm.invoke(messages, config=config)
+            costo = calcular_costo_llm(response)
+            logging.getLogger("jarvi.agent").info(f"Llamada exitosa con clave {key[:8]}..., costo: ${costo:.6f}")
+            return response, costo
+        except RateLimitError as e:
+            last_error = e
+            logging.getLogger("jarvi.agent").warning(f"Rate limit con clave {key[:8]}..., intentando siguiente...")
+            continue
+        except Exception as e:
+            last_error = e
+            logging.getLogger("jarvi.agent").warning(f"Error con clave {key[:8]}...: {e}, intentando siguiente...")
+            continue
+    raise last_error or RuntimeError("Todas las claves fallaron.")
 
 # =============================================================================
 # CONFIGURACIÓN DE VENDEDORES
@@ -159,13 +218,71 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA DE PERSISTENCIA
+# HERRAMIENTA DE PERSISTENCIA DE OPORTUNIDADES
 # =============================================================================
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
-def procesar_oportunidad_backend(...):
-    # (sin cambios, igual que en versiones anteriores)
-    pass
+def procesar_oportunidad_backend(
+    nombre_apellidos: str,
+    departamento_municipio: str,
+    consumo_actual: str,
+    empresa_electrica: str,
+    definicion_necesidad: str,
+    listado_equipos_html: str,
+    numero_whatsapp: str,
+    resumen_18_palabras: str
+) -> str:
+    nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
+    def tarea_background():
+        num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
+        try:
+            msg = MIMEMultipart()
+            msg['To'] = config.CONTROLLER_EMAIL
+            msg['From'] = config.SMTP_USER
+            msg['Subject'] = resumen_18_palabras
+            cuerpo = (
+                f"Oportunidad Validada por Auditoría ISO:\n\n"
+                f"Cliente: {nombre_norm}\nWhatsApp: {whatsapp_norm}\n"
+                f"Ubicación: {departamento_municipio}\nConsumo: {consumo_actual}\n"
+                f"Distribuidora: {empresa_electrica}\nEspecificación: {definicion_necesidad}\n\n"
+                f"Equipos Propuestos:\n{listado_equipos_html}"
+            )
+            msg.attach(MIMEText(cuerpo, 'plain'))
+            creds = Credentials(
+                token=None,
+                refresh_token=os.getenv("GMAIL_REFRESH_TOKEN"),
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=os.getenv("GMAIL_CLIENT_ID"),
+                client_secret=os.getenv("GMAIL_CLIENT_SECRET")
+            )
+            service = build('gmail', 'v1', credentials=creds)
+            raw = base64.urlsafe_b64encode(msg.as_bytes()).decode('utf-8')
+            service.users().messages().send(userId="me", body={'raw': raw}).execute()
+        except Exception as e:
+            print(f"Fallo en envío de correo: {e}")
+        payload_wa = {
+            "instance_id": os.getenv("APICHAT_INSTANCE", ""),
+            "number": num_limpio,
+            "text": (
+                f"🚨 Lead Calificado:\n\n"
+                f"Cliente: {nombre_norm}\nWhatsApp: {whatsapp_norm}\n"
+                f"Ubicación: {departamento_municipio}\nEquipos:\n{listado_equipos_html}"
+            )
+        }
+        try:
+            requests.post(
+                os.getenv("APICHAT_ENDPOINT", ""),
+                json=payload_wa,
+                headers={
+                    "Authorization": f"Bearer {os.getenv('APICHAT_TOKEN', '')}",
+                    "Content-Type": "application/json"
+                },
+                timeout=15
+            )
+        except Exception as e:
+            print(f"Fallo en envío de webhook: {e}")
+    threading.Thread(target=tarea_background).start()
+    return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
 
 def extraer_intencion_humana(messages: list) -> str:
     for msg in reversed(messages):
@@ -189,10 +306,11 @@ def extraer_intencion_humana(messages: list) -> str:
 def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
 
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1, max_retries=5).bind_tools([procesar_oportunidad_backend])
-    extractor_llm = llm.with_structured_output(ExtractorContacto)
+    # Modelos de lenguaje (se crearán con failover en cada invocación)
+    # No creamos un llm fijo para poder cambiar la clave dinámicamente.
+    # Usamos la función invoke_llm_with_failover directamente.
 
-    # ---------- Nodo: Clasificador ----------
+    # ---------- Nodo: Clasificador Topológico ----------
     @auditar_fase(nombre_fase="Clasificador Topológico", criticidad="MEDIA")
     @observe_node(node_name="clasificador_topologia")
     def clasificador_topologia_node(state: AgentState):
@@ -234,7 +352,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
         logger = logging.getLogger("jarvi.agent")
 
-        # --- Inicializar paso_actual si no existe ---
+        # --- Inicializar paso_actual ---
         if "paso_actual" not in ctx:
             ctx["paso_actual"] = 0
 
@@ -248,29 +366,12 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         # --- EXTRACCIÓN DE DATOS DEL MENSAJE ACTUAL ---
         if ultimo_mensaje:
-            # Intentar extraer nombre, teléfono y email con el extractor LLM
-            try:
-                extraccion = extractor_llm.invoke(
-                    f"Del mensaje, extrae nombre (campo 'nombre'), teléfono (campo 'telefono') y email (campo 'email'). "
-                    f"Mensaje: {ultimo_mensaje}"
-                )
-                if extraccion.nombre:
-                    ctx["nombre"] = extraccion.nombre
-                if extraccion.telefono:
-                    _, ctx["whatsapp"] = normalizar_contacto("", extraccion.telefono, "")
-                if extraccion.email:
-                    ctx["email"] = extraccion.email
-            except Exception as e:
-                logger.warning(f"Extractor LLM falló: {e}")
-
-            # Si el extractor falló, usar regex simple para nombre y teléfono
+            # Intentar extraer nombre, teléfono y email con regex primero (más rápido)
             if not ctx.get("nombre"):
-                # Buscar patrones como "me llamo X", "soy X", "mi nombre es X"
                 match = re.search(r"(?:me llamo|soy|mi nombre es|nombre:|llamo)\s*([A-Za-záéíóúñ\s]+)", ultimo_mensaje, re.IGNORECASE)
                 if match:
                     ctx["nombre"] = match.group(1).strip().title()
             if not ctx.get("whatsapp"):
-                # Buscar número de teléfono (simple)
                 match = re.search(r"(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}", ultimo_mensaje)
                 if match:
                     _, ctx["whatsapp"] = normalizar_contacto("", match.group(0), "")
@@ -294,7 +395,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 if vendedor:
                     ctx["vendedor"] = vendedor["email"]
 
-            # Topología (solo si no está)
+            # Topología
             if not ctx.get("topologia"):
                 if any(k in ultimo_mensaje for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
                     ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
@@ -331,8 +432,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             return {"messages": [AIMessage(content="¿Qué productos o sistemas solares te interesan? (ej. paneles, calentadores, bombas)")], "contexto_tecnico": ctx}
 
         if paso == 5 and not ctx.get("vendedor"):
-            # Asignar vendedor por defecto si no se mencionó
             ctx["vendedor"] = asignar_vendedor_default()
+            ctx["paso_actual"] = 6
             return {"messages": [AIMessage(content="Perfecto, ya tengo todos los datos necesarios. ¿En qué más puedo ayudarte?")], "contexto_tecnico": ctx}
 
         # --- FLUJO COMPLETO (paso 6): responder preguntas técnicas ---
@@ -347,32 +448,33 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             config["metadata"]["tags"] = ctx.get("productos", [])
             config["metadata"]["ubicacion"] = ctx.get("ubicacion", "PENDIENTE")
 
-            # Persistir en BD
-            try:
+            # Si todos los campos están completos, persistir
+            if validar_campos_obligatorios(ctx):
                 import asyncio
                 thread_id = config.get("configurable", {}).get("thread_id")
-                if thread_id and validar_campos_obligatorios(ctx):
-                    asyncio.run(actualizar_thread(
-                        thread_id=thread_id,
-                        nombre=ctx["nombre"],
-                        whatsapp=ctx["whatsapp"],
-                        email=ctx.get("email"),
-                        productos=ctx["productos"],
-                        vendedor=ctx["vendedor"],
-                        trace_id=trace_id_var.get()
-                    ))
-                    asyncio.run(registrar_evento_auditoria(
-                        thread_id=thread_id,
-                        trace_id=trace_id_var.get(),
-                        event_type="DATOS_CLIENTE_COMPLETOS",
-                        source="chatbot_node",
-                        payload=ctx
-                    ))
-                    logger.info(f"Datos persistidos: {ctx['nombre']} ({ctx['whatsapp']})")
-            except Exception as e:
-                logger.error(f"Error al persistir: {e}")
+                if thread_id:
+                    try:
+                        asyncio.run(actualizar_thread(
+                            thread_id=thread_id,
+                            nombre=ctx["nombre"],
+                            whatsapp=ctx["whatsapp"],
+                            email=ctx.get("email"),
+                            productos=ctx["productos"],
+                            vendedor=ctx["vendedor"],
+                            trace_id=trace_id_var.get()
+                        ))
+                        asyncio.run(registrar_evento_auditoria(
+                            thread_id=thread_id,
+                            trace_id=trace_id_var.get(),
+                            event_type="DATOS_CLIENTE_COMPLETOS",
+                            source="chatbot_node",
+                            payload=ctx
+                        ))
+                        logger.info(f"Datos persistidos: {ctx['nombre']} ({ctx['whatsapp']})")
+                    except Exception as e:
+                        logger.error(f"Error al persistir: {e}")
 
-            # Generar respuesta técnica
+            # --- GENERAR RESPUESTA TÉCNICA CON FAILOVER ---
             if ctx.get("requiere_auditoria_electrica"):
                 regla_datos = "Recopila sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta."
             else:
@@ -395,9 +497,31 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 )
             )
 
-            respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
-            if not respuesta.content:
-                respuesta = AIMessage(content="Lo siento, no pude generar una respuesta. Intenta de nuevo.")
+            messages_to_send = [prompt_sistema] + state["messages"]
+            try:
+                respuesta, costo_llamada = invoke_llm_with_failover(messages_to_send, config)
+                if not respuesta.content:
+                    respuesta = AIMessage(content="Lo siento, no pude generar una respuesta. Intenta de nuevo.")
+            except Exception as e:
+                logger.error(f"Error en failover LLM: {e}")
+                respuesta = AIMessage(content="Lo siento, estoy teniendo problemas técnicos. Por favor, intenta de nuevo más tarde.")
+                costo_llamada = 0.0
+
+            # --- ACUMULAR COSTO EN BD Y METADATOS ---
+            thread_id = config.get("configurable", {}).get("thread_id")
+            if thread_id and costo_llamada > 0:
+                import asyncio
+                try:
+                    asyncio.run(acumular_costo_thread(thread_id, costo_llamada))
+                    # Obtener costo acumulado para mostrarlo en LangSmith
+                    costo_acum = asyncio.run(obtener_costo_acumulado(thread_id))
+                    config["metadata"]["cumulative_cost"] = costo_acum
+                    config["metadata"]["cost_this_call"] = costo_llamada
+                    logger.info(f"Costo acumulado actualizado: {costo_acum:.6f} para thread {thread_id}")
+                except Exception as e:
+                    logger.error(f"Error al acumular costo: {e}")
+
+            logger.info(f"[chatbot] contexto después de LLM: {ctx}")
             return {"messages": [respuesta], "contexto_tecnico": ctx}
 
         # --- Si llegamos aquí sin haber completado, forzar paso 6 (seguridad) ---
