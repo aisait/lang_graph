@@ -146,13 +146,32 @@ async def acknowledge_dispatch(trace_id: str):
 
 # ---------------------------------------------------------------------------
 # Función de generación de tokens (con checkpointing garantizado y sin delays)
+# Ahora consulta la BD para establecer run_name con el WhatsApp del cliente.
 # ---------------------------------------------------------------------------
 async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]:
-    # Inyectar trace_id en el config para que esté disponible en el grafo
+    # Inyectar trace_id en el config
     trace_id = trace_id_var.get()
     config = {"configurable": {"thread_id": thread_id}}
     config["metadata"] = config.get("metadata", {})
     config["metadata"]["trace_id"] = trace_id
+
+    # --- CONSULTAR WHATSAPP EN BD PARA ESTABLECER run_name ---
+    try:
+        import asyncpg
+        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+        row = await conn.fetchrow(
+            "SELECT whatsapp_id FROM threads WHERE thread_id = $1",
+            thread_id
+        )
+        if row and row["whatsapp_id"]:
+            config["run_name"] = row["whatsapp_id"]
+            config["metadata"]["whatsapp"] = row["whatsapp_id"]
+            logger.info(f"run_name establecido a: {row['whatsapp_id']} para thread {thread_id}")
+        else:
+            logger.info(f"No se encontró whatsapp para thread {thread_id}, run_name por defecto")
+        await conn.close()
+    except Exception as e:
+        logger.warning(f"No se pudo obtener whatsapp para run_name: {e}")
 
     estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
     logger.info(f"Ejecutando chat para thread_id={thread_id}, trace_id={trace_id}")
