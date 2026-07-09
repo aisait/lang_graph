@@ -2,46 +2,45 @@
 # requirements.txt (Backend JARVI 2.0)
 # Dependencias del servidor FastAPI, el grafo LangGraph y los módulos de
 # persistencia, telemetría y servicios externos.
-# Incluye librerías para normalización de texto y fuzzy matching.
 # Cumple con ISO/IEC 25010 (Fiabilidad, Eficiencia) e ISO/IEC 29119 (Pruebas).
 # =============================================================================
 
 # ---------------------------------------------------------------------
 # Frameworks Web (ISO 25010: Adecuación funcional, Usabilidad)
 # ---------------------------------------------------------------------
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.1
-python-multipart>=0.0.9
-Flask>=2.2.0
+fastapi>=0.115.0                # Compatible con starlette>=0.38.6 (evita conflicto)
+uvicorn[standard]>=0.30.1       # Servidor ASGI de alto rendimiento
+python-multipart>=0.0.9         # Soporte para formularios multipart
+Flask>=2.2.0                    # Para servicio de depuración (cliente-debug)
 
 # ---------------------------------------------------------------------
 # Core Agéntico (ISO 25010: Eficiencia de desempeño, Fiabilidad)
 # ---------------------------------------------------------------------
-langchain>=0.2.6,<0.3.0
-langgraph>=0.2.56,<0.3.0
-langchain-openai>=0.1.9
-openai>=1.50.0
-langchain-community>=0.2.6
+langchain>=0.2.6,<0.3.0         # Framework base para agentes
+langgraph>=0.2.56,<0.3.0        # Orquestación de grafos de estados
+langchain-openai>=0.1.9         # Integración con modelos OpenAI
+openai>=1.50.0                  # Cliente oficial de OpenAI (STT, TTS, Vision)
+langchain-community>=0.2.6      # Utilidades comunitarias (herramientas, etc.)
 
 # ---------------------------------------------------------------------
 # Persistencia y Base de Datos (ISO 25010: Fiabilidad, Mantenibilidad)
 # ---------------------------------------------------------------------
-psycopg2-binary>=2.9.9
-psycopg[binary]>=3.1.0
-sqlalchemy>=2.0.31
-asyncpg>=0.29.0
+psycopg2-binary>=2.9.9          # Driver síncrono para PostgreSQL (SQLAlchemy)
+psycopg[binary]>=3.1.0          # Driver asíncrono para LangGraph (v3)
+sqlalchemy>=2.0.31              # ORM para auditoría y tablas auxiliares
+asyncpg>=0.29.0                 # Driver asíncrono nativo para operaciones rápidas
 
 # ---------------------------------------------------------------------
 # Utilidades y Servicios Externos (ISO 25010: Seguridad, Compatibilidad)
 # ---------------------------------------------------------------------
-requests>=2.32.3
-python-dotenv>=1.0.1
-pydantic>=2.7.4
-httpx>=0.27.2
-psutil>=5.9.8
-google-auth>=2.30.0
-google-auth-oauthlib>=1.2.0
-google-api-python-client>=2.198.0
+requests>=2.32.3                # Cliente HTTP para webhooks y APIs externas
+python-dotenv>=1.0.1            # Carga de variables de entorno
+pydantic>=2.7.4                 # Validación de datos (esquemas de entrada/salida)
+httpx>=0.27.2                   # Cliente HTTP asíncrono (para pruebas internas)
+psutil>=5.9.8                   # Monitoreo de recursos (CPU, memoria)
+google-auth>=2.30.0             # Autenticación OAuth2 para Gmail API
+google-auth-oauthlib>=1.2.0     # Flujos OAuth2 para Gmail
+google-api-python-client>=2.198.0 # Cliente para Gmail API (envío de correos)
 
 # ---------------------------------------------------------------------
 # Normalización de texto y fuzzy matching (NUEVO)
@@ -52,9 +51,9 @@ rapidfuzz>=3.0.0                # Fuzzy matching eficiente
 # ---------------------------------------------------------------------
 # Checkpointing de LangGraph (ISO 25010: Fiabilidad, Recuperación)
 # ---------------------------------------------------------------------
-langgraph-checkpoint>=1.0.0
-langgraph-checkpoint-postgres>=3.0.0
-langchain-core>=0.2.0
+langgraph-checkpoint>=1.0.0      # Persistencia de estados del grafo
+langgraph-checkpoint-postgres>=3.0.0 # Adaptador para PostgreSQL
+langchain-core>=0.2.0            # Núcleo de LangChain (dependencia base)
 
 # =============================================================================
 # Nota: langgraph-api y langgraph-cli NO se incluyen porque son específicos
