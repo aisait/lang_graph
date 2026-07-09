@@ -48,7 +48,7 @@ def buscar_ubicacion(texto: str) -> Optional[Dict[str, str]]:
             if ratio > mejor_ratio:
                 mejor_ratio = ratio
                 mejor_coincidencia = entry
-    if mejor_coincidencia and mejor_ratio > 0.75:  # Umbral de confianza
+    if mejor_coincidencia and mejor_ratio > 0.75:
         logger.info(f"Ubicación encontrada: {mejor_coincidencia['label']} (ratio: {mejor_ratio:.2f})")
         return {
             "municipio": mejor_coincidencia["municipio"],
