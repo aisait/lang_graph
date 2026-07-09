@@ -1,6 +1,6 @@
 """
 agent_graph.py - Módulo central del grafo agéntico de JARVI 2.0.
-Incluye extracción proactiva en el primer mensaje y reducer acumulativo para contexto_tecnico.
+Flujo de 5 pasos con extracción robusta usando pipeline de normalización.
 """
 
 from __future__ import annotations
@@ -25,10 +25,11 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 import config
 from audit import auditar_fase
-from ontology import obtener_fragmento_ontologia, buscar_productos_por_mensaje
+from ontology import obtener_fragmento_ontologia, buscar_productos_por_mensaje, cargar_catalogo
 from telemetry import trace_id_var, span_id_var, parent_span_id_var, schedule_telemetry_event
 from db_client import actualizar_thread, registrar_evento_auditoria, acumular_costo_thread, obtener_costo_acumulado
-from ubicacion import buscar_ubicacion
+from ubicacion import buscar_ubicacion, cargar_ubicacion
+from text_normalizer import pipeline_extraccion, normalizar_y_corregir
 
 # =============================================================================
 # CONFIGURACIÓN DE API KEYS Y PRECIOS
@@ -89,7 +90,6 @@ def validar_campos_obligatorios(ctx: dict) -> bool:
 # REDUCER PERSONALIZADO PARA CONTEXTO_TECNICO (ACUMULATIVO)
 # =============================================================================
 def merge_contexto(prev: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
-    """Fusiona el contexto técnico: los nuevos valores sobrescriben a los antiguos, pero preserva los existentes no mencionados."""
     return {**prev, **new}
 
 # =============================================================================
@@ -128,10 +128,11 @@ class ExtractorContacto(BaseModel):
     nombre: Optional[str] = None
     telefono: Optional[str] = None
     email: Optional[str] = None
+    producto_interes: Optional[str] = None
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
-    contexto_tecnico: Annotated[Dict[str, Any], merge_contexto]  # Reducer personalizado
+    contexto_tecnico: Annotated[Dict[str, Any], merge_contexto]
 
 # =============================================================================
 # DECORADOR CTFOM
@@ -207,10 +208,10 @@ def extraer_intencion_humana(messages: list) -> str:
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
             if isinstance(msg.content, str):
-                return msg.content.lower()
+                return msg.content
             elif isinstance(msg.content, list):
                 textos = [item.get("text", "") for item in msg.content if isinstance(item, dict) and "text" in item]
-                return " ".join(textos).lower()
+                return " ".join(textos)
     return ""
 
 # =============================================================================
@@ -222,6 +223,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     llm = ChatOpenAI(api_key=DEFAULT_API_KEY, model="gpt-4o-mini", temperature=0.1, max_retries=3).bind_tools([procesar_oportunidad_tool])
     extractor_llm = llm.with_structured_output(ExtractorContacto)
 
+    # Cargar datos para el pipeline de normalización
+    json_ubicacion = cargar_ubicacion()  # lista de diccionarios
+    json_productos = cargar_catalogo()   # dict de categorías
+    json_vendedores = cargar_vendedores()
+
     # ---------- Nodo: Clasificador Topológico ----------
     @auditar_fase(nombre_fase="Clasificador Topológico", criticidad="MEDIA")
     @observe_node(node_name="clasificador_topologia")
@@ -230,10 +236,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo or ctx.get("topologia"):
             return {"contexto_tecnico": ctx}
-        if any(k in ultimo for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
+        mensaje_proc = normalizar_y_corregir(ultimo)
+        if any(k in mensaje_proc for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
             ctx["topologia"] = "On-Grid"
             ctx["requiere_auditoria_electrica"] = True
-        elif any(k in ultimo for k in ["aislado", "batería", "bateria", "finca", "autónomo", "off-grid"]):
+        elif any(k in mensaje_proc for k in ["aislado", "batería", "bateria", "finca", "autónomo", "off-grid"]):
             ctx["topologia"] = "Off-Grid"
             ctx["requiere_auditoria_electrica"] = True
         return {"contexto_tecnico": ctx}
@@ -243,10 +250,12 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     @observe_node(node_name="validador_geolocalizacion")
     def validador_geolocalizacion_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
-        ultimo = extraer_intencion_humana(state.get("messages", []))
-        if not ultimo or ctx.get("ubicacion"):
+        if ctx.get("ubicacion"):
             return {"contexto_tecnico": ctx}
-        ubicacion = buscar_ubicacion(ultimo)
+        ultimo = extraer_intencion_humana(state.get("messages", []))
+        if not ultimo:
+            return {"contexto_tecnico": ctx}
+        ubicacion = buscar_ubicacion(normalizar_y_corregir(ultimo))
         if ubicacion:
             ctx["ubicacion"] = ubicacion["label"]
             ctx["ciudad"] = ubicacion["municipio"]
@@ -255,82 +264,59 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["tarifa_base_gtq"] = 1.45
         return {"contexto_tecnico": ctx}
 
-    # ---------- Nodo: Chatbot (extracción proactiva) ----------
+    # ---------- Nodo: Chatbot (extracción con pipeline) ----------
     @auditar_fase(nombre_fase="Inferencia del Chatbot", criticidad="ALTA")
     @observe_node(node_name="chatbot")
     def chatbot_node(state: AgentState, config: RunnableConfig):
-        # Inicializar contexto
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
         logger = logging.getLogger("jarvi.agent")
 
-        # --- EXTRACCIÓN PROACTIVA: siempre se ejecuta antes de cualquier decisión ---
+        # --- APLICAR PIPELINE DE NORMALIZACIÓN Y EXTRACCIÓN ---
         if ultimo_mensaje:
-            # 1. Extraer nombre, teléfono, email con LLM + regex
-            try:
-                extraccion = extractor_llm.invoke(
-                    f"Del mensaje extrae nombre (campo 'nombre'), teléfono (campo 'telefono') y email (campo 'email'). Mensaje: {ultimo_mensaje}"
-                )
-                if extraccion.nombre:
-                    ctx["nombre"] = extraccion.nombre
-                if extraccion.telefono:
-                    _, ctx["whatsapp"] = normalizar_contacto("", extraccion.telefono, "")
-                if extraccion.email:
-                    ctx["email"] = extraccion.email
-            except Exception as e:
-                logger.warning(f"LLM extracción falló: {e}")
+            extraido = pipeline_extraccion(
+                ultimo_mensaje,
+                json_ubicacion,
+                json_productos,
+                json_vendedores
+            )
+            # Fusionar los datos extraídos con el contexto existente (sin sobrescribir)
+            for key, value in extraido.items():
+                if value is not None and value != "":
+                    if key == "productos":
+                        if not ctx.get("productos"):
+                            ctx["productos"] = value
+                        else:
+                            # Fusionar listas sin duplicados
+                            for p in value:
+                                if p not in ctx["productos"]:
+                                    ctx["productos"].append(p)
+                    else:
+                        ctx[key] = value
 
-            # Fallback regex
-            if not ctx.get("nombre"):
-                match = re.search(r"(?:me llamo|soy|mi nombre es|nombre:|llamo)\s*([A-Za-záéíóúñ\s]+)", ultimo_mensaje, re.IGNORECASE)
-                if match:
-                    ctx["nombre"] = match.group(1).strip().title()
-            if not ctx.get("whatsapp"):
-                match = re.search(r"(\+?[0-9]{1,3}[-.\s]?)?[0-9][\s\-\.]?[0-9]{3,4}[\s\-\.]?[0-9]{3,4}", ultimo_mensaje)
-                if match:
-                    _, ctx["whatsapp"] = normalizar_contacto("", match.group(0), "")
+            # Si no se extrajo producto pero la topología es On-Grid, asignar default
+            if not ctx.get("productos") and ctx.get("topologia") == "On-Grid":
+                ctx["productos"] = ["Sistema On-Grid (Atado a la Red)"]
+            elif not ctx.get("productos") and ctx.get("topologia") == "Off-Grid":
+                ctx["productos"] = ["Sistema Off-Grid (Aislado)"]
 
-            # 2. Ubicación (fuzzy matching)
-            if not ctx.get("ubicacion"):
-                ubicacion = buscar_ubicacion(ultimo_mensaje)
-                if ubicacion:
-                    ctx["ubicacion"] = ubicacion["label"]
-                    ctx["ciudad"] = ubicacion["municipio"]
-
-            # 3. Productos
-            if not ctx.get("productos") or len(ctx["productos"]) == 0:
-                productos = buscar_productos_por_mensaje(ultimo_mensaje)
-                if productos:
-                    ctx["productos"] = productos
-
-            # 4. Vendedor
+            # Si no se extrajo vendedor, asignar default
             if not ctx.get("vendedor"):
-                vendedor = buscar_vendedor_por_nombre(ultimo_mensaje)
-                if vendedor:
-                    ctx["vendedor"] = vendedor["email"]
+                ctx["vendedor"] = asignar_vendedor_default()
 
-            # 5. Topología
-            if not ctx.get("topologia"):
-                if any(k in ultimo_mensaje for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
-                    ctx["topologia"] = "On-Grid"
-                    ctx["requiere_auditoria_electrica"] = True
-                elif any(k in ultimo_mensaje for k in ["aislado", "batería", "bateria", "finca", "autónomo", "off-grid"]):
-                    ctx["topologia"] = "Off-Grid"
-                    ctx["requiere_auditoria_electrica"] = True
+        # --- ACTUALIZAR run_name INMEDIATAMENTE ---
+        _, whatsapp_run = normalizar_contacto("", ctx.get("whatsapp", "Pendiente"), "")
+        if whatsapp_run and whatsapp_run != "Pendiente":
+            config["run_name"] = whatsapp_run
+            if "metadata" not in config:
+                config["metadata"] = {}
+            config["metadata"]["whatsapp"] = whatsapp_run
+            config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
+            config["metadata"]["vendedor"] = ctx.get("vendedor", "gerencia@aisa.com.gt")
+            config["metadata"]["tags"] = ctx.get("productos", [])
+            config["metadata"]["ubicacion"] = ctx.get("ubicacion", "PENDIENTE")
 
-            # 6. Actualizar run_name inmediatamente
-            _, whatsapp_run = normalizar_contacto("", ctx.get("whatsapp", "Pendiente"), "")
-            if whatsapp_run and whatsapp_run != "Pendiente":
-                config["run_name"] = whatsapp_run
-                if "metadata" not in config:
-                    config["metadata"] = {}
-                config["metadata"]["whatsapp"] = whatsapp_run
-                config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
-                config["metadata"]["vendedor"] = ctx.get("vendedor", "gerencia@aisa.com.gt")
-                config["metadata"]["tags"] = ctx.get("productos", [])
-                config["metadata"]["ubicacion"] = ctx.get("ubicacion", "PENDIENTE")
-
-        # --- Determinar paso actual basado en el contexto extraído ---
+        # --- DETERMINAR PASO ACTUAL ---
         paso = 1
         if ctx.get("nombre"):
             paso = 2
@@ -345,7 +331,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if validar_campos_obligatorios(ctx):
             paso = 6
 
-        # Si no hay nombre y es la primera interacción, mostrar bienvenida con preguntas personalizadas
+        # --- SI ES LA PRIMERA INTERACCIÓN Y FALTAN DATOS, PREGUNTAR ---
         if len(state.get("messages", [])) == 1 and not ctx.get("nombre"):
             bienvenida = "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar.\n\nPara poder ayudarte mejor, necesito algunos datos:\n"
             if not ctx.get("nombre"):
@@ -360,9 +346,22 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 bienvenida += "5️⃣ ¿Tienes un vendedor asignado?\n"
             return {"messages": [AIMessage(content=bienvenida)], "contexto_tecnico": ctx}
 
-        # Si ya tenemos todos los datos, pasar directamente a paso 6 (resolución técnica)
+        # --- SI FALTAN DATOS, PREGUNTAR SEGÚN PASO ---
+        if paso == 1 and not ctx.get("nombre"):
+            return {"messages": [AIMessage(content="¿Cómo te llamas?")], "contexto_tecnico": ctx}
+        if paso == 2 and not ctx.get("whatsapp"):
+            return {"messages": [AIMessage(content="¿Cuál es tu número de WhatsApp?")], "contexto_tecnico": ctx}
+        if paso == 3 and not ctx.get("ubicacion"):
+            return {"messages": [AIMessage(content="¿De qué municipio y departamento nos hablas?")], "contexto_tecnico": ctx}
+        if paso == 4 and not ctx.get("productos"):
+            return {"messages": [AIMessage(content="¿Qué productos o sistemas solares te interesan?")], "contexto_tecnico": ctx}
+        if paso == 5 and not ctx.get("vendedor"):
+            ctx["vendedor"] = asignar_vendedor_default()
+            paso = 6
+
+        # --- PASO 6: RESPONDER PREGUNTA TÉCNICA ---
         if paso == 6:
-            # Actualizar metadatos finales
+            # Actualizar metadatos
             if "metadata" not in config:
                 config["metadata"] = {}
             config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
@@ -384,7 +383,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                         thread_id, trace_id_var.get(), "DATOS_CLIENTE_COMPLETOS", "chatbot_node", ctx
                     ))
 
-            # Generar respuesta técnica con failover
+            # Generar respuesta técnica
             if ctx.get("requiere_auditoria_electrica"):
                 regla_datos = "Recopila sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta."
             else:
@@ -419,20 +418,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 config["metadata"]["cumulative_cost"] = costo_acum
 
             return {"messages": [respuesta], "contexto_tecnico": ctx}
-
-        # Si faltan datos, preguntar según el paso actual
-        if paso == 1 and not ctx.get("nombre"):
-            return {"messages": [AIMessage(content="¿Cómo te llamas?")], "contexto_tecnico": ctx}
-        if paso == 2 and not ctx.get("whatsapp"):
-            return {"messages": [AIMessage(content="¿Cuál es tu número de WhatsApp?")], "contexto_tecnico": ctx}
-        if paso == 3 and not ctx.get("ubicacion"):
-            return {"messages": [AIMessage(content="¿De qué municipio y departamento nos hablas?")], "contexto_tecnico": ctx}
-        if paso == 4 and not ctx.get("productos"):
-            return {"messages": [AIMessage(content="¿Qué productos o sistemas solares te interesan?")], "contexto_tecnico": ctx}
-        if paso == 5 and not ctx.get("vendedor"):
-            ctx["vendedor"] = asignar_vendedor_default()
-            # Forzar paso 6 y continuar
-            return chatbot_node(state, config)  # Llamada recursiva
 
         # Fallback
         return {"messages": [AIMessage(content="Procesando tu solicitud...")], "contexto_tecnico": ctx}
