@@ -27,7 +27,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
 from schemas import ChatRequest, ChatResponse, AudioRequest, ImageRequest
-from agent_graph import create_graph
+from agent_graph import create_graph, normalizar_contacto
 from config import ISOConfigValidator
 from telemetry import (
     trace_id_var, span_id_var, parent_span_id_var,
@@ -271,7 +271,6 @@ async def chat_endpoint(request: ChatRequest):
     if whatsapp_raw:
         # Normalizar el WhatsApp (usar función auxiliar si existe, o simple)
         # Para simplificar, usamos el extraído y lo normalizamos con la función del agente (importada)
-        from agent_graph import normalizar_contacto
         _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
         if whatsapp_norm and whatsapp_norm != "Pendiente":
             run_name = whatsapp_norm
