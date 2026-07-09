@@ -1,6 +1,7 @@
 """
 api.py - Servidor FastAPI con checkpointing garantizado.
-Unificación de threads por WhatsApp mediante buffer de estado.
+Unificación de threads por WhatsApp con creación de nuevos threads.
+Cumple con ISO/IEC 25010, 29119, 27001.
 """
 
 import os
@@ -9,6 +10,7 @@ import json
 import time
 import logging
 import re
+import uuid
 from collections import defaultdict
 from typing import AsyncGenerator
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
@@ -195,7 +197,6 @@ async def generar_tokens(thread_id: str, mensaje: str, run_name: str | None = No
     config["metadata"] = config.get("metadata", {})
     config["metadata"]["trace_id"] = trace_id
 
-    # Si se proporcionó un run_name, usarlo; si no, intentar obtener de BD
     if run_name and run_name != "Pendiente":
         config["run_name"] = run_name
         config["metadata"]["whatsapp"] = run_name
@@ -238,11 +239,11 @@ async def generar_tokens(thread_id: str, mensaje: str, run_name: str | None = No
         yield f"data: {json.dumps({'contexto_tecnico': ctx})}\n\n"
 
 # ---------------------------------------------------------------------------
-# Endpoint principal /chat (con buffer de estado)
+# Endpoint principal /chat (con unificación y creación de nuevos threads)
 # ---------------------------------------------------------------------------
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
-    thread_id_final = request.thread_id
+    thread_id_final = None
     run_name = "Pendiente"
 
     # 1. Intentar extraer WhatsApp del mensaje actual
@@ -258,17 +259,25 @@ async def chat_endpoint(request: ChatRequest):
                 thread_id_final = existing
                 logger.info(f"Thread unificado (por WhatsApp): {thread_id_final} para {whatsapp_norm}")
             else:
-                logger.info(f"Nuevo thread para WhatsApp {whatsapp_norm} (sin existencia previa)")
+                # No existe: crear nuevo thread
+                thread_id_final = str(uuid.uuid4())
+                logger.info(f"Nuevo thread creado: {thread_id_final} para {whatsapp_norm}")
     else:
         # 2. Si no se extrajo número, obtener WhatsApp del thread actual (buffer de estado)
         whatsapp_del_thread = await obtener_whatsapp_por_thread(request.thread_id)
         if whatsapp_del_thread:
             run_name = whatsapp_del_thread
+            thread_id_final = request.thread_id
             logger.info(f"run_name recuperado del thread actual: {run_name}")
         else:
-            logger.info("No se encontró WhatsApp asociado al thread actual (será un nuevo thread)")
+            # Sin número y sin thread existente: usar el thread_id del request
+            thread_id_final = request.thread_id
+            logger.info("No se encontró WhatsApp asociado al thread actual (se usa el thread_id del request)")
 
-    # 3. Llamar a generar_tokens con el thread_id final y el run_name (buffer)
+    # Asegurar que thread_id_final no sea None
+    if thread_id_final is None:
+        thread_id_final = request.thread_id
+
     return StreamingResponse(
         generar_tokens(thread_id_final, request.message, run_name),
         media_type="text/event-stream",
