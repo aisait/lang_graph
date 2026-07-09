@@ -1,10 +1,6 @@
 """
-db_client.py
-Cliente de base de datos para operaciones CRUD sobre threads, audit_events y telemetry_events.
-Incluye función atómica para acumular costo por thread.
-Cumple con ISO/IEC 25010 (Fiabilidad) y 29119 (Pruebas).
+db_client.py - Cliente de base de datos para threads, audit_events y acumulación de costo.
 """
-
 import os
 import json
 import asyncpg
@@ -14,7 +10,6 @@ from typing import Optional, List, Dict, Any
 logger = logging.getLogger("jarvi.db")
 
 async def get_db_connection():
-    """Obtiene una conexión a la base de datos PostgreSQL."""
     return await asyncpg.connect(os.getenv("DATABASE_URL"))
 
 async def actualizar_thread(
@@ -26,36 +21,25 @@ async def actualizar_thread(
     vendedor: Optional[str] = None,
     trace_id: Optional[str] = None
 ) -> bool:
-    """
-    Inserta o actualiza la tabla threads con los datos del cliente.
-    Retorna True si se actualizó correctamente, False en caso contrario.
-    """
     conn = None
     try:
-        conn = await get_db_connection()
-        # Normalizar WhatsApp
         from agent_graph import normalizar_contacto
         _, whatsapp_norm = normalizar_contacto("", whatsapp, "")
-
-        # Verificar si existe por whatsapp_id
-        existing = await conn.fetchrow(
-            "SELECT thread_id, metadata FROM threads WHERE whatsapp_id = $1",
-            whatsapp_norm
-        )
-
+        conn = await get_db_connection()
         metadata = {
             "email": email,
             "productos": productos or [],
             "vendedor": vendedor,
-            "trace_id": trace_id,
-            "cumulative_cost": 0.0  # Inicializar acumulador de costo
+            "trace_id": trace_id
         }
-
+        existing = await conn.fetchrow(
+            "SELECT thread_id, metadata FROM threads WHERE whatsapp_id = $1",
+            whatsapp_norm
+        )
         if existing:
-            # Actualizar (preservar cumulative_cost existente)
-            old_metadata = existing["metadata"] or {}
-            if "cumulative_cost" in old_metadata:
-                metadata["cumulative_cost"] = old_metadata["cumulative_cost"]
+            old_meta = existing["metadata"] or {}
+            if "cumulative_cost" in old_meta:
+                metadata["cumulative_cost"] = old_meta["cumulative_cost"]
             await conn.execute(
                 """
                 UPDATE threads
@@ -66,9 +50,8 @@ async def actualizar_thread(
                 json.dumps(metadata),
                 whatsapp_norm
             )
-            logger.info(f"Thread actualizado: {thread_id} - {nombre} ({whatsapp_norm})")
         else:
-            # Insertar
+            metadata["cumulative_cost"] = 0.0
             await conn.execute(
                 """
                 INSERT INTO threads (thread_id, nombre_cliente, whatsapp_id, metadata)
@@ -79,39 +62,11 @@ async def actualizar_thread(
                 whatsapp_norm,
                 json.dumps(metadata)
             )
-            logger.info(f"Nuevo thread creado: {thread_id} - {nombre} ({whatsapp_norm})")
+        logger.info(f"Thread actualizado: {thread_id} - {nombre} ({whatsapp_norm})")
         return True
     except Exception as e:
         logger.error(f"Error al actualizar thread: {e}")
         return False
-    finally:
-        if conn:
-            await conn.close()
-
-async def obtener_thread_por_whatsapp(whatsapp: str) -> Optional[Dict[str, Any]]:
-    """
-    Obtiene los datos del cliente a partir de su número de WhatsApp normalizado.
-    """
-    conn = None
-    try:
-        conn = await get_db_connection()
-        from agent_graph import normalizar_contacto
-        _, whatsapp_norm = normalizar_contacto("", whatsapp, "")
-        row = await conn.fetchrow(
-            "SELECT thread_id, nombre_cliente, whatsapp_id, metadata FROM threads WHERE whatsapp_id = $1",
-            whatsapp_norm
-        )
-        if row:
-            return {
-                "thread_id": row["thread_id"],
-                "nombre": row["nombre_cliente"],
-                "whatsapp": row["whatsapp_id"],
-                "metadata": row["metadata"]
-            }
-        return None
-    except Exception as e:
-        logger.error(f"Error al obtener thread: {e}")
-        return None
     finally:
         if conn:
             await conn.close()
@@ -124,9 +79,6 @@ async def registrar_evento_auditoria(
     payload: Dict[str, Any],
     langsmith_run_id: Optional[str] = None
 ) -> bool:
-    """
-    Inserta un evento en la tabla audit_events.
-    """
     conn = None
     try:
         conn = await get_db_connection()
@@ -145,23 +97,15 @@ async def registrar_evento_auditoria(
             json.dumps(payload),
             langsmith_run_id
         )
-        logger.info(f"Evento de auditoría registrado: {trace_id} - {event_type}")
         return True
     except Exception as e:
-        logger.error(f"Error al registrar evento de auditoría: {e}")
+        logger.error(f"Error al registrar evento: {e}")
         return False
     finally:
         if conn:
             await conn.close()
 
-# =============================================================================
-# NUEVA FUNCIÓN: ACUMULACIÓN DE COSTO POR THREAD
-# =============================================================================
 async def acumular_costo_thread(thread_id: str, costo: float) -> bool:
-    """
-    Acumula el costo de una llamada al LLM en el metadata del thread.
-    Usa jsonb_set para actualizar atómicamente sin leer primero.
-    """
     conn = None
     try:
         conn = await get_db_connection()
@@ -178,19 +122,15 @@ async def acumular_costo_thread(thread_id: str, costo: float) -> bool:
             costo,
             thread_id
         )
-        logger.info(f"Costo acumulado {costo:.6f} para thread {thread_id}")
         return True
     except Exception as e:
-        logger.error(f"Error al acumular costo para thread {thread_id}: {e}")
+        logger.error(f"Error al acumular costo: {e}")
         return False
     finally:
         if conn:
             await conn.close()
 
 async def obtener_costo_acumulado(thread_id: str) -> float:
-    """
-    Obtiene el costo acumulado actual de un thread.
-    """
     conn = None
     try:
         conn = await get_db_connection()
@@ -198,11 +138,8 @@ async def obtener_costo_acumulado(thread_id: str) -> float:
             "SELECT metadata->>'cumulative_cost' as cost FROM threads WHERE thread_id = $1",
             thread_id
         )
-        if row and row["cost"]:
-            return float(row["cost"])
-        return 0.0
-    except Exception as e:
-        logger.error(f"Error al obtener costo acumulado para thread {thread_id}: {e}")
+        return float(row["cost"]) if row and row["cost"] else 0.0
+    except Exception:
         return 0.0
     finally:
         if conn:
