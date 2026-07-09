@@ -382,7 +382,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if not ultimo:
             return {"contexto_tecnico": ctx}
         if not ctx.get("ciudad"):
-            if any(k in ultimo for k in ["guatemala", "mixco", "capital", "ciudad", "villa nuova"]):
+            if any(k in ultimo for k in ["guatemala", "mixco", "capital", "ciudad", "villa nueva"]):
                 ctx["ciudad"] = "Guatemala Metropolitana"
                 if ctx.get("requiere_auditoria_electrica"):
                     ctx["empresa_electrica"] = "EEGSA"
