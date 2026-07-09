@@ -1,6 +1,6 @@
 """
 api.py - Servidor FastAPI con checkpointing garantizado.
-Unificación de threads por WhatsApp con creación inmediata en BD.
+Unificación de threads por WhatsApp con creación inmediata en BD y forzado de redirección.
 Cumple con ISO/IEC 25010, 29119, 27001.
 """
 
@@ -267,7 +267,7 @@ async def generar_tokens(thread_id: str, mensaje: str, run_name: str | None = No
         yield f"data: {json.dumps({'contexto_tecnico': ctx})}\n\n"
 
 # ---------------------------------------------------------------------------
-# Endpoint principal /chat (con unificación inmediata)
+# Endpoint principal /chat (con forzado de redirección al thread de BD)
 # ---------------------------------------------------------------------------
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -280,17 +280,28 @@ async def chat_endpoint(request: ChatRequest):
         _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
         if whatsapp_norm and whatsapp_norm != "Pendiente":
             run_name = whatsapp_norm
-            # Buscar thread existente
+            # Buscar thread existente en BD
             existing = await obtener_thread_por_whatsapp(whatsapp_norm)
             if existing:
                 thread_id_final = existing
-                logger.info(f"Thread unificado: {thread_id_final} para {whatsapp_norm}")
+                logger.info(f"Thread unificado (por WhatsApp): {thread_id_final} para {whatsapp_norm}")
             else:
                 # Crear nuevo thread y guardarlo en BD inmediatamente
                 new_thread = str(uuid.uuid4())
                 await guardar_thread_si_no_existe(whatsapp_norm, new_thread)
                 thread_id_final = new_thread
                 logger.info(f"Nuevo thread creado y guardado: {thread_id_final} para {whatsapp_norm}")
+            # **Forzar redirección**: ignoramos el thread_id del request y usamos el de la BD
+            return StreamingResponse(
+                generar_tokens(thread_id_final, request.message, run_name),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                    "Access-Control-Allow-Origin": "*"
+                }
+            )
     else:
         # Si no se extrae número, usar buffer de estado (thread actual)
         whatsapp_del_thread = await obtener_whatsapp_por_thread(request.thread_id)
