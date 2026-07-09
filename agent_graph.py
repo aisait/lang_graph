@@ -467,9 +467,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         logger.info(f"[chatbot] contexto = {ctx}, paso = {paso}")
 
         # =====================================================================
-        # 4. PRIMERA INTERACCIÓN: bienvenida (solo si no hay nombre)
+        # 4. PRIMERA INTERACCIÓN: bienvenida (solo si no hay nombre y paso=1)
         # =====================================================================
-        if len(state.get("messages", [])) == 1 and not ctx.get("nombre"):
+        if len(state.get("messages", [])) == 1 and paso == 1 and not ctx.get("nombre"):
             bienvenida = (
                 "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. "
                 "Estamos para ayudarte a encontrar la mejor solución energética. "
@@ -505,7 +505,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["paso_actual"] = 6
 
         # =====================================================================
-        # 6. PASO 6: RESPONDER CONSULTA TÉCNICA (metadatos completos)
+        # 6. PASO 6: RESPONDER CONSULTA TÉCNICA (metadatos completos y prompt directo)
         # =====================================================================
         if paso == 6:
             # --- Metadatos para LangSmith ---
@@ -520,25 +520,37 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             config["metadata"]["ubicacion"] = ctx.get("ciudad", "PENDIENTE")
             config["metadata"]["vendedor"] = ctx.get("vendedor", "gerencia@aisa.com.gt")
 
-            logger.info(f"[chatbot] Metadatos: {config['metadata']}")
+            logger.info(f"[chatbot] Metadatos configurados: {config['metadata']}")
 
-            # --- Prompt y respuesta ---
-            if ctx.get("requiere_auditoria_electrica"):
-                regla_datos = "Recopila sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta."
-            else:
-                regla_datos = "Recopila sutilmente: Nombre, Ubicación y Necesidad exacta."
+            # --- Construir prompt de respuesta directa (sin preguntas) ---
+            # Extraer el contexto técnico para el prompt
+            contexto_cliente = ""
+            if ctx.get("nombre"):
+                contexto_cliente += f"Cliente: {ctx['nombre']} (WhatsApp: {ctx.get('whatsapp', 'PENDIENTE')})\n"
+            if ctx.get("ciudad"):
+                contexto_cliente += f"Ubicación: {ctx['ciudad']}\n"
+            if ctx.get("topologia"):
+                contexto_cliente += f"Topología: {ctx['topologia']}\n"
+            if ctx.get("productos") and len(ctx["productos"]) > 0:
+                contexto_cliente += f"Productos de interés: {', '.join(ctx['productos'])}\n"
+            if ctx.get("vendedor"):
+                contexto_cliente += f"Vendedor asignado: {ctx['vendedor']}\n"
+
+            # Si hay datos de empresa y tarifa, incluirlos
+            if ctx.get("empresa_electrica") and ctx.get("tarifa_base_gtq"):
+                contexto_cliente += f"Distribuidora: {ctx['empresa_electrica']}, Tarifa: GTQ {ctx['tarifa_base_gtq']} /kWh\n"
 
             prompt = SystemMessage(
-                f"Eres Jarvi, Ingeniero de Preventa de AISA Solar.\n"
-                f"Ubicación: {ctx.get('ciudad', 'PENDIENTE')}\n"
-                f"Distribuidora: {ctx.get('empresa_electrica', 'PENDIENTE')}\n"
-                f"Tarifa: GTQ {ctx.get('tarifa_base_gtq', 'PENDIENTE')} /kWh\n"
-                f"REGLAS: {regla_datos}\n"
-                f"ONTOLOGÍA: {obtener_fragmento_ontologia(ctx.get('topologia'))}\n"
-                f"Cliente: {ctx.get('nombre', 'PENDIENTE')} | WhatsApp: {ctx.get('whatsapp', 'PENDIENTE')}\n"
-                f"Productos: {', '.join(ctx.get('productos', ['PENDIENTE']))}\n"
-                f"Vendedor: {ctx.get('vendedor', 'PENDIENTE')}"
+                f"Eres Jarvi, Ingeniero de Preventa de AISA Solar.\n\n"
+                f"El cliente ya ha proporcionado toda la información necesaria:\n"
+                f"{contexto_cliente}\n"
+                f"Responde directamente a la última pregunta del usuario, sin pedir más datos. "
+                f"Proporciona información útil, concreta y profesional. "
+                f"Si el cliente pregunta por precios, da una estimación basada en la información disponible. "
+                f"Si pregunta por productos, recomienda los más adecuados según su ubicación y necesidad.\n\n"
+                f"Último mensaje del usuario:\n{ultimo_mensaje if ultimo_mensaje else 'No hay mensaje'}"
             )
+
             try:
                 respuesta = llm.invoke([prompt] + state["messages"], config=config)
             except Exception as e:
