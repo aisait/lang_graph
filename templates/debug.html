@@ -39,12 +39,36 @@
             min-height: 0;
             margin-bottom: 10px;
         }
-        #output .system { color: #66aaff; }
-        #output .user { color: #ffcc00; font-weight: bold; }
-        #output .assistant { color: #00ff99; }
-        #output .error { color: #ff4444; background: #331111; padding: 2px 6px; border-radius: 4px; }
-        #output .context { color: #8888ff; font-style: italic; border-top: 1px solid #333; margin-top: 8px; padding-top: 8px; }
-        #output .raw { color: #aa66ff; font-size: 0.8rem; }
+        /* Estilos para mensajes tipo chat */
+        .message-user {
+            color: #ffcc00;
+            font-weight: bold;
+            margin: 6px 0 2px 0;
+        }
+        .message-assistant {
+            color: #00ff99;
+            margin: 4px 0 8px 0;
+            padding-left: 10px;
+            border-left: 2px solid #00ff99;
+        }
+        .message-context {
+            color: #8888ff;
+            font-style: italic;
+            border-top: 1px solid #333;
+            margin-top: 8px;
+            padding-top: 8px;
+            font-size: 0.8rem;
+        }
+        .message-system {
+            color: #66aaff;
+            margin: 4px 0;
+        }
+        .message-error {
+            color: #ff4444;
+            background: #331111;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
         #input-area {
             display: flex;
             gap: 10px;
@@ -77,8 +101,6 @@
         }
         #input-area button:hover { background: #66ffaa; }
         #input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
-        .log-line { padding: 2px 0; border-bottom: 1px solid #1a1a1a; }
-        .separator { border: none; border-top: 1px dashed #2a4a2a; margin: 6px 0; }
         .tool-row {
             display: flex;
             gap: 10px;
@@ -105,6 +127,17 @@
             cursor: pointer;
         }
         .tool-row button:hover { background: #0055aa; }
+        .separator { border: none; border-top: 1px dashed #2a4a2a; margin: 6px 0; }
+        /* Indicador de escritura */
+        .typing {
+            color: #66ffaa;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 0.4; }
+            50% { opacity: 1; }
+            100% { opacity: 0.4; }
+        }
     </style>
 </head>
 <body>
@@ -120,9 +153,9 @@
         <button id="clear-btn" style="background: #663333;">Limpiar</button>
     </div>
     <div id="output">
-        <div class="system">[Sistema] Consola de depuración iniciada.</div>
-        <div class="system">[Sistema] Escribe tu mensaje o pega un enlace de archivo multimedia.</div>
-        <div class="system" id="thread-display">[Sistema] Thread ID: <span id="thread-id">(cargando...)</span></div>
+        <div class="message-system">[Sistema] Consola de depuración iniciada.</div>
+        <div class="message-system">[Sistema] Escribe tu mensaje o pega un enlace de archivo multimedia.</div>
+        <div class="message-system" id="thread-display">[Sistema] Thread ID: <span id="thread-id">(cargando...)</span></div>
         <hr class="separator">
     </div>
     <div id="input-area">
@@ -151,34 +184,45 @@
             currentThreadId = getThreadId();
             threadDisplay.textContent = currentThreadId;
 
-            let currentAssistantMessage = '';
-            let assistantDiv = null;
-
-            function appendLog(text, type = 'assistant') {
+            // ----- Funciones para agregar mensajes al output -----
+            function addMessage(text, type = 'assistant') {
                 const div = document.createElement('div');
-                div.className = `log-line ${type}`;
+                div.className = `message-${type}`;
                 div.textContent = text;
                 output.appendChild(div);
                 output.scrollTop = output.scrollHeight;
                 return div;
             }
 
-            function appendUserMessage(text) {
-                appendLog(`> ${text}`, 'user');
+            function addUserMessage(text) {
+                addMessage(text, 'user');
             }
+
+            function addSystemMessage(text) {
+                addMessage(text, 'system');
+            }
+
+            function addErrorMessage(text) {
+                addMessage(text, 'error');
+            }
+
+            // Variable para el mensaje del asistente en curso
+            let assistantDiv = null;
+            let currentAssistantMessage = '';
 
             function startAssistantMessage() {
                 currentAssistantMessage = '';
                 assistantDiv = document.createElement('div');
-                assistantDiv.className = 'log-line assistant';
-                assistantDiv.id = 'assistant-current';
+                assistantDiv.className = 'message-assistant';
                 assistantDiv.textContent = '▌';
                 output.appendChild(assistantDiv);
                 output.scrollTop = output.scrollHeight;
             }
 
             function appendToken(token) {
-                if (!assistantDiv) { startAssistantMessage(); }
+                if (!assistantDiv) {
+                    startAssistantMessage();
+                }
                 currentAssistantMessage += token;
                 assistantDiv.textContent = currentAssistantMessage + '▌';
                 output.scrollTop = output.scrollHeight;
@@ -192,7 +236,7 @@
                 }
                 if (contexto && Object.keys(contexto).length > 0) {
                     const ctxDiv = document.createElement('div');
-                    ctxDiv.className = 'log-line context';
+                    ctxDiv.className = 'message-context';
                     ctxDiv.textContent = `[CONTEXTO] ${JSON.stringify(contexto, null, 2)}`;
                     output.appendChild(ctxDiv);
                     output.scrollTop = output.scrollHeight;
@@ -200,15 +244,17 @@
                 currentAssistantMessage = '';
             }
 
+            // ----- Envío de mensaje de texto -----
             async function sendMessage(message) {
                 if (!message) return;
-                appendUserMessage(message);
+                addUserMessage(message);
                 input.value = '';
                 input.disabled = true;
                 sendBtn.disabled = true;
 
+                // Indicador de carga
                 const loadingDiv = document.createElement('div');
-                loadingDiv.className = 'log-line assistant';
+                loadingDiv.className = 'message-assistant typing';
                 loadingDiv.textContent = '...';
                 loadingDiv.id = 'loading-indicator';
                 output.appendChild(loadingDiv);
@@ -226,7 +272,7 @@
 
                     if (!response.ok) {
                         const errText = await response.text();
-                        appendLog(`[ERROR] HTTP ${response.status}: ${errText}`, 'error');
+                        addErrorMessage(`Error HTTP ${response.status}: ${errText}`);
                         return;
                     }
 
@@ -253,17 +299,18 @@
                                 if (data.token !== undefined) {
                                     appendToken(data.token);
                                 } else if (data.info) {
-                                    appendLog(`[INFO] ${data.info}`, 'system');
+                                    addSystemMessage(`[INFO] ${data.info}`);
                                 } else if (data.error) {
-                                    appendLog(`[ERROR] ${data.error}`, 'error');
+                                    addErrorMessage(`[ERROR] ${data.error}`);
                                 } else if (data.contexto_tecnico) {
                                     contexto = data.contexto_tecnico;
                                     finishAssistantMessage(contexto);
                                 } else {
-                                    appendLog(`[RAW] ${jsonStr}`, 'raw');
+                                    // Si no es token, mostrar como información
+                                    addSystemMessage(`[EVENTO] ${jsonStr}`);
                                 }
                             } catch (e) {
-                                appendLog(`[EVENT] ${jsonStr}`, 'raw');
+                                addSystemMessage(`[PARSE] ${jsonStr}`);
                             }
                         }
                     }
@@ -273,7 +320,7 @@
                 } catch (error) {
                     const loader = document.getElementById('loading-indicator');
                     if (loader) loader.remove();
-                    appendLog(`[EXCEPCIÓN] ${error.message}`, 'error');
+                    addErrorMessage(`Excepción: ${error.message}`);
                 } finally {
                     input.disabled = false;
                     sendBtn.disabled = false;
@@ -281,28 +328,14 @@
                 }
             }
 
-            // Enviar mensaje de texto
-            sendBtn.addEventListener('click', () => {
-                const msg = input.value.trim();
-                if (msg) sendMessage(msg);
-            });
-            input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    const msg = input.value.trim();
-                    if (msg) sendMessage(msg);
-                }
-            });
-
-            // Procesar URL pegada (imagen o audio)
+            // ----- Procesar URL (imagen/audio) -----
             processUrlBtn.addEventListener('click', async () => {
                 const url = urlInput.value.trim();
                 if (!url) {
-                    appendLog('[ERROR] Por favor, pega una URL válida.', 'error');
+                    addErrorMessage('Por favor, pega una URL válida.');
                     return;
                 }
 
-                // Detectar tipo por extensión
                 const lower = url.toLowerCase();
                 let endpoint = '';
                 let desc = '';
@@ -314,11 +347,11 @@
                     endpoint = '/api/stt';
                     desc = 'Audio';
                 } else {
-                    appendLog('[ERROR] El enlace no parece ser de imagen o audio válido.', 'error');
+                    addErrorMessage('El enlace no parece ser de imagen o audio válido.');
                     return;
                 }
 
-                appendLog(`[INFO] Procesando ${desc} desde URL: ${url}`, 'system');
+                addSystemMessage(`Procesando ${desc} desde URL: ${url}`);
 
                 try {
                     const response = await fetch(endpoint, {
@@ -331,42 +364,47 @@
                     if (response.ok) {
                         if (endpoint === '/api/vision/analyze') {
                             const extracted = data.extracted_data || {};
-                            appendLog(`[RESULTADO] Factura: Empresa: ${extracted.empresa_electrica || 'N/A'}, Consumo: ${extracted.consumo_kwh || 'N/A'} kWh, Monto: Q${extracted.monto_factura || 'N/A'}`, 'context');
+                            addSystemMessage(`Factura: Empresa: ${extracted.empresa_electrica || 'N/A'}, Consumo: ${extracted.consumo_kwh || 'N/A'} kWh, Monto: Q${extracted.monto_factura || 'N/A'}`);
                         } else if (endpoint === '/api/stt') {
                             const transcript = data.transcript || '';
-                            appendLog(`[TRANSCRIPCIÓN] ${transcript}`, 'assistant');
+                            addSystemMessage(`Transcripción: ${transcript}`);
                         }
                         urlInput.value = '';
                     } else {
-                        appendLog(`[ERROR] ${data.error || 'Error desconocido'}`, 'error');
+                        addErrorMessage(`Error: ${data.error || 'Desconocido'}`);
                     }
                 } catch (error) {
-                    appendLog(`[EXCEPCIÓN] ${error.message}`, 'error');
+                    addErrorMessage(`Excepción al procesar URL: ${error.message}`);
                 }
             });
 
-            // Limpiar output
+            // ----- Limpiar output -----
             clearBtn.addEventListener('click', () => {
                 while (output.children.length > 0) {
                     output.removeChild(output.lastChild);
                 }
-                // Reinsertar mensajes de sistema
-                const sys = document.createElement('div');
-                sys.className = 'system';
-                sys.textContent = '[Sistema] Consola limpiada.';
-                output.appendChild(sys);
-                const sys2 = document.createElement('div');
-                sys2.className = 'system';
-                sys2.textContent = '[Sistema] Escribe tu mensaje o pega un enlace de archivo multimedia.';
-                output.appendChild(sys2);
+                addSystemMessage('Consola limpiada.');
+                addSystemMessage('Escribe tu mensaje o pega un enlace de archivo multimedia.');
                 const sys3 = document.createElement('div');
-                sys3.className = 'system';
-                sys3.id = 'thread-display';
-                sys3.innerHTML = '[Sistema] Thread ID: <span id="thread-id">' + currentThreadId + '</span>';
+                sys3.className = 'message-system';
+                sys3.innerHTML = 'Thread ID: <span id="thread-id">' + currentThreadId + '</span>';
                 output.appendChild(sys3);
                 const sep = document.createElement('hr');
                 sep.className = 'separator';
                 output.appendChild(sep);
+            });
+
+            // ----- Enviar al presionar Enter -----
+            sendBtn.addEventListener('click', () => {
+                const msg = input.value.trim();
+                if (msg) sendMessage(msg);
+            });
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    const msg = input.value.trim();
+                    if (msg) sendMessage(msg);
+                }
             });
 
             input.focus();
