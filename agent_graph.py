@@ -1,7 +1,9 @@
 """
 agent_graph.py - Módulo central del grafo agéntico de JARVI 2.0.
-Implementa flujo de recolección de datos en 5 pasos, failover con 3 API Keys,
-acumulación de costo por thread, y herramienta de persistencia manual.
+Implementa flujo de recolección de datos en 5 pasos (nombre → WhatsApp → ubicación → productos → vendedor),
+failover con 3 API Keys de OpenAI, acumulación de costo por thread,
+extracción de datos antes de la bienvenida, fuzzy matching en ubicación,
+y actualización inmediata del run_name en LangSmith.
 Estándares: ISO/IEC 25010, ISO/IEC 29119, ISO/IEC 27001.
 """
 
@@ -46,7 +48,7 @@ from db_client import (
     obtener_costo_acumulado,
     get_db_connection
 )
-from ubicacion import buscar_ubicacion
+from ubicacion import buscar_ubicacion  # <--- fuzzy matching ya incluido
 
 # =============================================================================
 # CONFIGURACIÓN DE API KEYS Y PRECIOS
@@ -288,7 +290,6 @@ def procesar_oportunidad_backend(
     threading.Thread(target=tarea_background).start()
     return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
 
-# --- Herramienta manual ---
 procesar_oportunidad_tool = StructuredTool.from_function(
     func=procesar_oportunidad_backend,
     name="procesar_oportunidad_backend",
@@ -349,7 +350,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["requiere_auditoria_electrica"] = True
         return {"contexto_tecnico": ctx}
 
-    # ---------- Nodo: Validador Geográfico ----------
+    # ---------- Nodo: Validador Geográfico (con fuzzy matching) ----------
     @auditar_fase(nombre_fase="Validador Geográfico", criticidad="MEDIA")
     @observe_node(node_name="validador_geolocalizacion")
     def validador_geolocalizacion_node(state: AgentState):
@@ -366,7 +367,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["tarifa_base_gtq"] = 1.45
         return {"contexto_tecnico": ctx}
 
-    # ---------- Nodo: Chatbot (flujo natural) ----------
+    # ---------- Nodo: Chatbot (con extracción antes de la bienvenida) ----------
     @auditar_fase(nombre_fase="Inferencia del Chatbot", criticidad="ALTA")
     @observe_node(node_name="chatbot")
     def chatbot_node(state: AgentState, config: RunnableConfig):
@@ -393,7 +394,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 match = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", ultimo_mensaje)
                 if match:
                     ctx["email"] = match.group(0)
-            # Ubicación
+            # Ubicación (fuzzy matching)
             if not ctx.get("ubicacion"):
                 ubicacion = buscar_ubicacion(ultimo_mensaje)
                 if ubicacion:
