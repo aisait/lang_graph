@@ -1,6 +1,6 @@
 """
 api.py - Servidor FastAPI con checkpointing garantizado.
-Unificación de threads por WhatsApp con creación de nuevos threads.
+Unificación de threads por WhatsApp con creación inmediata en BD.
 Cumple con ISO/IEC 25010, 29119, 27001.
 """
 
@@ -119,6 +119,34 @@ async def obtener_whatsapp_por_thread(thread_id: str) -> str | None:
     except Exception as e:
         logger.warning(f"Error al obtener whatsapp por thread: {e}")
         return None
+
+async def guardar_thread_si_no_existe(whatsapp: str, thread_id: str) -> bool:
+    """Inserta un thread en BD si no existe para ese WhatsApp."""
+    try:
+        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+        row = await conn.fetchrow(
+            "SELECT thread_id FROM threads WHERE whatsapp_id = $1",
+            whatsapp
+        )
+        if row:
+            await conn.close()
+            return True
+        await conn.execute(
+            """
+            INSERT INTO threads (thread_id, whatsapp_id, nombre_cliente, metadata)
+            VALUES ($1, $2, $3, $4)
+            """,
+            thread_id,
+            whatsapp,
+            "Pendiente",
+            json.dumps({"status": "inicial"})
+        )
+        await conn.close()
+        logger.info(f"Nuevo thread creado y guardado: {thread_id} para {whatsapp}")
+        return True
+    except Exception as e:
+        logger.error(f"Error al guardar thread: {e}")
+        return False
 
 # ---------------------------------------------------------------------------
 # Ciclo de vida
@@ -239,42 +267,42 @@ async def generar_tokens(thread_id: str, mensaje: str, run_name: str | None = No
         yield f"data: {json.dumps({'contexto_tecnico': ctx})}\n\n"
 
 # ---------------------------------------------------------------------------
-# Endpoint principal /chat (con unificación y creación de nuevos threads)
+# Endpoint principal /chat (con unificación inmediata)
 # ---------------------------------------------------------------------------
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     thread_id_final = None
     run_name = "Pendiente"
 
-    # 1. Intentar extraer WhatsApp del mensaje actual
+    # 1. Extraer WhatsApp del mensaje
     whatsapp_raw = extraer_whatsapp(request.message)
-
     if whatsapp_raw:
-        # Normalizar y buscar thread existente
         _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
         if whatsapp_norm and whatsapp_norm != "Pendiente":
             run_name = whatsapp_norm
+            # Buscar thread existente
             existing = await obtener_thread_por_whatsapp(whatsapp_norm)
             if existing:
                 thread_id_final = existing
-                logger.info(f"Thread unificado (por WhatsApp): {thread_id_final} para {whatsapp_norm}")
+                logger.info(f"Thread unificado: {thread_id_final} para {whatsapp_norm}")
             else:
-                # No existe: crear nuevo thread
-                thread_id_final = str(uuid.uuid4())
-                logger.info(f"Nuevo thread creado: {thread_id_final} para {whatsapp_norm}")
+                # Crear nuevo thread y guardarlo en BD inmediatamente
+                new_thread = str(uuid.uuid4())
+                await guardar_thread_si_no_existe(whatsapp_norm, new_thread)
+                thread_id_final = new_thread
+                logger.info(f"Nuevo thread creado y guardado: {thread_id_final} para {whatsapp_norm}")
     else:
-        # 2. Si no se extrajo número, obtener WhatsApp del thread actual (buffer de estado)
+        # Si no se extrae número, usar buffer de estado (thread actual)
         whatsapp_del_thread = await obtener_whatsapp_por_thread(request.thread_id)
         if whatsapp_del_thread:
             run_name = whatsapp_del_thread
             thread_id_final = request.thread_id
-            logger.info(f"run_name recuperado del thread actual: {run_name}")
+            logger.info(f"run_name recuperado del buffer: {run_name} para thread {thread_id_final}")
         else:
-            # Sin número y sin thread existente: usar el thread_id del request
+            # Sin número y sin buffer: usar el thread_id del request (no se unifica)
             thread_id_final = request.thread_id
-            logger.info("No se encontró WhatsApp asociado al thread actual (se usa el thread_id del request)")
+            logger.info("No se encontró WhatsApp asociado al thread actual (se usa thread_id del request)")
 
-    # Asegurar que thread_id_final no sea None
     if thread_id_final is None:
         thread_id_final = request.thread_id
 
