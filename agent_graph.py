@@ -382,7 +382,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if not ultimo:
             return {"contexto_tecnico": ctx}
         if not ctx.get("ciudad"):
-            if any(k in ultimo for k in ["guatemala", "mixco", "capital", "ciudad", "villa nueva"]):
+            if any(k in ultimo for k in ["guatemala", "mixco", "capital", "ciudad", "villa nuova"]):
                 ctx["ciudad"] = "Guatemala Metropolitana"
                 if ctx.get("requiere_auditoria_electrica"):
                     ctx["empresa_electrica"] = "EEGSA"
@@ -467,7 +467,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         logger.info(f"[chatbot] contexto = {ctx}, paso = {paso}")
 
         # =====================================================================
-        # 4. PRIMERA INTERACCIÓN: bienvenida (solo si no hay nombre y paso=1)
+        # 4. PRIMERA INTERACCIÓN: bienvenida (solo si paso=1 y no hay nombre)
         # =====================================================================
         if len(state.get("messages", [])) == 1 and paso == 1 and not ctx.get("nombre"):
             bienvenida = (
@@ -523,7 +523,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             logger.info(f"[chatbot] Metadatos configurados: {config['metadata']}")
 
             # --- Construir prompt de respuesta directa (sin preguntas) ---
-            # Extraer el contexto técnico para el prompt
             contexto_cliente = ""
             if ctx.get("nombre"):
                 contexto_cliente += f"Cliente: {ctx['nombre']} (WhatsApp: {ctx.get('whatsapp', 'PENDIENTE')})\n"
@@ -535,8 +534,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 contexto_cliente += f"Productos de interés: {', '.join(ctx['productos'])}\n"
             if ctx.get("vendedor"):
                 contexto_cliente += f"Vendedor asignado: {ctx['vendedor']}\n"
-
-            # Si hay datos de empresa y tarifa, incluirlos
             if ctx.get("empresa_electrica") and ctx.get("tarifa_base_gtq"):
                 contexto_cliente += f"Distribuidora: {ctx['empresa_electrica']}, Tarifa: GTQ {ctx['tarifa_base_gtq']} /kWh\n"
 
