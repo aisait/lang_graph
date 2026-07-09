@@ -1,6 +1,6 @@
 """
 api.py - Servidor FastAPI con checkpointing garantizado.
-Unificación de threads por WhatsApp con validación de consistencia en cada petición.
+Unificación de threads por WhatsApp preservando el historial.
 Cumple con ISO/IEC 25010, 29119, 27001.
 """
 
@@ -119,6 +119,26 @@ async def obtener_whatsapp_por_thread(thread_id: str) -> str | None:
     except Exception as e:
         logger.warning(f"Error al obtener whatsapp por thread: {e}")
         return None
+
+async def actualizar_thread_con_whatsapp(thread_id: str, whatsapp: str) -> bool:
+    """Asocia un WhatsApp a un thread existente (si no tiene ya uno)."""
+    try:
+        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+        await conn.execute(
+            """
+            UPDATE threads
+            SET whatsapp_id = $1
+            WHERE thread_id = $2 AND (whatsapp_id IS NULL OR whatsapp_id = '')
+            """,
+            whatsapp,
+            thread_id
+        )
+        await conn.close()
+        logger.info(f"Thread {thread_id} actualizado con WhatsApp {whatsapp}")
+        return True
+    except Exception as e:
+        logger.error(f"Error al actualizar thread con whatsapp: {e}")
+        return False
 
 async def guardar_thread_si_no_existe(whatsapp: str, thread_id: str) -> bool:
     """Inserta un thread en BD si no existe para ese WhatsApp."""
@@ -267,20 +287,19 @@ async def generar_tokens(thread_id: str, mensaje: str, run_name: str | None = No
         yield f"data: {json.dumps({'contexto_tecnico': ctx})}\n\n"
 
 # =============================================================================
-# ENDPOINT PRINCIPAL /chat CON VALIDACIÓN DE CONSISTENCIA
+# ENDPOINT PRINCIPAL /chat CON UNIFICACIÓN PRESERVANDO EL HISTORIAL
 # =============================================================================
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     """
-    Endpoint principal que valida la consistencia del thread en cada petición.
-    1. Extrae el número de WhatsApp del mensaje.
-    2. Si se detecta un número, busca el thread_id en la base de datos.
-    3. Si existe, usa ese thread_id (ignorando el del request).
-    4. Si no existe, crea un nuevo thread_id y lo guarda en la base de datos.
-    5. Si no se detecta número, usa el thread_id del request (buffer de estado).
-    6. Siempre verifica que el thread_id final esté asociado al número correcto.
+    Endpoint que unifica threads por WhatsApp sin perder el historial.
+    Si se detecta un número en el mensaje:
+      - Si el thread actual no tiene número asociado, se asigna el número al thread actual.
+      - Si el thread actual ya tiene un número diferente, se redirige al thread correspondiente a ese número.
+      - Si no existe thread para el número, se crea uno nuevo.
+    Si no se detecta número, se usa el thread actual (buffer).
     """
-    thread_id_final = None
+    thread_id_final = request.thread_id
     run_name = "Pendiente"
 
     # 1. Extraer WhatsApp del mensaje
@@ -290,21 +309,30 @@ async def chat_endpoint(request: ChatRequest):
         _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
         if whatsapp_norm and whatsapp_norm != "Pendiente":
             run_name = whatsapp_norm
-            # Buscar thread existente en BD
-            existing = await obtener_thread_por_whatsapp(whatsapp_norm)
-            if existing:
-                thread_id_final = existing
-                logger.info(f"Thread unificado (por WhatsApp): {thread_id_final} para {whatsapp_norm}")
-                # Verificar que el thread_id del request coincide con el de la BD
-                if request.thread_id != thread_id_final:
-                    logger.warning(f"El thread_id del request ({request.thread_id}) no coincide con el de la BD ({thread_id_final}). Se usa el de la BD.")
+            # Verificar si el thread actual ya tiene un número asignado
+            whatsapp_actual = await obtener_whatsapp_por_thread(request.thread_id)
+            if whatsapp_actual is None or whatsapp_actual == "":
+                # El thread actual no tiene número, asignar este número
+                await actualizar_thread_con_whatsapp(request.thread_id, whatsapp_norm)
+                thread_id_final = request.thread_id
+                logger.info(f"Número {whatsapp_norm} asignado al thread actual {thread_id_final}")
+            elif whatsapp_actual == whatsapp_norm:
+                # El thread actual ya tiene el mismo número, usarlo
+                thread_id_final = request.thread_id
+                logger.info(f"Thread actual ya tiene el número {whatsapp_norm}")
             else:
-                # Crear nuevo thread y guardarlo en BD inmediatamente
-                new_thread = str(uuid.uuid4())
-                await guardar_thread_si_no_existe(whatsapp_norm, new_thread)
-                thread_id_final = new_thread
-                logger.info(f"Nuevo thread creado y guardado: {thread_id_final} para {whatsapp_norm}")
-            # Forzar redirección: ignoramos el thread_id del request y usamos el de la BD
+                # El thread actual tiene un número diferente, buscar el thread correcto
+                existing = await obtener_thread_por_whatsapp(whatsapp_norm)
+                if existing:
+                    thread_id_final = existing
+                    logger.info(f"Redirigiendo al thread existente {thread_id_final} para {whatsapp_norm}")
+                else:
+                    # No existe thread para este número, crear uno nuevo
+                    new_thread = str(uuid.uuid4())
+                    await guardar_thread_si_no_existe(whatsapp_norm, new_thread)
+                    thread_id_final = new_thread
+                    logger.info(f"Nuevo thread creado {thread_id_final} para {whatsapp_norm}")
+            # Devolver respuesta con el thread final
             return StreamingResponse(
                 generar_tokens(thread_id_final, request.message, run_name),
                 media_type="text/event-stream",
@@ -322,14 +350,8 @@ async def chat_endpoint(request: ChatRequest):
             run_name = whatsapp_del_thread
             thread_id_final = request.thread_id
             logger.info(f"run_name recuperado del buffer: {run_name} para thread {thread_id_final}")
-        else:
-            # Sin número y sin buffer: usar el thread_id del request (no se unifica)
-            thread_id_final = request.thread_id
-            logger.info("No se encontró WhatsApp asociado al thread actual (se usa thread_id del request)")
 
-    if thread_id_final is None:
-        thread_id_final = request.thread_id
-
+    # Si no se detectó número y no hay buffer, usar el thread del request
     return StreamingResponse(
         generar_tokens(thread_id_final, request.message, run_name),
         media_type="text/event-stream",
