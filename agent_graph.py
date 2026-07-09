@@ -47,6 +47,16 @@ from ubicacion import cargar_ubicacion
 from ontology import cargar_ontologia
 import json
 
+# =============================================================================
+# NUEVO: Obtener clave por defecto para OpenAI (compatible con OPENAI_API_KEY_1..3)
+# =============================================================================
+OPENAI_KEYS = [os.getenv(f"OPENAI_API_KEY_{i}") for i in range(1,4)]
+OPENAI_KEYS = [k for k in OPENAI_KEYS if k]
+DEFAULT_API_KEY = OPENAI_KEYS[0] if OPENAI_KEYS else os.getenv("OPENAI_API_KEY")
+
+if not DEFAULT_API_KEY:
+    raise RuntimeError("No se encontró ninguna API Key de OpenAI.")
+
 # ---------------------------------------------------------------------------
 # Diccionario de códigos de área para Centroamérica
 # Prueba de caja negra: Inyectar ubicaciones con nombres de países y verificar
@@ -319,9 +329,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     """
     graph_builder = StateGraph(AgentState)
 
-    # Modelo de lenguaje principal (GPT-4o mini) con la herramienta de persistencia
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
-    extractor_llm = llm.with_structured_output(ExtractorContacto)
+    # =========================================================================
+    # CORRECCIÓN: Se pasa la API key por defecto
+    # =========================================================================
+    llm = ChatOpenAI(api_key=DEFAULT_API_KEY, model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
+    extractor_llm = ChatOpenAI(api_key=DEFAULT_API_KEY, model="gpt-4o-mini", temperature=0.1).with_structured_output(ExtractorContacto)
 
     # =========================================================================
     # NUEVO: Cargar datos para el pipeline de normalización
