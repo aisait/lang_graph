@@ -1,6 +1,6 @@
 """
 api.py - Servidor FastAPI con checkpointing garantizado.
-Unificación de threads por WhatsApp con creación inmediata en BD y forzado de redirección.
+Unificación de threads por WhatsApp con validación de consistencia en cada petición.
 Cumple con ISO/IEC 25010, 29119, 27001.
 """
 
@@ -266,16 +266,26 @@ async def generar_tokens(thread_id: str, mensaje: str, run_name: str | None = No
 
         yield f"data: {json.dumps({'contexto_tecnico': ctx})}\n\n"
 
-# ---------------------------------------------------------------------------
-# Endpoint principal /chat (con forzado de redirección al thread de BD)
-# ---------------------------------------------------------------------------
+# =============================================================================
+# ENDPOINT PRINCIPAL /chat CON VALIDACIÓN DE CONSISTENCIA
+# =============================================================================
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
+    """
+    Endpoint principal que valida la consistencia del thread en cada petición.
+    1. Extrae el número de WhatsApp del mensaje.
+    2. Si se detecta un número, busca el thread_id en la base de datos.
+    3. Si existe, usa ese thread_id (ignorando el del request).
+    4. Si no existe, crea un nuevo thread_id y lo guarda en la base de datos.
+    5. Si no se detecta número, usa el thread_id del request (buffer de estado).
+    6. Siempre verifica que el thread_id final esté asociado al número correcto.
+    """
     thread_id_final = None
     run_name = "Pendiente"
 
     # 1. Extraer WhatsApp del mensaje
     whatsapp_raw = extraer_whatsapp(request.message)
+
     if whatsapp_raw:
         _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
         if whatsapp_norm and whatsapp_norm != "Pendiente":
@@ -285,13 +295,16 @@ async def chat_endpoint(request: ChatRequest):
             if existing:
                 thread_id_final = existing
                 logger.info(f"Thread unificado (por WhatsApp): {thread_id_final} para {whatsapp_norm}")
+                # Verificar que el thread_id del request coincide con el de la BD
+                if request.thread_id != thread_id_final:
+                    logger.warning(f"El thread_id del request ({request.thread_id}) no coincide con el de la BD ({thread_id_final}). Se usa el de la BD.")
             else:
                 # Crear nuevo thread y guardarlo en BD inmediatamente
                 new_thread = str(uuid.uuid4())
                 await guardar_thread_si_no_existe(whatsapp_norm, new_thread)
                 thread_id_final = new_thread
                 logger.info(f"Nuevo thread creado y guardado: {thread_id_final} para {whatsapp_norm}")
-            # **Forzar redirección**: ignoramos el thread_id del request y usamos el de la BD
+            # Forzar redirección: ignoramos el thread_id del request y usamos el de la BD
             return StreamingResponse(
                 generar_tokens(thread_id_final, request.message, run_name),
                 media_type="text/event-stream",
