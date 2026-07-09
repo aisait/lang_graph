@@ -48,7 +48,7 @@ from ontology import cargar_ontologia
 import json
 
 # =============================================================================
-# Configuración de API Key (compatible con OPENAI_API_KEY_1, _2, _3)
+# Configuración de API Key (compatible với OPENAI_API_KEY_1, _2, _3)
 # =============================================================================
 OPENAI_KEYS = [os.getenv(f"OPENAI_API_KEY_{i}") for i in range(1,4)]
 OPENAI_KEYS = [k for k in OPENAI_KEYS if k]
@@ -382,7 +382,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if not ultimo:
             return {"contexto_tecnico": ctx}
         if not ctx.get("ciudad"):
-            if any(k in ultimo for k in ["guatemala", "mixco", "capital", "ciudad", "villa nueva"]):
+            if any(k in ultimo for k in ["guatemala", "mixco", "capital", "ciudad", "villa nuova"]):
                 ctx["ciudad"] = "Guatemala Metropolitana"
                 if ctx.get("requiere_auditoria_electrica"):
                     ctx["empresa_electrica"] = "EEGSA"
@@ -403,7 +403,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
         # =====================================================================
-        # NUEVO: Pipeline de normalización SOLO para enriquecer, sin sobrescribir
+        # Pipeline de normalización PARA ENRIQUECER, no sobrescribe
+        # CORRECCIÓN: ahora asigna también productos y vendedor
         # =====================================================================
         if ultimo_mensaje:
             extraido = pipeline_extraccion(
@@ -424,7 +425,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     elif key == "topologia":
                         ctx["topologia"] = value
                         ctx["requiere_auditoria_electrica"] = True
-                    # No se tocan 'productos' ni 'vendedor' para no interferir con la lógica original
+                    # ===== NUEVAS ASIGNACIONES =====
+                    elif key == "productos":
+                        ctx["productos"] = value
+                    elif key == "vendedor":
+                        ctx["vendedor"] = value
 
         # --- LOG DE DEPURACIÓN ---
         import logging
@@ -484,12 +489,17 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         whatsapp_ctx = ctx.get("whatsapp", "Pendiente")
         nombre_run, whatsapp_run = normalizar_contacto(nombre_ctx, whatsapp_ctx, ctx.get("ciudad", ""))
 
-        # Inyección de trazabilidad en el config (LangSmith)
+        # =====================================================================
+        # CORRECCIÓN: Añadir nombre y productos (tags) a los metadatos
+        # =====================================================================
         config["run_name"] = f"Lead: {nombre_run}"
         if "metadata" not in config:
             config["metadata"] = {}
+        config["metadata"]["nombre"] = ctx.get("nombre", "PENDIENTE")          # <--- NUEVO
         config["metadata"]["whatsapp"] = whatsapp_run
         config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
+        config["metadata"]["tags"] = ctx.get("productos", [])                  # <--- NUEVO
+        config["metadata"]["ciudad"] = ctx.get("ciudad", "PENDIENTE")
 
         # Construcción del system prompt con todos los datos acumulados
         prompt_sistema = SystemMessage(
