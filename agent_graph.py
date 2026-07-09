@@ -366,7 +366,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["tarifa_base_gtq"] = 1.45
         return {"contexto_tecnico": ctx}
 
-    # ---------- Nodo: Chatbot (flujo natural con run_name inmediato) ----------
+    # ---------- Nodo: Chatbot (flujo natural) ----------
     @auditar_fase(nombre_fase="Inferencia del Chatbot", criticidad="ALTA")
     @observe_node(node_name="chatbot")
     def chatbot_node(state: AgentState, config: RunnableConfig):
@@ -378,7 +378,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if "paso_actual" not in ctx:
             ctx["paso_actual"] = 0
 
-        # --- Extraer datos del mensaje actual ---
+        # --- EXTRACCIÓN DE DATOS DEL MENSAJE ACTUAL (SIEMPRE) ---
         if ultimo_mensaje:
             # Extraer nombre, teléfono, email con regex
             if not ctx.get("nombre"):
@@ -418,7 +418,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
                     ctx["requiere_auditoria_electrica"] = True
 
-            # --- ACTUALIZAR run_name INMEDIATAMENTE (sin esperar al paso 6) ---
+            # --- ACTUALIZAR run_name INMEDIATAMENTE (con WhatsApp) ---
             _, whatsapp_run = normalizar_contacto("", ctx.get("whatsapp", "Pendiente"), "")
             if whatsapp_run and whatsapp_run != "Pendiente":
                 config["run_name"] = whatsapp_run
@@ -446,7 +446,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             if validar_campos_obligatorios(ctx):
                 ctx["paso_actual"] = 6
 
-        # --- SI ES LA PRIMERA INTERACCIÓN, INICIAR FLUJO ---
+        # --- SI ES LA PRIMERA INTERACCIÓN, INICIAR FLUJO (con datos ya extraídos) ---
         if len(state.get("messages", [])) == 1 and ctx["paso_actual"] == 0:
             ctx["paso_actual"] = 1
             return {
