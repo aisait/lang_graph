@@ -2,6 +2,7 @@
 api.py - Servidor FastAPI con checkpointing garantizado.
 Se usa ainvoke para asegurar persistencia y luego se transmiten los tokens.
 Se conservan todos los middlewares, autenticación, telemetría y logs.
+Ahora con unificación de threads por WhatsApp.
 """
 
 import os
@@ -9,11 +10,13 @@ import asyncio
 import json
 import time
 import logging
+import re
 from collections import defaultdict
 from typing import AsyncGenerator
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import psutil
+import asyncpg
 from fastapi import FastAPI, HTTPException, Depends, Security, Request
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
@@ -68,6 +71,55 @@ def taxonomy_error(exc: Exception) -> str:
     if isinstance(exc, HTTPException):
         return f"SWR-API-MED-{exc.status_code}"
     return "SWR-API-UNKNOWN-000"
+
+# =============================================================================
+# NUEVA FUNCIÓN: Extraer WhatsApp del mensaje (regex simple)
+# =============================================================================
+def extraer_whatsapp(mensaje: str) -> str | None:
+    """
+    Extrae el primer número de WhatsApp (con o sin código de país) del mensaje.
+    """
+    if not mensaje:
+        return None
+    # Buscar patrones de teléfono: +502 1234-5678, 50212345678, 12345678, etc.
+    match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', mensaje)
+    if match:
+        # Normalizar: eliminar espacios, guiones, etc.
+        numero = re.sub(r'[\s\-\.]', '', match.group(0))
+        # Si tiene código de país, asegurar formato +502
+        if numero.startswith('+'):
+            return numero
+        elif len(numero) == 8:
+            return f"+502 {numero[:4]}-{numero[4:]}"
+        elif len(numero) == 11 and numero.startswith('502'):
+            return f"+{numero[:3]} {numero[3:7]}-{numero[7:]}"
+        else:
+            return f"+502 {numero}"  # Asumir Guatemala
+    return None
+
+# =============================================================================
+# NUEVA FUNCIÓN: Obtener thread_id existente para un WhatsApp
+# =============================================================================
+async def obtener_thread_por_whatsapp(whatsapp: str) -> str | None:
+    """
+    Consulta la base de datos para encontrar un thread_id asociado al WhatsApp.
+    """
+    conn = None
+    try:
+        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+        row = await conn.fetchrow(
+            "SELECT thread_id FROM threads WHERE whatsapp_id = $1",
+            whatsapp
+        )
+        if row:
+            return row["thread_id"]
+        return None
+    except Exception as e:
+        logger.warning(f"Error al consultar thread por whatsapp: {e}")
+        return None
+    finally:
+        if conn:
+            await conn.close()
 
 # ---------------------------------------------------------------------------
 # Ciclo de vida de la aplicación
@@ -146,32 +198,34 @@ async def acknowledge_dispatch(trace_id: str):
 
 # ---------------------------------------------------------------------------
 # Función de generación de tokens (con checkpointing garantizado y sin delays)
-# Ahora consulta la BD para establecer run_name con el WhatsApp del cliente.
 # ---------------------------------------------------------------------------
-async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, None]:
+async def generar_tokens(thread_id: str, mensaje: str, run_name: str | None = None) -> AsyncGenerator[str, None]:
     # Inyectar trace_id en el config
     trace_id = trace_id_var.get()
     config = {"configurable": {"thread_id": thread_id}}
     config["metadata"] = config.get("metadata", {})
     config["metadata"]["trace_id"] = trace_id
 
-    # --- CONSULTAR WHATSAPP EN BD PARA ESTABLECER run_name ---
-    try:
-        import asyncpg
-        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
-        row = await conn.fetchrow(
-            "SELECT whatsapp_id FROM threads WHERE thread_id = $1",
-            thread_id
-        )
-        if row and row["whatsapp_id"]:
-            config["run_name"] = row["whatsapp_id"]
-            config["metadata"]["whatsapp"] = row["whatsapp_id"]
-            logger.info(f"run_name establecido a: {row['whatsapp_id']} para thread {thread_id}")
-        else:
-            logger.info(f"No se encontró whatsapp para thread {thread_id}, run_name por defecto")
-        await conn.close()
-    except Exception as e:
-        logger.warning(f"No se pudo obtener whatsapp para run_name: {e}")
+    # Si se proporcionó un run_name (WhatsApp normalizado), usarlo
+    if run_name and run_name != "Pendiente":
+        config["run_name"] = run_name
+        config["metadata"]["whatsapp"] = run_name
+        logger.info(f"run_name establecido a: {run_name} para thread {thread_id}")
+    else:
+        # Si no, intentar obtener de la BD (por si ya estaba registrado)
+        try:
+            conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+            row = await conn.fetchrow(
+                "SELECT whatsapp_id FROM threads WHERE thread_id = $1",
+                thread_id
+            )
+            if row and row["whatsapp_id"]:
+                config["run_name"] = row["whatsapp_id"]
+                config["metadata"]["whatsapp"] = row["whatsapp_id"]
+                logger.info(f"run_name recuperado de BD: {row['whatsapp_id']}")
+            await conn.close()
+        except Exception as e:
+            logger.warning(f"No se pudo obtener whatsapp para run_name: {e}")
 
     estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
     logger.info(f"Ejecutando chat para thread_id={thread_id}, trace_id={trace_id}")
@@ -204,12 +258,35 @@ async def generar_tokens(thread_id: str, mensaje: str) -> AsyncGenerator[str, No
         yield f"data: {json.dumps({'contexto_tecnico': ctx})}\n\n"
 
 # ---------------------------------------------------------------------------
-# Endpoint principal /chat
+# Endpoint principal /chat (con unificación de threads)
 # ---------------------------------------------------------------------------
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
+    # 1. Extraer WhatsApp del mensaje
+    whatsapp_raw = extraer_whatsapp(request.message)
+    thread_id_final = request.thread_id
+    run_name = "Pendiente"
+
+    # 2. Si se encontró un WhatsApp, buscar thread existente en BD
+    if whatsapp_raw:
+        # Normalizar el WhatsApp (usar función auxiliar si existe, o simple)
+        # Para simplificar, usamos el extraído y lo normalizamos con la función del agente (importada)
+        from agent_graph import normalizar_contacto
+        _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
+        if whatsapp_norm and whatsapp_norm != "Pendiente":
+            run_name = whatsapp_norm
+            # Buscar thread_id existente
+            existing_thread = await obtener_thread_por_whatsapp(whatsapp_norm)
+            if existing_thread:
+                thread_id_final = existing_thread
+                logger.info(f"Thread unificado: usando thread_id {thread_id_final} para WhatsApp {whatsapp_norm}")
+            else:
+                # No existe, se creará nuevo con el thread_id del request
+                logger.info(f"Nuevo thread para WhatsApp {whatsapp_norm}")
+
+    # 3. Llamar a generar_tokens con el thread_id final y el run_name
     return StreamingResponse(
-        generar_tokens(request.thread_id, request.message),
+        generar_tokens(thread_id_final, request.message, run_name),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
