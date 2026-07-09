@@ -11,7 +11,7 @@
 fastapi>=0.115.0                # Compatible con starlette>=0.38.6 (evita conflicto)
 uvicorn[standard]>=0.30.1       # Servidor ASGI de alto rendimiento
 python-multipart>=0.0.9         # Soporte para formularios multipart
-Flask>=2.2.0
+Flask>=2.2.0                    # Para servicio de depuración (cliente-debug)
 
 # ---------------------------------------------------------------------
 # Core Agéntico (ISO 25010: Eficiencia de desempeño, Fiabilidad)
