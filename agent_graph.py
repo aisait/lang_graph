@@ -5,6 +5,8 @@ failover con 3 API Keys de OpenAI y acumulación de costo por thread.
 Estándares: ISO/IEC 25010, ISO/IEC 29119, ISO/IEC 27001.
 """
 
+from __future__ import annotations  # <--- CORRECCIÓN: evita evaluación anticipada de tipos
+
 import os
 import re
 import json
