@@ -1,25 +1,13 @@
-# Dockerfile.debug
-# Imagen para la consola CLI de depuración (Flask + Jinja2)
 FROM python:3.11-slim
-
 WORKDIR /app
-
-# Instalar dependencias del sistema (ninguna adicional necesaria)
-# Instalar dependencias Python
 COPY requirements.txt .
-RUN pip install --no-cache-dir Flask requests
-
-# Copiar código fuente
+RUN pip install --no-cache-dir -r requirements.txt
 COPY debug_app.py .
 COPY templates/ ./templates/
-
-# Copiar archivos auxiliares (opcional, por si el backend los necesita)
+COPY vision.py .          # <--- Añadir esta línea
+COPY audio.py .           # <--- Añadir esta línea
 COPY vendedores.json .
 COPY catalog_ontology.json .
-
-# Puerto de escucha
 ENV PORT=8080
 EXPOSE 8080
-
-# Comando de arranque
 CMD ["python", "debug_app.py"]
