@@ -1,8 +1,6 @@
 """
 api.py - Servidor FastAPI con checkpointing garantizado.
-Se usa ainvoke para asegurar persistencia y luego se transmiten los tokens.
-Se conservan todos los middlewares, autenticación, telemetría y logs.
-Ahora con unificación de threads por WhatsApp.
+Unificación de threads por WhatsApp mediante buffer de estado.
 """
 
 import os
@@ -35,21 +33,21 @@ from telemetry import (
 )
 
 # ---------------------------------------------------------------------------
-# Esquemas adicionales de validación de datos (Pydantic)
+# Esquemas adicionales
 # ---------------------------------------------------------------------------
 class TTSRequest(BaseModel):
     text: str
     voice: str | None = None
 
 # ---------------------------------------------------------------------------
-# Configuración de logging
+# Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("jarvi.api")
 
 # ---------------------------------------------------------------------------
-# Seguridad – autenticación por API Key (ISO/IEC 27001)
+# Seguridad
 # ---------------------------------------------------------------------------
 API_KEY = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
@@ -73,20 +71,15 @@ def taxonomy_error(exc: Exception) -> str:
     return "SWR-API-UNKNOWN-000"
 
 # =============================================================================
-# NUEVA FUNCIÓN: Extraer WhatsApp del mensaje (regex simple)
+# FUNCIONES DE UNIFICACIÓN
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
-    """
-    Extrae el primer número de WhatsApp (con o sin código de país) del mensaje.
-    """
+    """Extrae el primer número de WhatsApp del mensaje."""
     if not mensaje:
         return None
-    # Buscar patrones de teléfono: +502 1234-5678, 50212345678, 12345678, etc.
     match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', mensaje)
     if match:
-        # Normalizar: eliminar espacios, guiones, etc.
         numero = re.sub(r'[\s\-\.]', '', match.group(0))
-        # Si tiene código de país, asegurar formato +502
         if numero.startswith('+'):
             return numero
         elif len(numero) == 8:
@@ -94,35 +87,39 @@ def extraer_whatsapp(mensaje: str) -> str | None:
         elif len(numero) == 11 and numero.startswith('502'):
             return f"+{numero[:3]} {numero[3:7]}-{numero[7:]}"
         else:
-            return f"+502 {numero}"  # Asumir Guatemala
+            return f"+502 {numero}"
     return None
 
-# =============================================================================
-# NUEVA FUNCIÓN: Obtener thread_id existente para un WhatsApp
-# =============================================================================
 async def obtener_thread_por_whatsapp(whatsapp: str) -> str | None:
-    """
-    Consulta la base de datos para encontrar un thread_id asociado al WhatsApp.
-    """
-    conn = None
+    """Busca thread_id asociado a un WhatsApp."""
     try:
         conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
         row = await conn.fetchrow(
             "SELECT thread_id FROM threads WHERE whatsapp_id = $1",
             whatsapp
         )
-        if row:
-            return row["thread_id"]
-        return None
+        await conn.close()
+        return row["thread_id"] if row else None
     except Exception as e:
         logger.warning(f"Error al consultar thread por whatsapp: {e}")
         return None
-    finally:
-        if conn:
-            await conn.close()
+
+async def obtener_whatsapp_por_thread(thread_id: str) -> str | None:
+    """Obtiene el WhatsApp asociado a un thread_id (buffer de estado)."""
+    try:
+        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+        row = await conn.fetchrow(
+            "SELECT whatsapp_id FROM threads WHERE thread_id = $1",
+            thread_id
+        )
+        await conn.close()
+        return row["whatsapp_id"] if row else None
+    except Exception as e:
+        logger.warning(f"Error al obtener whatsapp por thread: {e}")
+        return None
 
 # ---------------------------------------------------------------------------
-# Ciclo de vida de la aplicación
+# Ciclo de vida
 # ---------------------------------------------------------------------------
 graph = None
 
@@ -131,28 +128,21 @@ async def lifespan(app: FastAPI):
     global graph
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
-        raise RuntimeError("DATABASE_URL no definida – servicio no disponible")
-
-    # Sanitizar URL
+        raise RuntimeError("DATABASE_URL no definida")
     try:
         parsed = urlparse(db_url)
         query = parse_qs(parsed.query)
         for p in ["pool_size", "max_overflow", "pool_timeout"]:
             query.pop(p, None)
-        clean_query = urlencode(query, doseq=True)
-        db_url_clean = urlunparse(parsed._replace(query=clean_query))
+        db_url = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
     except Exception:
-        db_url_clean = db_url
-
+        pass
     async with AsyncExitStack() as stack:
-        logger.info("Inicializando Pool de conexiones...")
-        raw_checkpointer = AsyncPostgresSaver.from_conn_string(db_url_clean)
-        checkpointer = await stack.enter_async_context(raw_checkpointer)
+        checkpointer = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(db_url))
         await checkpointer.setup()
         graph = create_graph(checkpointer)
         logger.info("JARVI 2.0 API inicializada – Grafo listo")
         start_batch_worker()
-        logger.info("CTFOM: worker de telemetría iniciado")
         yield
     logger.info("Apagando API JARVI")
 
@@ -197,93 +187,88 @@ async def acknowledge_dispatch(trace_id: str):
     return {"status": "ACK received", "trace_id": trace_id}
 
 # ---------------------------------------------------------------------------
-# Función de generación de tokens (con checkpointing garantizado y sin delays)
+# Función de generación de tokens
 # ---------------------------------------------------------------------------
 async def generar_tokens(thread_id: str, mensaje: str, run_name: str | None = None) -> AsyncGenerator[str, None]:
-    # Inyectar trace_id en el config
     trace_id = trace_id_var.get()
     config = {"configurable": {"thread_id": thread_id}}
     config["metadata"] = config.get("metadata", {})
     config["metadata"]["trace_id"] = trace_id
 
-    # Si se proporcionó un run_name (WhatsApp normalizado), usarlo
+    # Si se proporcionó un run_name, usarlo; si no, intentar obtener de BD
     if run_name and run_name != "Pendiente":
         config["run_name"] = run_name
         config["metadata"]["whatsapp"] = run_name
         logger.info(f"run_name establecido a: {run_name} para thread {thread_id}")
     else:
-        # Si no, intentar obtener de la BD (por si ya estaba registrado)
         try:
             conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
             row = await conn.fetchrow(
                 "SELECT whatsapp_id FROM threads WHERE thread_id = $1",
                 thread_id
             )
+            await conn.close()
             if row and row["whatsapp_id"]:
                 config["run_name"] = row["whatsapp_id"]
                 config["metadata"]["whatsapp"] = row["whatsapp_id"]
                 logger.info(f"run_name recuperado de BD: {row['whatsapp_id']}")
-            await conn.close()
         except Exception as e:
             logger.warning(f"No se pudo obtener whatsapp para run_name: {e}")
 
     estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
-    logger.info(f"Ejecutando chat para thread_id={thread_id}, trace_id={trace_id}")
-
     async with locks[thread_id]:
-        # 1. Invocar el grafo (ainvoke garantiza checkpoint)
         resultado = await graph.ainvoke(estado_inicial, config=config)
         messages = resultado.get("messages", [])
         ctx = resultado.get("contexto_tecnico", {})
-
         logger.info(f"Contexto final para thread {thread_id}: {ctx}")
 
-        # 2. Extraer la última respuesta del asistente
         respuesta_final = ""
         for msg in reversed(messages):
             if isinstance(msg, AIMessage):
                 respuesta_final = msg.content
                 break
 
-        # 3. Simular streaming de tokens (sin sleeps, rápido)
         if respuesta_final:
             tokens = respuesta_final.split()
             for i, token in enumerate(tokens):
-                sep = " " if i < len(tokens)-1 else ""
-                yield f"data: {json.dumps({'token': token + sep})}\n\n"
+                yield f"data: {json.dumps({'token': token + (' ' if i < len(tokens)-1 else '')})}\n\n"
         else:
-            yield f"data: {json.dumps({'token': 'No se pudo generar una respuesta. Por favor, intenta de nuevo.'})}\n\n"
+            yield f"data: {json.dumps({'token': 'No se pudo generar una respuesta.'})}\n\n"
 
-        # Enviar contexto al final
         yield f"data: {json.dumps({'contexto_tecnico': ctx})}\n\n"
 
 # ---------------------------------------------------------------------------
-# Endpoint principal /chat (con unificación de threads)
+# Endpoint principal /chat (con buffer de estado)
 # ---------------------------------------------------------------------------
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
-    # 1. Extraer WhatsApp del mensaje
-    whatsapp_raw = extraer_whatsapp(request.message)
     thread_id_final = request.thread_id
     run_name = "Pendiente"
 
-    # 2. Si se encontró un WhatsApp, buscar thread existente en BD
+    # 1. Intentar extraer WhatsApp del mensaje actual
+    whatsapp_raw = extraer_whatsapp(request.message)
+
     if whatsapp_raw:
-        # Normalizar el WhatsApp (usar función auxiliar si existe, o simple)
-        # Para simplificar, usamos el extraído y lo normalizamos con la función del agente (importada)
+        # Normalizar y buscar thread existente
         _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
         if whatsapp_norm and whatsapp_norm != "Pendiente":
             run_name = whatsapp_norm
-            # Buscar thread_id existente
-            existing_thread = await obtener_thread_por_whatsapp(whatsapp_norm)
-            if existing_thread:
-                thread_id_final = existing_thread
-                logger.info(f"Thread unificado: usando thread_id {thread_id_final} para WhatsApp {whatsapp_norm}")
+            existing = await obtener_thread_por_whatsapp(whatsapp_norm)
+            if existing:
+                thread_id_final = existing
+                logger.info(f"Thread unificado (por WhatsApp): {thread_id_final} para {whatsapp_norm}")
             else:
-                # No existe, se creará nuevo con el thread_id del request
-                logger.info(f"Nuevo thread para WhatsApp {whatsapp_norm}")
+                logger.info(f"Nuevo thread para WhatsApp {whatsapp_norm} (sin existencia previa)")
+    else:
+        # 2. Si no se extrajo número, obtener WhatsApp del thread actual (buffer de estado)
+        whatsapp_del_thread = await obtener_whatsapp_por_thread(request.thread_id)
+        if whatsapp_del_thread:
+            run_name = whatsapp_del_thread
+            logger.info(f"run_name recuperado del thread actual: {run_name}")
+        else:
+            logger.info("No se encontró WhatsApp asociado al thread actual (será un nuevo thread)")
 
-    # 3. Llamar a generar_tokens con el thread_id final y el run_name
+    # 3. Llamar a generar_tokens con el thread_id final y el run_name (buffer)
     return StreamingResponse(
         generar_tokens(thread_id_final, request.message, run_name),
         media_type="text/event-stream",
@@ -296,7 +281,7 @@ async def chat_endpoint(request: ChatRequest):
     )
 
 # ---------------------------------------------------------------------------
-# Endpoints auxiliares (aún no implementados)
+# Endpoints auxiliares (no implementados)
 # ---------------------------------------------------------------------------
 @app.post("/stt")
 async def speech_to_text(request: AudioRequest):
