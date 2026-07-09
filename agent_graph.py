@@ -1,7 +1,7 @@
 """
 agent_graph.py - Módulo central del grafo agéntico de JARVI 2.0.
-Implementa flujo de recolección de datos en 5 pasos (nombre → WhatsApp → ubicación → productos → vendedor),
-failover con 3 API Keys de OpenAI y acumulación de costo por thread.
+Implementa flujo de recolección de datos en 5 pasos, failover con 3 API Keys,
+acumulación de costo por thread, y herramienta de persistencia manual.
 Estándares: ISO/IEC 25010, ISO/IEC 29119, ISO/IEC 27001.
 """
 
@@ -366,7 +366,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["tarifa_base_gtq"] = 1.45
         return {"contexto_tecnico": ctx}
 
-    # ---------- Nodo: Chatbot (flujo natural) ----------
+    # ---------- Nodo: Chatbot (flujo natural con run_name inmediato) ----------
     @auditar_fase(nombre_fase="Inferencia del Chatbot", criticidad="ALTA")
     @observe_node(node_name="chatbot")
     def chatbot_node(state: AgentState, config: RunnableConfig):
@@ -418,6 +418,18 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
                     ctx["requiere_auditoria_electrica"] = True
 
+            # --- ACTUALIZAR run_name INMEDIATAMENTE (sin esperar al paso 6) ---
+            _, whatsapp_run = normalizar_contacto("", ctx.get("whatsapp", "Pendiente"), "")
+            if whatsapp_run and whatsapp_run != "Pendiente":
+                config["run_name"] = whatsapp_run
+                if "metadata" not in config:
+                    config["metadata"] = {}
+                config["metadata"]["whatsapp"] = whatsapp_run
+                config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
+                config["metadata"]["vendedor"] = ctx.get("vendedor", "gerencia@aisa.com.gt")
+                config["metadata"]["tags"] = ctx.get("productos", [])
+                config["metadata"]["ubicacion"] = ctx.get("ubicacion", "PENDIENTE")
+
             # --- Avanzar pasos automáticamente ---
             if ctx.get("nombre") and ctx["paso_actual"] == 1:
                 ctx["paso_actual"] = 2
@@ -460,7 +472,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if paso == 5 and not ctx.get("vendedor"):
             ctx["vendedor"] = asignar_vendedor_default()
             ctx["paso_actual"] = 6
-            # Al asignar vendedor por defecto, pasamos directamente a paso 6
             # No retornamos, dejamos que el flujo continúe a paso 6
 
         # --- FLUJO COMPLETO (paso 6): responder preguntas técnicas ---
@@ -468,11 +479,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             # Asegurar que paso_actual sea 6
             ctx["paso_actual"] = 6
 
-            # Actualizar metadatos y run_name
-            _, whatsapp_run = normalizar_contacto("", ctx.get("whatsapp", "Pendiente"), "")
-            config["run_name"] = whatsapp_run
-            config["metadata"] = config.get("metadata", {})
-            config["metadata"]["whatsapp"] = whatsapp_run
+            # Actualizar metadatos adicionales
+            if "metadata" not in config:
+                config["metadata"] = {}
             config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
             config["metadata"]["vendedor"] = ctx.get("vendedor", "gerencia@aisa.com.gt")
             config["metadata"]["tags"] = ctx.get("productos", [])
@@ -557,7 +566,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         # --- Si llegamos aquí sin haber completado, pero con datos completos, forzar paso 6 ---
         if validar_campos_obligatorios(ctx):
             ctx["paso_actual"] = 6
-            return chatbot_node(state, config)  # Llamada recursiva para que caiga en paso 6
+            return chatbot_node(state, config)
 
         # --- Fallback (no debería llegar aquí) ---
         return {"messages": [AIMessage(content="Procesando tu solicitud...")], "contexto_tecnico": ctx}
