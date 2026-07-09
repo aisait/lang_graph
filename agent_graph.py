@@ -403,7 +403,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
         # =====================================================================
-        # Pipeline de normalización con asignación de productos y vendedor
+        # 1. PIPELINE DE EXTRACCIÓN (siempre)
         # =====================================================================
         if ultimo_mensaje:
             extraido = pipeline_extraccion(
@@ -412,9 +412,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 json_productos,
                 json_vendedores
             )
-            # Asignar si el campo está vacío en el contexto actual
             for key, value in extraido.items():
-                if value and not ctx.get(key):
+                if value:
                     if key == "nombre":
                         ctx["nombre"] = value
                     elif key == "whatsapp":
@@ -429,13 +428,48 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     elif key == "vendedor":
                         ctx["vendedor"] = value
 
+        # =====================================================================
+        # 2. FALLBACK CON EXTRACTOR_LLM (nombre y teléfono)
+        # =====================================================================
+        if ultimo_mensaje and (not ctx.get("nombre") or ctx.get("nombre") == "Usuario" or not ctx.get("whatsapp")):
+            try:
+                extraccion = extractor_llm.invoke(
+                    f"Identifica nombre o teléfono. Mensaje: {ultimo_mensaje}"
+                )
+                if extraccion.nombre:
+                    ctx["nombre"] = extraccion.nombre
+                if extraccion.telefono:
+                    _, ctx["whatsapp"] = normalizar_contacto("", extraccion.telefono, "")
+            except Exception:
+                pass
+
+        # =====================================================================
+        # 3. CALCULAR PASO ACTUAL (siempre después de extraer)
+        # =====================================================================
+        paso = 1
+        if ctx.get("nombre"):
+            paso = 2
+        if ctx.get("whatsapp"):
+            paso = 3
+        if ctx.get("ciudad"):
+            paso = 4
+        if ctx.get("productos") and len(ctx["productos"]) > 0:
+            paso = 5
+        if ctx.get("vendedor"):
+            paso = 6
+        if all([ctx.get("nombre"), ctx.get("whatsapp"), ctx.get("ciudad"), ctx.get("productos"), ctx.get("vendedor")]):
+            paso = 6
+        ctx["paso_actual"] = paso
+
         # --- LOG DE DEPURACIÓN ---
         import logging
         logger = logging.getLogger("jarvi.agent")
-        logger.info(f"[chatbot] contexto_tecnico recibido = {ctx}")
+        logger.info(f"[chatbot] contexto = {ctx}, paso = {paso}")
 
-        # --- PRIMERA INTERACCIÓN: forzar bienvenida sin LLM ---
-        if len(state.get("messages", [])) == 1:
+        # =====================================================================
+        # 4. PRIMERA INTERACCIÓN: bienvenida (solo si no hay nombre)
+        # =====================================================================
+        if len(state.get("messages", [])) == 1 and not ctx.get("nombre"):
             bienvenida = (
                 "¡Hola! 👋 Soy Jarvi, tu asesor técnico de AISA Solar. "
                 "Estamos para ayudarte a encontrar la mejor solución energética. "
@@ -450,71 +484,70 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 "Cuéntame qué te interesa y, para darte una atención personalizada, "
                 "¿podrías indicarme tu nombre y en qué zona te encuentras?"
             )
-            return {
-                "messages": [AIMessage(content=bienvenida)],
-                "contexto_tecnico": ctx
-            }
-
-        # --- INTERACCIONES POSTERIORES ---
-        # Extracción de contacto vía modelo estructurado si no se tiene aún
-        if ultimo_mensaje and (
-            not ctx.get("nombre")
-            or ctx.get("nombre") == "Usuario"
-            or not ctx.get("whatsapp")
-        ):
-            try:
-                extraccion = extractor_llm.invoke(
-                    f"Identifica nombre o teléfono. Mensaje: {ultimo_mensaje}"
-                )
-                if extraccion.nombre and (not ctx.get("nombre") or ctx["nombre"] == "Usuario"):
-                    ctx["nombre"] = extraccion.nombre
-                if extraccion.telefono and (not ctx.get("whatsapp") or ctx["whatsapp"] == "Pendiente"):
-                    ctx["whatsapp"] = extraccion.telefono
-            except Exception:
-                pass  # Si falla la extracción estructurada, continuamos sin detener el flujo
-
-        # Reglas de recolección de datos según topología
-        if ctx.get("requiere_auditoria_electrica"):
-            regla_datos = ("1. DEBES recopilar sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta.")
-        else:
-            regla_datos = ("1. DEBES recopilar sutilmente: Nombre, Ubicación y Necesidad exacta.")
-
-        # Carga dinámica de la ontología según la topología detectada
-        ontologia_dinamica = obtener_fragmento_ontologia(ctx.get('topologia'))
-
-        # Normalización de contacto para el run_name y metadatos de LangSmith
-        nombre_ctx = ctx.get("nombre", "Usuario")
-        whatsapp_ctx = ctx.get("whatsapp", "Pendiente")
-        nombre_run, whatsapp_run = normalizar_contacto(nombre_ctx, whatsapp_ctx, ctx.get("ciudad", ""))
+            return {"messages": [AIMessage(content=bienvenida)], "contexto_tecnico": ctx}
 
         # =====================================================================
-        # Metadatos completos para LangSmith (nombre, productos, ubicación)
+        # 5. PREGUNTAS GUIADAS (solo si paso < 6)
         # =====================================================================
-        config["run_name"] = f"Lead: {nombre_run}"
-        if "metadata" not in config:
-            config["metadata"] = {}
-        config["metadata"]["nombre"] = ctx.get("nombre", "PENDIENTE")
-        config["metadata"]["whatsapp"] = whatsapp_run
-        config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
-        config["metadata"]["tags"] = ctx.get("productos", [])
-        config["metadata"]["ciudad"] = ctx.get("ciudad", "PENDIENTE")
+        if paso < 6:
+            if paso == 1 and not ctx.get("nombre"):
+                return {"messages": [AIMessage(content="¿Cómo te llamas?")], "contexto_tecnico": ctx}
+            if paso == 2 and not ctx.get("whatsapp"):
+                return {"messages": [AIMessage(content="¿Cuál es tu número de WhatsApp?")], "contexto_tecnico": ctx}
+            if paso == 3 and not ctx.get("ciudad"):
+                return {"messages": [AIMessage(content="¿De qué municipio y departamento nos hablas?")], "contexto_tecnico": ctx}
+            if paso == 4 and not ctx.get("productos"):
+                return {"messages": [AIMessage(content="¿Qué productos o sistemas solares te interesan?")], "contexto_tecnico": ctx}
+            if paso == 5 and not ctx.get("vendedor"):
+                ctx["vendedor"] = "gerencia@aisa.com.gt"
+                # Forzar recalculo de paso
+                paso = 6
+                ctx["paso_actual"] = 6
 
-        # Construcción del system prompt con todos los datos acumulados
-        prompt_sistema = SystemMessage(
-            content=(
-                f"Eres Jarvi, Ingeniero de Preventa de AISA Solar. "
-                f"Responde con los datos auditados:\n"
-                f"- Ubicación: {ctx.get('ciudad', 'PENDIENTE')}\n"
-                f"- Distribuidora: {ctx.get('empresa_electrica', 'PENDIENTE')}\n"
-                f"- Tarifa: GTQ {ctx.get('tarifa_base_gtq', 'PENDIENTE')} /kWh\n"
+        # =====================================================================
+        # 6. PASO 6: RESPONDER CONSULTA TÉCNICA (metadatos completos)
+        # =====================================================================
+        if paso == 6:
+            # --- Metadatos para LangSmith ---
+            _, whatsapp_run = normalizar_contacto("", ctx.get("whatsapp", "Pendiente"), "")
+            config["run_name"] = whatsapp_run if whatsapp_run else "Pendiente"
+            if "metadata" not in config:
+                config["metadata"] = {}
+            config["metadata"]["nombre"] = ctx.get("nombre", "PENDIENTE")
+            config["metadata"]["whatsapp"] = whatsapp_run
+            config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
+            config["metadata"]["tags"] = ctx.get("productos", [])
+            config["metadata"]["ubicacion"] = ctx.get("ciudad", "PENDIENTE")
+            config["metadata"]["vendedor"] = ctx.get("vendedor", "gerencia@aisa.com.gt")
+
+            logger.info(f"[chatbot] Metadatos: {config['metadata']}")
+
+            # --- Prompt y respuesta ---
+            if ctx.get("requiere_auditoria_electrica"):
+                regla_datos = "Recopila sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta."
+            else:
+                regla_datos = "Recopila sutilmente: Nombre, Ubicación y Necesidad exacta."
+
+            prompt = SystemMessage(
+                f"Eres Jarvi, Ingeniero de Preventa de AISA Solar.\n"
+                f"Ubicación: {ctx.get('ciudad', 'PENDIENTE')}\n"
+                f"Distribuidora: {ctx.get('empresa_electrica', 'PENDIENTE')}\n"
+                f"Tarifa: GTQ {ctx.get('tarifa_base_gtq', 'PENDIENTE')} /kWh\n"
                 f"REGLAS: {regla_datos}\n"
-                f"ONTOLOGÍA: {ontologia_dinamica}"
+                f"ONTOLOGÍA: {obtener_fragmento_ontologia(ctx.get('topologia'))}\n"
+                f"Cliente: {ctx.get('nombre', 'PENDIENTE')} | WhatsApp: {ctx.get('whatsapp', 'PENDIENTE')}\n"
+                f"Productos: {', '.join(ctx.get('productos', ['PENDIENTE']))}\n"
+                f"Vendedor: {ctx.get('vendedor', 'PENDIENTE')}"
             )
-        )
+            try:
+                respuesta = llm.invoke([prompt] + state["messages"], config=config)
+            except Exception as e:
+                logger.error(f"LLM falló: {e}")
+                respuesta = AIMessage("Lo siento, no pude generar una respuesta en este momento.")
+            return {"messages": [respuesta], "contexto_tecnico": ctx}
 
-        # Invocación del LLM con todo el historial
-        respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
-        return {"messages": [respuesta], "contexto_tecnico": ctx}
+        # Si llegamos aquí, algo falló (seguridad)
+        return {"messages": [AIMessage(content="Procesando tu solicitud...")], "contexto_tecnico": ctx}
 
     # -------------------- Ensamblaje del grafo --------------------
     graph_builder.add_node("clasificador", clasificador_topologia_node)
