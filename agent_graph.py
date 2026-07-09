@@ -48,7 +48,7 @@ from db_client import (
     obtener_costo_acumulado,
     get_db_connection
 )
-from ubicacion import buscar_ubicacion  # <--- fuzzy matching ya incluido
+from ubicacion import buscar_ubicacion
 
 # =============================================================================
 # CONFIGURACIÓN DE API KEYS Y PRECIOS
