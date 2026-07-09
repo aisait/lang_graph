@@ -1,11 +1,11 @@
 """
 agent_graph.py - Módulo central del grafo agéntico de JARVI 2.0.
-Implementa flujo de recolección de datos en 5 pasos (nombre → WhatsApp → ubicación → productos → vendedor),
-failover con 3 API Keys de OpenAI y acumulación de costo por thread.
+Implementa flujo de recolección de datos en 5 pasos, failover con 3 API Keys,
+acumulación de costo por thread, y herramienta de persistencia manual.
 Estándares: ISO/IEC 25010, ISO/IEC 29119, ISO/IEC 27001.
 """
 
-from __future__ import annotations  # <--- CORRECCIÓN: evita evaluación anticipada de tipos
+from __future__ import annotations  # Mantenido para compatibilidad
 
 import os
 import re
@@ -28,7 +28,7 @@ from googleapiclient.discovery import build
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_core.tools import tool
+from langchain_core.tools import StructuredTool  # <--- NUEVO: importar StructuredTool
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, START
 from langgraph.graph.message import add_messages
@@ -56,36 +56,29 @@ OPENAI_KEYS = [
     os.getenv("OPENAI_API_KEY_2"),
     os.getenv("OPENAI_API_KEY_3")
 ]
-OPENAI_KEYS = [k for k in OPENAI_KEYS if k]  # Filtrar vacías
+OPENAI_KEYS = [k for k in OPENAI_KEYS if k]
 
 if not OPENAI_KEYS:
     raise RuntimeError("No se encontró ninguna API Key de OpenAI. "
-                       "Asegúrate de definir OPENAI_API_KEY_1, _2 o _3 en las variables de entorno.")
+                       "Asegúrate de definir OPENAI_API_KEY_1, _2 o _3.")
 
 DEFAULT_API_KEY = OPENAI_KEYS[0]
 
-PRICE_INPUT = 0.150   # $0.150 por 1M input tokens
-PRICE_OUTPUT = 0.600  # $0.600 por 1M output tokens
+PRICE_INPUT = 0.150
+PRICE_OUTPUT = 0.600
 
 def calcular_costo_llm(response) -> float:
-    """Calcula el costo de una respuesta de OpenAI basado en el consumo de tokens."""
     try:
         token_usage = response.response_metadata.get("token_usage", {})
         prompt_tokens = token_usage.get("prompt_tokens", 0)
         completion_tokens = token_usage.get("completion_tokens", 0)
-        costo = (prompt_tokens * PRICE_INPUT + completion_tokens * PRICE_OUTPUT) / 1_000_000
-        return costo
+        return (prompt_tokens * PRICE_INPUT + completion_tokens * PRICE_OUTPUT) / 1_000_000
     except Exception:
         return 0.0
 
 def invoke_llm_with_failover(messages, config, model="gpt-4o-mini", temperature=0.1, max_retries=3):
-    """
-    Intenta invocar a OpenAI con las claves en orden hasta que una funcione.
-    Retorna (respuesta, costo).
-    """
     if not OPENAI_KEYS:
         raise RuntimeError("No hay API Keys de OpenAI configuradas.")
-    
     last_error = None
     for key in OPENAI_KEYS:
         try:
@@ -190,7 +183,7 @@ class InferenciaEnergetica(TypedDict):
     productos: Optional[List[str]]
     vendedor: Optional[str]
     ubicacion: Optional[str]
-    paso_actual: int  # 1=nombre, 2=whatsapp, 3=ubicacion, 4=productos, 5=vendedor, 6=completo
+    paso_actual: int
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -226,10 +219,9 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA DE PERSISTENCIA DE OPORTUNIDADES (CORREGIDA)
+# HERRAMIENTA DE PERSISTENCIA DE OPORTUNIDADES (SIN @tool)
 # =============================================================================
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
-@tool   # <--- CORRECCIÓN: eliminado el argumento 'description'
 def procesar_oportunidad_backend(
     nombre_apellidos: str,
     departamento_municipio: str,
@@ -296,6 +288,13 @@ def procesar_oportunidad_backend(
     threading.Thread(target=tarea_background).start()
     return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
 
+# --- Creación de la herramienta manual ---
+procesar_oportunidad_tool = StructuredTool.from_function(
+    func=procesar_oportunidad_backend,
+    name="procesar_oportunidad_backend",
+    description="Envía los datos del lead al backend a través de correo y WhatsApp",
+)
+
 def extraer_intencion_humana(messages: list) -> str:
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
@@ -318,13 +317,13 @@ def extraer_intencion_humana(messages: list) -> str:
 def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
 
-    # ---------- Modelos base (con la clave por defecto) ----------
+    # ---------- Modelos base ----------
     llm = ChatOpenAI(
         api_key=DEFAULT_API_KEY,
         model="gpt-4o-mini",
         temperature=0.1,
         max_retries=3
-    ).bind_tools([procesar_oportunidad_backend])
+    ).bind_tools([procesar_oportunidad_tool])   # <--- Usamos la herramienta manual
 
     extractor_llm = ChatOpenAI(
         api_key=DEFAULT_API_KEY,
@@ -367,7 +366,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["tarifa_base_gtq"] = 1.45
         return {"contexto_tecnico": ctx}
 
-    # ---------- Nodo: Chatbot (flujo de pasos) ----------
+    # ---------- Nodo: Chatbot (flujo de 5 pasos) ----------
     @auditar_fase(nombre_fase="Inferencia del Chatbot", criticidad="ALTA")
     @observe_node(node_name="chatbot")
     def chatbot_node(state: AgentState, config: RunnableConfig):
@@ -375,11 +374,10 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
         logger = logging.getLogger("jarvi.agent")
 
-        # --- Inicializar paso_actual ---
         if "paso_actual" not in ctx:
             ctx["paso_actual"] = 0
 
-        # --- SI ES LA PRIMERA INTERACCIÓN, INICIAR FLUJO ---
+        # --- PRIMERA INTERACCIÓN ---
         if len(state.get("messages", [])) == 1 and ctx["paso_actual"] == 0:
             ctx["paso_actual"] = 1
             return {
@@ -387,9 +385,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 "contexto_tecnico": ctx
             }
 
-        # --- EXTRACCIÓN DE DATOS DEL MENSAJE ACTUAL ---
+        # --- EXTRACCIÓN DE DATOS ---
         if ultimo_mensaje:
-            # Intentar extraer nombre, teléfono y email con regex primero (más rápido)
             if not ctx.get("nombre"):
                 match = re.search(r"(?:me llamo|soy|mi nombre es|nombre:|llamo)\s*([A-Za-záéíóúñ\s]+)", ultimo_mensaje, re.IGNORECASE)
                 if match:
@@ -398,27 +395,19 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 match = re.search(r"(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}", ultimo_mensaje)
                 if match:
                     _, ctx["whatsapp"] = normalizar_contacto("", match.group(0), "")
-
-            # Ubicación
             if not ctx.get("ubicacion"):
                 ubicacion = buscar_ubicacion(ultimo_mensaje)
                 if ubicacion:
                     ctx["ubicacion"] = ubicacion["label"]
                     ctx["ciudad"] = ubicacion["municipio"]
-
-            # Productos
             if not ctx.get("productos") or len(ctx["productos"]) == 0:
                 productos = buscar_productos_por_mensaje(ultimo_mensaje)
                 if productos:
                     ctx["productos"] = productos
-
-            # Vendedor
             if not ctx.get("vendedor"):
                 vendedor = buscar_vendedor_por_nombre(ultimo_mensaje)
                 if vendedor:
                     ctx["vendedor"] = vendedor["email"]
-
-            # Topología
             if not ctx.get("topologia"):
                 if any(k in ultimo_mensaje for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
                     ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
@@ -427,7 +416,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
                     ctx["requiere_auditoria_electrica"] = True
 
-            # --- AVANZAR AL SIGUIENTE PASO SI EL DATO YA ESTÁ ---
+            # Avanzar pasos
             if ctx.get("nombre") and ctx["paso_actual"] == 1:
                 ctx["paso_actual"] = 2
             if ctx.get("whatsapp") and ctx["paso_actual"] == 2:
@@ -439,29 +428,24 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             if ctx.get("vendedor") and ctx["paso_actual"] == 5:
                 ctx["paso_actual"] = 6
 
-        # --- PREGUNTAS SEGÚN EL PASO ACTUAL ---
         paso = ctx["paso_actual"]
 
+        # --- PREGUNTAS GUIADAS ---
         if paso == 1 and not ctx.get("nombre"):
             return {"messages": [AIMessage(content="¿Cómo te llamas?")], "contexto_tecnico": ctx}
-
         if paso == 2 and not ctx.get("whatsapp"):
             return {"messages": [AIMessage(content="¿Cuál es tu número de WhatsApp con código de país? (ej. +502 1234-5678)")], "contexto_tecnico": ctx}
-
         if paso == 3 and not ctx.get("ubicacion"):
             return {"messages": [AIMessage(content="¿De qué municipio y departamento nos hablas?")], "contexto_tecnico": ctx}
-
         if paso == 4 and not ctx.get("productos"):
             return {"messages": [AIMessage(content="¿Qué productos o sistemas solares te interesan? (ej. paneles, calentadores, bombas)")], "contexto_tecnico": ctx}
-
         if paso == 5 and not ctx.get("vendedor"):
             ctx["vendedor"] = asignar_vendedor_default()
             ctx["paso_actual"] = 6
             return {"messages": [AIMessage(content="Perfecto, ya tengo todos los datos necesarios. ¿En qué más puedo ayudarte?")], "contexto_tecnico": ctx}
 
-        # --- FLUJO COMPLETO (paso 6): responder preguntas técnicas ---
+        # --- PASO 6: RESOLVER PREGUNTAS TÉCNICAS ---
         if paso == 6:
-            # Actualizar metadatos y run_name
             _, whatsapp_run = normalizar_contacto("", ctx.get("whatsapp", "Pendiente"), "")
             config["run_name"] = whatsapp_run
             config["metadata"] = config.get("metadata", {})
@@ -471,7 +455,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             config["metadata"]["tags"] = ctx.get("productos", [])
             config["metadata"]["ubicacion"] = ctx.get("ubicacion", "PENDIENTE")
 
-            # Si todos los campos están completos, persistir
             if validar_campos_obligatorios(ctx):
                 import asyncio
                 thread_id = config.get("configurable", {}).get("thread_id")
@@ -497,7 +480,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     except Exception as e:
                         logger.error(f"Error al persistir: {e}")
 
-            # --- GENERAR RESPUESTA TÉCNICA CON FAILOVER ---
+            # Generar respuesta técnica con failover
             if ctx.get("requiere_auditoria_electrica"):
                 regla_datos = "Recopila sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta."
             else:
@@ -530,13 +513,12 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 respuesta = AIMessage(content="Lo siento, estoy teniendo problemas técnicos. Por favor, intenta de nuevo más tarde.")
                 costo_llamada = 0.0
 
-            # --- ACUMULAR COSTO EN BD Y METADATOS ---
+            # Acumular costo
             thread_id = config.get("configurable", {}).get("thread_id")
             if thread_id and costo_llamada > 0:
                 import asyncio
                 try:
                     asyncio.run(acumular_costo_thread(thread_id, costo_llamada))
-                    # Obtener costo acumulado para mostrarlo en LangSmith
                     costo_acum = asyncio.run(obtener_costo_acumulado(thread_id))
                     config["metadata"]["cumulative_cost"] = costo_acum
                     config["metadata"]["cost_this_call"] = costo_llamada
@@ -547,7 +529,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             logger.info(f"[chatbot] contexto después de LLM: {ctx}")
             return {"messages": [respuesta], "contexto_tecnico": ctx}
 
-        # --- Si llegamos aquí sin haber completado, forzar paso 6 (seguridad) ---
+        # Seguridad: si llegamos aquí sin completar, forzar paso 6
         if paso < 6:
             ctx["paso_actual"] = 6
             return {"messages": [AIMessage(content="Vamos a finalizar la recolección de datos.")], "contexto_tecnico": ctx}
@@ -558,7 +540,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder.add_node("clasificador", clasificador_topologia_node)
     graph_builder.add_node("validador", validador_geolocalizacion_node)
     graph_builder.add_node("chatbot", chatbot_node)
-    graph_builder.add_node("tools", ToolNode([procesar_oportunidad_backend]))
+    graph_builder.add_node("tools", ToolNode([procesar_oportunidad_tool]))  # <--- Usamos la herramienta manual
     graph_builder.add_edge(START, "clasificador")
     graph_builder.add_edge("clasificador", "validador")
     graph_builder.add_edge("validador", "chatbot")
