@@ -161,6 +161,16 @@ def procesar_oportunidad_backend(
     numero_whatsapp: str,
     resumen_18_palabras: str
 ) -> str:
+    """
+    Envía de forma asíncrona los leads estructurados capturados por la IA
+    hacia los canales del Controller (correo Gmail y webhook de WhatsApp).
+
+    Prueba de caja negra (ISO/IEC 29119):
+        - Verificar que se envíe un correo al Controller y un mensaje de WhatsApp
+          usando los parámetros de entrada.
+        - Verificar que, aunque falle uno de los canales, el otro se ejecute.
+        - La herramienta debe retornar un mensaje de éxito incluyendo el contacto normalizado.
+    """
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
     def tarea_background():
         num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
