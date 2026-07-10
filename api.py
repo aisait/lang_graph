@@ -113,7 +113,6 @@ def get_db_url() -> str:
 # FUNCIONES DE POSTGRESQL (SOLO PARA DATOS COMPLETOS)
 # =============================================================================
 async def obtener_thread_por_whatsapp(whatsapp: str) -> str | None:
-    """Busca thread_id asociado a un WhatsApp en PostgreSQL (solo datos persistidos)."""
     try:
         db_url = get_db_url()
         conn = await asyncpg.connect(db_url)
@@ -125,7 +124,6 @@ async def obtener_thread_por_whatsapp(whatsapp: str) -> str | None:
         return None
 
 async def obtener_whatsapp_por_thread(thread_id: str) -> str | None:
-    """Obtiene el WhatsApp asociado a un thread_id en PostgreSQL."""
     try:
         db_url = get_db_url()
         conn = await asyncpg.connect(db_url)
@@ -137,10 +135,6 @@ async def obtener_whatsapp_por_thread(thread_id: str) -> str | None:
         return None
 
 async def persistir_sesion_postgres(thread_id: str, contexto: dict) -> bool:
-    """
-    Inserta o actualiza un thread en PostgreSQL solo cuando los datos están completos.
-    Esto ocurre al finalizar los 6 pasos.
-    """
     try:
         db_url = get_db_url()
         conn = await asyncpg.connect(db_url)
@@ -182,7 +176,6 @@ async def persistir_sesion_postgres(thread_id: str, contexto: dict) -> bool:
                 thread_id, whatsapp, nombre, json.dumps(metadata)
             )
             logger.info(f"Thread {thread_id} insertado en PostgreSQL")
-
         await conn.close()
         return True
     except Exception as e:
@@ -471,10 +464,25 @@ async def chat_endpoint(request: ChatRequest):
     if whatsapp_raw:
         _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
         if whatsapp_norm and whatsapp_norm != "Pendiente":
+            # Buscar en Redis primero (por si se perdió la conexión temporal)
+            if redis_client:
+                sesion_redis = await obtener_sesion_redis(redis_client, whatsapp_norm)
+                if sesion_redis:
+                    thread_id_final = sesion_redis.get("thread_id")
+                    run_name = whatsapp_norm
+                    logger.info(f"Sesión existente en Redis para {whatsapp_norm} con thread {thread_id_final}")
+                    return StreamingResponse(
+                        generar_tokens(thread_id_final, request.message, whatsapp_norm, run_name),
+                        media_type="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                                 "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
+                    )
+            # Si no existe en Redis, buscar en PostgreSQL (datos persistidos)
             existing_thread = await obtener_thread_por_whatsapp(whatsapp_norm)
             if existing_thread:
                 thread_id_final = existing_thread
                 run_name = whatsapp_norm
+                # Recrear en Redis para futuras interacciones
                 if redis_client:
                     data_inicial = {
                         "thread_id": thread_id_final,
@@ -495,7 +503,7 @@ async def chat_endpoint(request: ChatRequest):
                              "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
                 )
             else:
-                # Nuevo número: no existe en PostgreSQL, crear solo en Redis
+                # Nuevo número: crear en Redis
                 new_thread = str(uuid.uuid4())
                 thread_id_final = new_thread
                 run_name = whatsapp_norm
