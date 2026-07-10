@@ -180,7 +180,52 @@ def obtener_fragmento_ontologia(topologia: Optional[str]) -> str:
 
 
 # =============================================================================
-# NUEVA FUNCIÓN: Búsqueda de productos por mensaje (para recolección de datos)
+# NUEVA FUNCIÓN: Obtención de bloques de productos por topología (para agent_graph)
+# =============================================================================
+def get_product_blocks(topologia: Optional[str]) -> List[str]:
+    """
+    Retorna la lista de IDs de bloques de productos correspondientes a la
+    topología detectada. Esta función es utilizada por agent_graph.py para
+    extraer los productos relevantes y almacenarlos en el contexto técnico
+    del cliente, permitiendo la trazabilidad de los intereses del usuario.
+
+    Estándares aplicados:
+    - ISO/IEC/IEEE 12207:2008: esta función es un punto de extensión del
+      módulo de ontología para soportar la nueva funcionalidad de
+      recolección de productos de interés.
+    - ISO/IEC 26514:2021: documentación completa de la función.
+    - ISO/IEC 25010:2011: la función es determinista y eficiente (usa la
+      misma lógica de selección que obtener_fragmento_ontologia).
+    - ISO/IEC 29119:2022: pruebas de caja negra sugeridas.
+
+    Parámetros:
+        topologia (str | None): topología detectada (On-Grid, Off-Grid, Bombeo, etc.)
+
+    Retorna:
+        List[str]: lista de IDs de bloques (strings) que corresponden a la topología.
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. topologia=None: devuelve los bloques por defecto.
+        2. topologia="ON-GRID": devuelve los bloques 1-10, 20, 35, 37, 38, 60, 61, 64, 79-81, 85.
+        3. topologia="OFF-GRID": devuelve bloques de sistemas aislados.
+        4. topologia="BOMBA": devuelve bloques de bombas y tuberías.
+        5. topologia desconocida: devuelve los bloques por defecto.
+    """
+    if not topologia:
+        return ["11", "12", "13", "14", "15", "18", "20", "26", "38", "46", "51"]
+    upper = topologia.upper()
+    if "ON-GRID" in upper or "ATADO" in upper:
+        return [str(i) for i in range(1, 11)] + ["20", "35", "37", "38", "60", "61", "64", "79", "80", "81", "85"]
+    elif "OFF-GRID" in upper or "AISLADO" in upper:
+        return ["14", "16", "18", "19", "20", "22", "23", "24", "26", "27", "28", "32", "34", "35", "45", "46", "50", "51", "52", "53", "62", "64", "81", "82", "86"]
+    elif "BOMBA" in upper or "HIDRO" in upper or "BOMBEO" in upper:
+        return ["12", "13", "15", "16", "39", "40", "41", "42", "55", "56", "57", "58", "59", "66", "73", "74", "77", "78", "83"]
+    else:
+        return ["11", "12", "13", "14", "15", "18", "20", "26", "38", "46", "51"]
+
+
+# =============================================================================
+# NUEVA FUNCIÓN: Búsqueda semántica de productos por mensaje (para recolección)
 # =============================================================================
 def buscar_productos_por_mensaje(mensaje: str, top_n: int = 5) -> List[str]:
     """
@@ -188,11 +233,18 @@ def buscar_productos_por_mensaje(mensaje: str, top_n: int = 5) -> List[str]:
     Retorna hasta top_n nombres de productos (según el campo 'nombre' de cada categoría).
 
     Esta función reutiliza el caché de cargar_ontologia(), por lo que es eficiente
-    y consistente con el resto del sistema.
+    y consistente con el resto del sistema. Se utiliza para enriquecer el contexto
+    del cliente con los productos que menciona durante la conversación.
+
+    Estándares aplicados:
+    - ISO/IEC/IEEE 12207:2008: extensión del módulo para soportar análisis semántico.
+    - ISO/IEC 26514:2021: documentación completa.
+    - ISO/IEC 25010:2011: la función es rápida y utiliza el caché en memoria.
+    - ISO/IEC 29119:2022: pruebas de caja negra sugeridas.
 
     Parámetros:
         mensaje (str): texto del usuario (en minúsculas o no).
-        top_n (int): número máximo de productos a retornar.
+        top_n (int): número máximo de productos a retornar (por defecto 5).
 
     Retorna:
         List[str]: lista de nombres de productos encontrados.
