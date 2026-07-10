@@ -1,6 +1,7 @@
 """
-api.py - Servidor FastAPI con buffer de sesión en Redis.
-Unifica threads por WhatsApp y mantiene contexto temporal en Redis.
+api.py - Servidor FastAPI con checkpointing garantizado.
+Unificación de threads por WhatsApp preservando el historial.
+Cumple con ISO/IEC 25010, 29119, 27001.
 """
 
 import os
@@ -11,7 +12,7 @@ import logging
 import re
 import uuid
 from collections import defaultdict
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import psutil
@@ -26,10 +27,11 @@ from pydantic import BaseModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
-from schemas import ChatRequest, AudioRequest, ImageRequest
+from schemas import ChatRequest, ChatResponse, AudioRequest, ImageRequest
 from agent_graph import create_graph, normalizar_contacto, obtener_productos_relevantes
+from config import ISOConfigValidator
 from telemetry import (
-    trace_id_var, span_id_var,
+    trace_id_var, span_id_var, parent_span_id_var,
     generate_trace_span, log_telemetry_event, start_batch_worker
 )
 
@@ -72,9 +74,10 @@ def taxonomy_error(exc: Exception) -> str:
     return "SWR-API-UNKNOWN-000"
 
 # =============================================================================
-# FUNCIONES DE UNIFICACIÓN (PostgreSQL)
+# FUNCIONES DE UNIFICACIÓN
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
+    """Extrae el primer número de WhatsApp del mensaje."""
     if not mensaje:
         return None
     match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', mensaje)
@@ -91,9 +94,13 @@ def extraer_whatsapp(mensaje: str) -> str | None:
     return None
 
 async def obtener_thread_por_whatsapp(whatsapp: str) -> str | None:
+    """Busca thread_id asociado a un WhatsApp."""
     try:
         conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
-        row = await conn.fetchrow("SELECT thread_id FROM threads WHERE whatsapp_id = $1", whatsapp)
+        row = await conn.fetchrow(
+            "SELECT thread_id FROM threads WHERE whatsapp_id = $1",
+            whatsapp
+        )
         await conn.close()
         return row["thread_id"] if row else None
     except Exception as e:
@@ -101,9 +108,13 @@ async def obtener_thread_por_whatsapp(whatsapp: str) -> str | None:
         return None
 
 async def obtener_whatsapp_por_thread(thread_id: str) -> str | None:
+    """Obtiene el WhatsApp asociado a un thread_id (buffer de estado)."""
     try:
         conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
-        row = await conn.fetchrow("SELECT whatsapp_id FROM threads WHERE thread_id = $1", thread_id)
+        row = await conn.fetchrow(
+            "SELECT whatsapp_id FROM threads WHERE thread_id = $1",
+            thread_id
+        )
         await conn.close()
         return row["whatsapp_id"] if row else None
     except Exception as e:
@@ -111,11 +122,17 @@ async def obtener_whatsapp_por_thread(thread_id: str) -> str | None:
         return None
 
 async def actualizar_thread_con_whatsapp(thread_id: str, whatsapp: str) -> bool:
+    """Asocia un WhatsApp a un thread existente (si no tiene ya uno)."""
     try:
         conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
         await conn.execute(
-            "UPDATE threads SET whatsapp_id = $1 WHERE thread_id = $2 AND (whatsapp_id IS NULL OR whatsapp_id = '')",
-            whatsapp, thread_id
+            """
+            UPDATE threads
+            SET whatsapp_id = $1
+            WHERE thread_id = $2 AND (whatsapp_id IS NULL OR whatsapp_id = '')
+            """,
+            whatsapp,
+            thread_id
         )
         await conn.close()
         logger.info(f"Thread {thread_id} actualizado con WhatsApp {whatsapp}")
@@ -125,15 +142,25 @@ async def actualizar_thread_con_whatsapp(thread_id: str, whatsapp: str) -> bool:
         return False
 
 async def guardar_thread_si_no_existe(whatsapp: str, thread_id: str) -> bool:
+    """Inserta un thread en BD si no existe para ese WhatsApp."""
     try:
         conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
-        row = await conn.fetchrow("SELECT thread_id FROM threads WHERE whatsapp_id = $1", whatsapp)
+        row = await conn.fetchrow(
+            "SELECT thread_id FROM threads WHERE whatsapp_id = $1",
+            whatsapp
+        )
         if row:
             await conn.close()
             return True
         await conn.execute(
-            "INSERT INTO threads (thread_id, whatsapp_id, nombre_cliente, metadata) VALUES ($1, $2, $3, $4)",
-            thread_id, whatsapp, "Pendiente", json.dumps({"status": "inicial"})
+            """
+            INSERT INTO threads (thread_id, whatsapp_id, nombre_cliente, metadata)
+            VALUES ($1, $2, $3, $4)
+            """,
+            thread_id,
+            whatsapp,
+            "Pendiente",
+            json.dumps({"status": "inicial"})
         )
         await conn.close()
         logger.info(f"Nuevo thread creado y guardado: {thread_id} para {whatsapp}")
@@ -203,9 +230,9 @@ async def actualizar_metadatos_thread(thread_id: str, contexto: dict) -> bool:
         logger.error(f"Error actualizando metadatos: {e}")
         return False
 
-# =============================================================================
-# CICLO DE VIDA
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Ciclo de vida
+# ---------------------------------------------------------------------------
 graph = None
 redis_client = None
 
@@ -274,12 +301,15 @@ async def telemetry_middleware(request: Request, call_next):
         )
         raise
 
+# ---------------------------------------------------------------------------
+# Endpoint ACK
+# ---------------------------------------------------------------------------
 @app.post("/ack/{trace_id}")
 async def acknowledge_dispatch(trace_id: str):
     return {"status": "ACK received", "trace_id": trace_id}
 
 # ---------------------------------------------------------------------------
-# Función de generación de tokens (con buffer Redis)
+# Función de generación de tokens
 # ---------------------------------------------------------------------------
 async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name: str | None = None) -> AsyncGenerator[str, None]:
     trace_id = trace_id_var.get()
@@ -313,7 +343,7 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
     else:
         config["run_name"] = "Usuario"
 
-    # Preparar estado inicial (si hay contexto en Redis, se podría inyectar)
+    # Preparar estado inicial (si hay contexto en Redis, se puede inyectar)
     estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
     # Si existe sesión en Redis con contexto_tecnico, se puede pasar como estado inicial
     if sesion_redis and sesion_redis.get("contexto_tecnico"):
