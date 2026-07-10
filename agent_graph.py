@@ -41,6 +41,16 @@ from telemetry import trace_id_var, span_id_var, parent_span_id_var, schedule_te
 # --- Nuevo módulo de ubicación ---
 from ubicacion import buscar_ubicacion
 
+# =============================================================================
+# Configuración de API Key (compatible con OPENAI_API_KEY_1, _2, _3)
+# CAPA DE RESILIENCIA: Permite fallback entre múltiples claves de OpenAI.
+# =============================================================================
+OPENAI_KEYS = [os.getenv(f"OPENAI_API_KEY_{i}") for i in range(1, 4)]
+OPENAI_KEYS = [k for k in OPENAI_KEYS if k]
+DEFAULT_API_KEY = OPENAI_KEYS[0] if OPENAI_KEYS else os.getenv("OPENAI_API_KEY")
+if not DEFAULT_API_KEY:
+    raise RuntimeError("No se encontró ninguna API Key de OpenAI.")
+
 # ---------------------------------------------------------------------------
 # Diccionario de códigos de área para Centroamérica
 # Prueba de caja negra: Inyectar ubicaciones con nombres de países y verificar
@@ -292,7 +302,7 @@ def extraer_intencion_humana(messages: list) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Función para obtener productos relevantes
+# Función para obtener productos relevantes (Nueva)
 # ---------------------------------------------------------------------------
 def obtener_productos_relevantes(topologia: str, max_items: int = 5) -> list:
     """
@@ -335,7 +345,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
 
     # Modelo de lenguaje principal (GPT-4o mini) con la herramienta de persistencia
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
+    # Uso de DEFAULT_API_KEY (resiliencia con OPENAI_API_KEY_1, _2, _3)
+    llm = ChatOpenAI(openai_api_key=DEFAULT_API_KEY, model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
     extractor_llm = llm.with_structured_output(ExtractorContacto)
 
     # -------------------- Nodo: Clasificador Topológico --------------------
@@ -345,11 +356,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         """
         Infiere la topología del sistema (On‑Grid / Off‑Grid) a partir
         de las palabras clave detectadas en el último mensaje del usuario.
-
-        Prueba de caja negra:
-            - Mensaje "quiero ahorrar en mi factura" → topologia On‑Grid, auditoría True.
-            - Mensaje "vivo en una finca sin luz" → topologia Off‑Grid, auditoría True.
-            - Mensaje sin palabras clave → el contexto no se modifica.
         """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
@@ -377,22 +383,19 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if not ultimo:
             return {"contexto_tecnico": ctx}
 
-        # Si no tenemos departamento/municipio, intentar extraerlos
         if not ctx.get("departamento") or not ctx.get("municipio"):
             resultado = buscar_ubicacion(ultimo)
             if resultado:
                 ctx["departamento"] = resultado["departamento"]
                 ctx["municipio"] = resultado["municipio"]
-                ctx["ciudad"] = resultado["municipio"]  # compatibilidad
-                logger = logging.getLogger("jarvi.agent")
-                logger.info(f"Ubicación detectada: {resultado['label']}")
+                ctx["ciudad"] = resultado["municipio"]
+                import logging
+                logging.getLogger("jarvi.agent").info(f"Ubicación detectada: {resultado['label']}")
 
-        # Si se requiere auditoría eléctrica, asignar empresa y tarifa según departamento
         if ctx.get("requiere_auditoria_electrica") and ctx.get("departamento"):
             if ctx["departamento"].lower() == "guatemala":
                 ctx["empresa_electrica"] = "EEGSA"
                 ctx["tarifa_base_gtq"] = 1.45
-            # Pueden añadirse más departamentos
 
         return {"contexto_tecnico": ctx}
 
@@ -408,15 +411,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
         # Extracción de contacto vía modelo estructurado
-        if ultimo_mensaje and (
-            not ctx.get("nombre")
-            or ctx.get("nombre") == "Usuario"
-            or not ctx.get("whatsapp")
-        ):
+        if ultimo_mensaje and (not ctx.get("nombre") or ctx.get("nombre") == "Usuario" or not ctx.get("whatsapp")):
             try:
-                extraccion = extractor_llm.invoke(
-                    f"Identifica nombre o teléfono. Mensaje: {ultimo_mensaje}"
-                )
+                extraccion = extractor_llm.invoke(f"Identifica nombre o teléfono. Mensaje: {ultimo_mensaje}")
                 if extraccion.nombre and (not ctx.get("nombre") or ctx["nombre"] == "Usuario"):
                     ctx["nombre"] = extraccion.nombre
                 if extraccion.telefono and (not ctx.get("whatsapp") or ctx["whatsapp"] == "Pendiente"):
@@ -426,36 +423,28 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         # Extracción de vendedor mediante expresión regular
         if ultimo_mensaje and not ctx.get("vendedor"):
-            vendedor_match = re.search(
-                r'(?:mi\s+vendedor\s+es|vendedor[:]\s*)([A-Za-z0-9\s]+)',
-                ultimo_mensaje,
-                re.IGNORECASE
-            )
+            vendedor_match = re.search(r'(?:mi\s+vendedor\s+es|vendedor[:]\s*)([A-Za-z0-9\s]+)', ultimo_mensaje, re.IGNORECASE)
             if vendedor_match:
                 ctx["vendedor"] = vendedor_match.group(1).strip()
 
         # Reglas de recolección de datos según topología
         if ctx.get("requiere_auditoria_electrica"):
-            regla_datos = ("1. DEBES recopilar sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta.")
+            regla_datos = "1. DEBES recopilar sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta."
         else:
-            regla_datos = ("1. DEBES recopilar sutilmente: Nombre, Ubicación y Necesidad exacta.")
+            regla_datos = "1. DEBES recopilar sutilmente: Nombre, Ubicación y Necesidad exacta."
 
-        # Carga dinámica de la ontología según la topología detectada
         ontologia_dinamica = obtener_fragmento_ontologia(ctx.get('topologia'))
 
-        # Normalización de contacto para el run_name y metadatos de LangSmith
         nombre_ctx = ctx.get("nombre", "Usuario")
         whatsapp_ctx = ctx.get("whatsapp", "Pendiente")
         nombre_run, whatsapp_run = normalizar_contacto(nombre_ctx, whatsapp_ctx, ctx.get("ciudad", ""))
 
-        # Inyección de trazabilidad en el config (LangSmith)
         config["run_name"] = f"Lead: {nombre_run}"
         if "metadata" not in config:
             config["metadata"] = {}
         config["metadata"]["whatsapp"] = whatsapp_run
         config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
 
-        # Construcción del system prompt con todos los datos acumulados
         prompt_sistema = SystemMessage(
             content=(
                 f"Eres Jarvi, Ingeniero de Preventa de AISA Solar. "
@@ -468,7 +457,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             )
         )
 
-        # Invocación del LLM con todo el historial
         respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
@@ -486,10 +474,14 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     return graph_builder.compile(checkpointer=checkpointer)
 
+
 # ---------------------------------------------------------------------------
 # PASO 1: Exportación limpia para LangGraph Studio (Servicio Visualizador)
 # ---------------------------------------------------------------------------
-from langgraph.checkpoint.memory import MemorySaver
-
-checkpointer_studio = MemorySaver()
-jarvi_graph = create_graph(checkpointer_studio)
+# Se protege la creación del grafo para evitar errores al importar.
+if __name__ == "__main__":
+    from langgraph.checkpoint.memory import MemorySaver
+    checkpointer_studio = MemorySaver()
+    jarvi_graph = create_graph(checkpointer_studio)
+else:
+    jarvi_graph = None
