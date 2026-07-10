@@ -59,3 +59,4 @@ langchain-core>=0.2.0            # Núcleo de LangChain (dependencia base)
 # Nota: langgraph-api y langgraph-cli NO se incluyen porque son específicos
 # del visualizador y del servicio cliente-debug, no del backend.
 # =============================================================================
+redis>=5.0.0
