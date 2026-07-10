@@ -1,5 +1,5 @@
 """
-api.py - Servidor FastAPI con checkpointing garantizado.
+api.py - Servidor FastAPI con checkpointing garantizado y control de sesión por IP+cookie.
 Unificación de threads por WhatsApp preservando el historial.
 Cumple con ISO/IEC 25010, 29119, 27001.
 """
@@ -244,6 +244,42 @@ async def eliminar_sesion_redis(redis_client: Optional[redis.Redis], identifier:
         except Exception as e:
             logger.error(f"Error eliminando sesión de Redis: {e}")
 
+# =============================================================================
+# NUEVAS FUNCIONES PARA IDENTIFICACIÓN POR IP + CLIENT_ID
+# =============================================================================
+def obtener_ip_cliente(request: Request) -> str:
+    """Obtiene la IP real del cliente (considerando proxies)."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+async def obtener_thread_por_ip_client_id(redis_client: Optional[redis.Redis], ip: str, client_id: str) -> Optional[str]:
+    """Busca un thread_id asociado a la IP y client_id."""
+    if not redis_client or not ip or not client_id:
+        return None
+    try:
+        key = f"client:{ip}:{client_id}"
+        thread_id = await redis_client.get(key)
+        if thread_id:
+            logger.info(f"Thread {thread_id} recuperado por IP+client_id para {ip}:{client_id}")
+            return thread_id
+        return None
+    except Exception as e:
+        logger.error(f"Error al obtener thread por IP+client_id: {e}")
+        return None
+
+async def guardar_ip_client_id(redis_client: Optional[redis.Redis], ip: str, client_id: str, thread_id: str, ttl: int = REDIS_TTL):
+    """Asocia la IP+client_id al thread_id."""
+    if not redis_client or not ip or not client_id or not thread_id:
+        return
+    try:
+        key = f"client:{ip}:{client_id}"
+        await redis_client.set(key, thread_id, ex=ttl)
+        logger.info(f"Asociación IP+client_id guardada: {ip}:{client_id} -> {thread_id}")
+    except Exception as e:
+        logger.error(f"Error al guardar IP+client_id: {e}")
+
 # ---------------------------------------------------------------------------
 # Ciclo de vida
 # ---------------------------------------------------------------------------
@@ -320,20 +356,19 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
 
     # 1. Recuperar sesión de Redis usando el identifier (que idealmente es el número)
     sesion_redis = None
+    contexto_previo = {}
     if redis_client and identifier:
         sesion_redis = await obtener_sesion_redis(redis_client, identifier)
         if sesion_redis:
             logger.info(f"Sesión recuperada de Redis para {identifier}")
-            # Extraer el run_name de la sesión
             run_name = sesion_redis.get("whatsapp") or run_name or thread_id
-            # Obtener el contexto técnico previo
             contexto_previo = sesion_redis.get("contexto_tecnico", {})
         else:
             logger.warning(f"No se encontró sesión en Redis para {identifier}")
     else:
         logger.warning("Redis no disponible o identifier vacío")
 
-    # 2. Si no se encontró en Redis, intentar obtener de PostgreSQL (solo si ya está persistido)
+    # 2. Si no se encontró en Redis, intentar obtener de PostgreSQL
     if not sesion_redis:
         if not run_name or run_name == "Pendiente":
             try:
@@ -342,18 +377,15 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
                     run_name = whatsapp_actual
             except Exception as e:
                 logger.warning(f"No se pudo obtener whatsapp para run_name: {e}")
-        # No hay contexto previo desde Redis
-        contexto_previo = {}
 
     # 3. Si no hay run_name, usar thread_id
     if not run_name or run_name == "Pendiente":
         run_name = thread_id
 
-    # 4. Configurar run_name y metadatos para LangSmith
     config["run_name"] = run_name
     config["metadata"]["whatsapp"] = run_name if run_name != thread_id else ""
 
-    # 5. Preparar el estado inicial con el contexto previo (si existe)
+    # 4. Preparar el estado inicial con el contexto previo (si existe)
     estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
     if contexto_previo:
         estado_inicial["contexto_tecnico"] = contexto_previo
@@ -371,7 +403,7 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
                 respuesta_final = msg.content
                 break
 
-        # 6. Actualizar Redis con el nuevo contexto
+        # 5. Actualizar Redis con el nuevo contexto
         if redis_client:
             pasos = []
             if ctx.get("nombre"):
@@ -402,7 +434,6 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
                 config["run_name"] = run_name
                 config["metadata"]["whatsapp"] = run_name
 
-            # Añadir metadatos para LangSmith
             if ctx.get("tipo_producto"):
                 config["metadata"]["tipo_producto"] = ctx["tipo_producto"]
             if ctx.get("productos_interes"):
@@ -424,18 +455,17 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
                 "ultimo_mensaje": mensaje,
                 "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             }
-            # Guardar en Redis; si cambió el número, actualizar la clave
             new_identifier = nuevo_whatsapp if nuevo_whatsapp and nuevo_whatsapp != thread_id else None
             await guardar_sesion_redis(redis_client, identifier, data_sesion, new_identifier=new_identifier)
 
-            # 7. Persistir en PostgreSQL solo si los 6 pasos están completos
+            # 6. Persistir en PostgreSQL solo si los 6 pasos están completos
             pasos_requeridos = ["nombre", "whatsapp", "departamento", "municipio", "topologia", "tipo_producto"]
             if all(p in pasos for p in pasos_requeridos):
                 if await persistir_sesion_postgres(thread_id, ctx):
                     await eliminar_sesion_redis(redis_client, new_identifier if new_identifier else identifier)
                     logger.info(f"Sesión finalizada y persistida en PostgreSQL para {thread_id}")
 
-        # 8. Generar respuesta en SSE
+        # 7. Generar respuesta en SSE
         if respuesta_final:
             tokens = respuesta_final.split()
             for i, token in enumerate(tokens):
@@ -448,54 +478,62 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
         yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
 
 # =============================================================================
-# ENDPOINT /chat CON UNIFICACIÓN Y BUFFER
+# ENDPOINT /chat CON UNIFICACIÓN Y BUFFER + IP/CLIENT_ID
 # =============================================================================
 @app.post("/chat")
-async def chat_endpoint(request: ChatRequest):
-    # 1. Extraer identificador (prioridad: metadata.whatsapp > metadata.number > thread_id)
-    identifier = request.metadata.get("whatsapp") or request.metadata.get("number") or request.thread_id
+async def chat_endpoint(request: ChatRequest, http_request: Request):
+    # 1. Extraer identificadores
+    client_id = request.metadata.get("client_id")  # Enviado desde el frontend
+    ip = obtener_ip_cliente(http_request)
+    thread_id_from_request = request.thread_id
+
+    # 2. Buscar primero por IP+client_id (si no hay número detectado)
+    if client_id and ip and redis_client:
+        thread_from_ip_client = await obtener_thread_por_ip_client_id(redis_client, ip, client_id)
+        if thread_from_ip_client:
+            # Si existe una asociación, usamos ese thread
+            logger.info(f"Thread {thread_from_ip_client} recuperado por IP+client_id para {ip}:{client_id}")
+            # Verificar si ese thread existe en Redis y tiene estado
+            sesion = await obtener_sesion_redis(redis_client, thread_from_ip_client)
+            if sesion:
+                # Si existe sesión, usarlo
+                return StreamingResponse(
+                    generar_tokens(thread_from_ip_client, request.message, thread_from_ip_client, sesion.get("whatsapp")),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                             "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
+                )
+
+    # 3. Extraer número de WhatsApp del mensaje
+    identifier = request.metadata.get("whatsapp") or request.metadata.get("number") or thread_id_from_request
     run_name = "Pendiente"
-    thread_id_final = request.thread_id
+    thread_id_final = thread_id_from_request
 
-    # 2. Intentar recuperar sesión de Redis
-    sesion_redis = None
-    if redis_client and identifier:
-        sesion_redis = await obtener_sesion_redis(redis_client, identifier)
-    if sesion_redis:
-        thread_id_final = sesion_redis.get("thread_id", request.thread_id)
-        run_name = sesion_redis.get("whatsapp") or "Pendiente"
-        logger.info(f"Sesión recuperada de Redis para {identifier} con thread {thread_id_final}")
-        return StreamingResponse(
-            generar_tokens(thread_id_final, request.message, identifier, run_name),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
-                     "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
-        )
-
-    # 3. Si no está en Redis, buscar en PostgreSQL (para sesiones ya persistidas)
     whatsapp_raw = extraer_whatsapp(request.message)
     if whatsapp_raw:
         _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
         if whatsapp_norm and whatsapp_norm != "Pendiente":
-            # Buscar en Redis primero (por si se perdió la conexión temporal)
+            # Buscar en Redis por número
             if redis_client:
                 sesion_redis = await obtener_sesion_redis(redis_client, whatsapp_norm)
                 if sesion_redis:
                     thread_id_final = sesion_redis.get("thread_id")
                     run_name = whatsapp_norm
-                    logger.info(f"Sesión existente en Redis para {whatsapp_norm} con thread {thread_id_final}")
+                    # Actualizar IP+client_id para este thread
+                    if client_id and ip:
+                        await guardar_ip_client_id(redis_client, ip, client_id, thread_id_final)
                     return StreamingResponse(
                         generar_tokens(thread_id_final, request.message, whatsapp_norm, run_name),
                         media_type="text/event-stream",
                         headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
                                  "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
                     )
-            # Si no existe en Redis, buscar en PostgreSQL (datos persistidos)
+            # Si no existe en Redis, buscar en PostgreSQL
             existing_thread = await obtener_thread_por_whatsapp(whatsapp_norm)
             if existing_thread:
                 thread_id_final = existing_thread
                 run_name = whatsapp_norm
-                # Recrear en Redis para futuras interacciones
+                # Recrear en Redis y asociar IP+client_id
                 if redis_client:
                     data_inicial = {
                         "thread_id": thread_id_final,
@@ -508,7 +546,8 @@ async def chat_endpoint(request: ChatRequest):
                         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                     }
                     await guardar_sesion_redis(redis_client, whatsapp_norm, data_inicial)
-                logger.info(f"Thread existente en PostgreSQL {thread_id_final} recuperado para {whatsapp_norm}")
+                    if client_id and ip:
+                        await guardar_ip_client_id(redis_client, ip, client_id, thread_id_final)
                 return StreamingResponse(
                     generar_tokens(thread_id_final, request.message, whatsapp_norm, run_name),
                     media_type="text/event-stream",
@@ -516,7 +555,7 @@ async def chat_endpoint(request: ChatRequest):
                              "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
                 )
             else:
-                # Nuevo número: crear en Redis
+                # Nuevo número: crear en Redis y asociar IP+client_id
                 new_thread = str(uuid.uuid4())
                 thread_id_final = new_thread
                 run_name = whatsapp_norm
@@ -532,7 +571,8 @@ async def chat_endpoint(request: ChatRequest):
                         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                     }
                     await guardar_sesion_redis(redis_client, whatsapp_norm, data_inicial)
-                logger.info(f"Nuevo thread creado en Redis {thread_id_final} para {whatsapp_norm}")
+                    if client_id and ip:
+                        await guardar_ip_client_id(redis_client, ip, client_id, thread_id_final)
                 return StreamingResponse(
                     generar_tokens(thread_id_final, request.message, whatsapp_norm, run_name),
                     media_type="text/event-stream",
@@ -540,12 +580,21 @@ async def chat_endpoint(request: ChatRequest):
                              "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
                 )
     else:
-        # No hay número: usar thread actual (puede ser nuevo o existente en Redis)
+        # No hay número: usar thread actual o crear uno nuevo con IP+client_id
         if redis_client:
+            # Verificar si ya existe sesión en Redis para este thread_id
             sesion_existente = await obtener_sesion_redis(redis_client, identifier)
-            if not sesion_existente:
+            if sesion_existente:
+                thread_id_final = identifier
+                run_name = sesion_existente.get("whatsapp") or "Pendiente"
+                # Actualizar IP+client_id
+                if client_id and ip:
+                    await guardar_ip_client_id(redis_client, ip, client_id, thread_id_final)
+            else:
+                # Crear nueva sesión con thread_id actual
+                thread_id_final = thread_id_from_request
                 data_inicial = {
-                    "thread_id": request.thread_id,
+                    "thread_id": thread_id_final,
                     "whatsapp": "",
                     "nombre": "Pendiente",
                     "contexto_tecnico": {},
@@ -555,9 +604,12 @@ async def chat_endpoint(request: ChatRequest):
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 }
                 await guardar_sesion_redis(redis_client, identifier, data_inicial)
-                logger.info(f"Nuevo thread creado en Redis con thread_id {request.thread_id}")
-        run_name = request.thread_id
-        thread_id_final = request.thread_id
+                if client_id and ip:
+                    await guardar_ip_client_id(redis_client, ip, client_id, thread_id_final)
+                run_name = thread_id_final
+        else:
+            run_name = thread_id_from_request
+            thread_id_final = thread_id_from_request
 
     return StreamingResponse(
         generar_tokens(thread_id_final, request.message, identifier, run_name),
