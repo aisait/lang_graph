@@ -12,7 +12,8 @@ import logging
 import re
 import uuid
 from collections import defaultdict
-from typing import AsyncGenerator, Optional  # <--- IMPORTACIÓN AÑADIDA
+from typing import AsyncGenerator, Optional
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import psutil
 import asyncpg
@@ -198,6 +199,21 @@ async def actualizar_metadatos_thread(thread_id: str, contexto: dict) -> bool:
         logger.error(f"Error actualizando metadatos: {e}")
         return False
 
+# =============================================================================
+# FUNCIÓN PARA SANEAR DATABASE_URL
+# =============================================================================
+def sanear_db_url(db_url: str) -> str:
+    """Elimina parámetros no soportados por psycopg3 (pool_size, max_overflow, pool_timeout)."""
+    try:
+        parsed = urlparse(db_url)
+        query = parse_qs(parsed.query)
+        for p in ["pool_size", "max_overflow", "pool_timeout"]:
+            query.pop(p, None)
+        clean_query = urlencode(query, doseq=True)
+        return urlunparse(parsed._replace(query=clean_query))
+    except Exception:
+        return db_url
+
 # ---------------------------------------------------------------------------
 # Ciclo de vida
 # ---------------------------------------------------------------------------
@@ -207,17 +223,11 @@ redis_client = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global graph, redis_client
-    db_url = os.getenv("DATABASE_URL")
-    if not db_url:
+    raw_db_url = os.getenv("DATABASE_URL")
+    if not raw_db_url:
         raise RuntimeError("DATABASE_URL no definida")
-    try:
-        parsed = urlparse(db_url)
-        query = parse_qs(parsed.query)
-        for p in ["pool_size", "max_overflow", "pool_timeout"]:
-            query.pop(p, None)
-        db_url = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
-    except Exception:
-        pass
+    db_url = sanear_db_url(raw_db_url)
+
     async with AsyncExitStack() as stack:
         checkpointer = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(db_url))
         await checkpointer.setup()
