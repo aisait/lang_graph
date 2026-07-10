@@ -410,7 +410,30 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
-        # Extracción de contacto vía modelo estructurado
+        # --- NUEVA EXTRACCIÓN FORZADA DE NOMBRE Y NÚMERO ---
+        # Esto garantiza que cada vez que el usuario mencione su nombre o número,
+        # se actualice el contexto, incluso si antes ya tenía otros valores.
+        if ultimo_mensaje:
+            # 1. Extraer número de WhatsApp (similar a api.py)
+            num_match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', ultimo_mensaje)
+            if num_match:
+                raw_num = num_match.group(0)
+                _, num_norm = normalizar_contacto("", raw_num, "")
+                if num_norm and num_norm != "Pendiente":
+                    ctx["whatsapp"] = num_norm
+                    import logging
+                    logging.getLogger("jarvi.agent").info(f"Extraído número de WhatsApp: {num_norm}")
+            # 2. Extraer nombre mediante regex (patrones comunes)
+            name_match = re.search(r'(?:mi\s+nombre\s+es|nombre[:]\s*|me\s+llamo)\s*([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)', ultimo_mensaje, re.IGNORECASE)
+            if name_match:
+                raw_name = name_match.group(1).strip()
+                if raw_name and len(raw_name) > 1:
+                    ctx["nombre"] = raw_name
+                    logging.getLogger("jarvi.agent").info(f"Extraído nombre: {raw_name}")
+        # --- FIN DE EXTRACCIÓN FORZADA ---
+
+        # Extracción de contacto vía modelo estructurado (se mantiene como respaldo)
+        # Se ejecuta solo si no se ha extraído nombre o whatsapp mediante regex.
         if ultimo_mensaje and (not ctx.get("nombre") or ctx.get("nombre") == "Usuario" or not ctx.get("whatsapp")):
             try:
                 extraccion = extractor_llm.invoke(f"Identifica nombre o teléfono. Mensaje: {ultimo_mensaje}")
@@ -423,7 +446,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         # Extracción de vendedor mediante expresión regular
         if ultimo_mensaje and not ctx.get("vendedor"):
-            vendedor_match = re.search(r'(?:mi\s+vendedor\s+es|vendedor[:]\s*)([A-Za-z0-9\s]+)', ultimo_mensaje, re.IGNORECASE)
+            vendedor_match = re.search(
+                r'(?:mi\s+vendedor\s+es|vendedor[:]\s*)([A-Za-z0-9\s]+)',
+                ultimo_mensaje,
+                re.IGNORECASE
+            )
             if vendedor_match:
                 ctx["vendedor"] = vendedor_match.group(1).strip()
 
@@ -439,12 +466,14 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         whatsapp_ctx = ctx.get("whatsapp", "Pendiente")
         nombre_run, whatsapp_run = normalizar_contacto(nombre_ctx, whatsapp_ctx, ctx.get("ciudad", ""))
 
+        # Inyección de trazabilidad en el config (LangSmith)
         config["run_name"] = f"Lead: {nombre_run}"
         if "metadata" not in config:
             config["metadata"] = {}
         config["metadata"]["whatsapp"] = whatsapp_run
         config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
 
+        # Construcción del system prompt con todos los datos acumulados
         prompt_sistema = SystemMessage(
             content=(
                 f"Eres Jarvi, Ingeniero de Preventa de AISA Solar. "
@@ -457,6 +486,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             )
         )
 
+        # Invocación del LLM con todo el historial
         respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
@@ -477,8 +507,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
 # ---------------------------------------------------------------------------
 # PASO 1: Exportación limpia para LangGraph Studio (Servicio Visualizador)
-# ---------------------------------------------------------------------------
 # Se protege la creación del grafo para evitar errores al importar.
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     from langgraph.checkpoint.memory import MemorySaver
     checkpointer_studio = MemorySaver()
