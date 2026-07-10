@@ -32,19 +32,14 @@ from agent_graph import create_graph, normalizar_contacto
 from ontology import obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Esquemas adicionales
 # ---------------------------------------------------------------------------
 class TTSRequest(BaseModel):
     text: str
     voice: str | None = None
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("jarvi.api")
 
 # ---------------------------------------------------------------------------
 # Seguridad
@@ -323,14 +318,23 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
     config["metadata"] = config.get("metadata", {})
     config["metadata"]["trace_id"] = trace_id
 
-    # Recuperar sesión de Redis
+    # 1. Recuperar sesión de Redis usando el identifier (que idealmente es el número)
     sesion_redis = None
-    if redis_client:
+    if redis_client and identifier:
         sesion_redis = await obtener_sesion_redis(redis_client, identifier)
-    if sesion_redis:
-        if not run_name or run_name == "Pendiente":
-            run_name = sesion_redis.get("whatsapp") or "Pendiente"
+        if sesion_redis:
+            logger.info(f"Sesión recuperada de Redis para {identifier}")
+            # Extraer el run_name de la sesión
+            run_name = sesion_redis.get("whatsapp") or run_name or thread_id
+            # Obtener el contexto técnico previo
+            contexto_previo = sesion_redis.get("contexto_tecnico", {})
+        else:
+            logger.warning(f"No se encontró sesión en Redis para {identifier}")
     else:
+        logger.warning("Redis no disponible o identifier vacío")
+
+    # 2. Si no se encontró en Redis, intentar obtener de PostgreSQL (solo si ya está persistido)
+    if not sesion_redis:
         if not run_name or run_name == "Pendiente":
             try:
                 whatsapp_actual = await obtener_whatsapp_por_thread(thread_id)
@@ -338,16 +342,22 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
                     run_name = whatsapp_actual
             except Exception as e:
                 logger.warning(f"No se pudo obtener whatsapp para run_name: {e}")
+        # No hay contexto previo desde Redis
+        contexto_previo = {}
 
+    # 3. Si no hay run_name, usar thread_id
     if not run_name or run_name == "Pendiente":
         run_name = thread_id
 
+    # 4. Configurar run_name y metadatos para LangSmith
     config["run_name"] = run_name
     config["metadata"]["whatsapp"] = run_name if run_name != thread_id else ""
 
+    # 5. Preparar el estado inicial con el contexto previo (si existe)
     estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
-    if sesion_redis and sesion_redis.get("contexto_tecnico"):
-        estado_inicial["contexto_tecnico"] = sesion_redis["contexto_tecnico"]
+    if contexto_previo:
+        estado_inicial["contexto_tecnico"] = contexto_previo
+        logger.info(f"Inyectando contexto previo en el grafo: {contexto_previo}")
 
     async with locks[thread_id]:
         resultado = await graph.ainvoke(estado_inicial, config=config)
@@ -361,7 +371,7 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
                 respuesta_final = msg.content
                 break
 
-        # --- ACTUALIZAR REDIS Y METADATOS ---
+        # 6. Actualizar Redis con el nuevo contexto
         if redis_client:
             pasos = []
             if ctx.get("nombre"):
@@ -377,7 +387,7 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
             if ctx.get("tipo_producto"):
                 pasos.append("tipo_producto")
 
-            # Seleccionar productos si tenemos topologia y tipo_producto
+            # Seleccionar productos si tenemos topología y tipo_producto
             if ctx.get("topologia") and ctx.get("tipo_producto") and not ctx.get("productos_interes"):
                 ctx["productos_interes"] = obtener_productos_relevantes(
                     topologia=ctx["topologia"],
@@ -414,16 +424,18 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
                 "ultimo_mensaje": mensaje,
                 "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             }
-            await guardar_sesion_redis(redis_client, identifier, data_sesion, new_identifier=nuevo_whatsapp if nuevo_whatsapp and nuevo_whatsapp != thread_id else None)
+            # Guardar en Redis; si cambió el número, actualizar la clave
+            new_identifier = nuevo_whatsapp if nuevo_whatsapp and nuevo_whatsapp != thread_id else None
+            await guardar_sesion_redis(redis_client, identifier, data_sesion, new_identifier=new_identifier)
 
-            # --- PERSISTIR EN POSTGRESQL SOLO SI LOS 6 PASOS ESTÁN COMPLETOS ---
+            # 7. Persistir en PostgreSQL solo si los 6 pasos están completos
             pasos_requeridos = ["nombre", "whatsapp", "departamento", "municipio", "topologia", "tipo_producto"]
             if all(p in pasos for p in pasos_requeridos):
                 if await persistir_sesion_postgres(thread_id, ctx):
-                    await eliminar_sesion_redis(redis_client, nuevo_whatsapp if nuevo_whatsapp else identifier)
+                    await eliminar_sesion_redis(redis_client, new_identifier if new_identifier else identifier)
                     logger.info(f"Sesión finalizada y persistida en PostgreSQL para {thread_id}")
 
-        # Generar respuesta en SSE
+        # 8. Generar respuesta en SSE
         if respuesta_final:
             tokens = respuesta_final.split()
             for i, token in enumerate(tokens):
@@ -440,13 +452,14 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
 # =============================================================================
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
+    # 1. Extraer identificador (prioridad: metadata.whatsapp > metadata.number > thread_id)
     identifier = request.metadata.get("whatsapp") or request.metadata.get("number") or request.thread_id
     run_name = "Pendiente"
     thread_id_final = request.thread_id
 
-    # 1. Intentar recuperar sesión de Redis
+    # 2. Intentar recuperar sesión de Redis
     sesion_redis = None
-    if redis_client:
+    if redis_client and identifier:
         sesion_redis = await obtener_sesion_redis(redis_client, identifier)
     if sesion_redis:
         thread_id_final = sesion_redis.get("thread_id", request.thread_id)
@@ -459,7 +472,7 @@ async def chat_endpoint(request: ChatRequest):
                      "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
         )
 
-    # 2. Si no está en Redis, buscar en PostgreSQL (para sesiones ya persistidas)
+    # 3. Si no está en Redis, buscar en PostgreSQL (para sesiones ya persistidas)
     whatsapp_raw = extraer_whatsapp(request.message)
     if whatsapp_raw:
         _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
