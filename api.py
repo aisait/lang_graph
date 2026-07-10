@@ -28,7 +28,8 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
 from schemas import ChatRequest, AudioRequest, ImageRequest
-from agent_graph import create_graph, normalizar_contacto, obtener_productos_relevantes
+from agent_graph import create_graph, normalizar_contacto
+from ontology import obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 
 # ---------------------------------------------------------------------------
@@ -88,68 +89,115 @@ def extraer_whatsapp(mensaje: str) -> str | None:
             return f"+502 {numero}"
     return None
 
-async def obtener_thread_por_whatsapp(whatsapp: str) -> str | None:
+# =============================================================================
+# FUNCIÓN PARA SANEAR DATABASE_URL
+# =============================================================================
+def sanear_db_url(db_url: str) -> str:
     try:
-        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+        parsed = urlparse(db_url)
+        query = parse_qs(parsed.query)
+        for p in ["pool_size", "max_overflow", "pool_timeout"]:
+            query.pop(p, None)
+        clean_query = urlencode(query, doseq=True)
+        return urlunparse(parsed._replace(query=clean_query))
+    except Exception:
+        return db_url
+
+def get_db_url() -> str:
+    raw = os.getenv("DATABASE_URL")
+    if not raw:
+        raise RuntimeError("DATABASE_URL no definida")
+    return sanear_db_url(raw)
+
+# =============================================================================
+# FUNCIONES DE POSTGRESQL (SOLO PARA DATOS COMPLETOS)
+# =============================================================================
+async def obtener_thread_por_whatsapp(whatsapp: str) -> str | None:
+    """Busca thread_id asociado a un WhatsApp en PostgreSQL (solo datos persistidos)."""
+    try:
+        db_url = get_db_url()
+        conn = await asyncpg.connect(db_url)
         row = await conn.fetchrow("SELECT thread_id FROM threads WHERE whatsapp_id = $1", whatsapp)
         await conn.close()
         return row["thread_id"] if row else None
     except Exception as e:
-        logger.warning(f"Error al consultar thread por whatsapp: {e}")
+        logger.error(f"Error al consultar thread por whatsapp: {e}")
         return None
 
 async def obtener_whatsapp_por_thread(thread_id: str) -> str | None:
+    """Obtiene el WhatsApp asociado a un thread_id en PostgreSQL."""
     try:
-        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+        db_url = get_db_url()
+        conn = await asyncpg.connect(db_url)
         row = await conn.fetchrow("SELECT whatsapp_id FROM threads WHERE thread_id = $1", thread_id)
         await conn.close()
         return row["whatsapp_id"] if row else None
     except Exception as e:
-        logger.warning(f"Error al obtener whatsapp por thread: {e}")
+        logger.error(f"Error al obtener whatsapp por thread: {e}")
         return None
 
-async def actualizar_thread_con_whatsapp(thread_id: str, whatsapp: str) -> bool:
+async def persistir_sesion_postgres(thread_id: str, contexto: dict) -> bool:
+    """
+    Inserta o actualiza un thread en PostgreSQL solo cuando los datos están completos.
+    Esto ocurre al finalizar los 6 pasos.
+    """
     try:
-        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
-        await conn.execute(
-            "UPDATE threads SET whatsapp_id = $1 WHERE thread_id = $2",
-            whatsapp, thread_id
-        )
-        await conn.close()
-        logger.info(f"Thread {thread_id} actualizado con WhatsApp {whatsapp}")
-        return True
-    except Exception as e:
-        logger.error(f"Error al actualizar thread con whatsapp: {e}")
-        return False
+        db_url = get_db_url()
+        conn = await asyncpg.connect(db_url)
+        nombre = contexto.get("nombre")
+        whatsapp = contexto.get("whatsapp")
+        vendedor = contexto.get("vendedor")
+        departamento = contexto.get("departamento")
+        municipio = contexto.get("municipio")
+        productos_interes = contexto.get("productos_interes", [])
+        tipo_producto = contexto.get("tipo_producto")
 
-async def guardar_thread_si_no_existe(whatsapp: str, thread_id: str) -> bool:
-    try:
-        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
-        row = await conn.fetchrow("SELECT thread_id FROM threads WHERE whatsapp_id = $1", whatsapp)
+        metadata = {
+            "nombre": nombre,
+            "whatsapp": whatsapp,
+            "vendedor": vendedor,
+            "departamento": departamento,
+            "municipio": municipio,
+            "tipo_producto": tipo_producto,
+            "productos_interes": productos_interes
+        }
+
+        row = await conn.fetchrow("SELECT thread_id FROM threads WHERE thread_id = $1", thread_id)
         if row:
-            await conn.close()
-            return True
-        await conn.execute(
-            "INSERT INTO threads (thread_id, whatsapp_id, nombre_cliente, metadata) VALUES ($1, $2, $3, $4)",
-            thread_id, whatsapp, "Pendiente", json.dumps({"status": "inicial"})
-        )
+            await conn.execute(
+                """
+                UPDATE threads
+                SET whatsapp_id = $1, nombre_cliente = $2, metadata = $3
+                WHERE thread_id = $4
+                """,
+                whatsapp, nombre, json.dumps(metadata), thread_id
+            )
+            logger.info(f"Thread {thread_id} actualizado en PostgreSQL")
+        else:
+            await conn.execute(
+                """
+                INSERT INTO threads (thread_id, whatsapp_id, nombre_cliente, metadata)
+                VALUES ($1, $2, $3, $4)
+                """,
+                thread_id, whatsapp, nombre, json.dumps(metadata)
+            )
+            logger.info(f"Thread {thread_id} insertado en PostgreSQL")
+
         await conn.close()
-        logger.info(f"Nuevo thread creado y guardado: {thread_id} para {whatsapp}")
         return True
     except Exception as e:
-        logger.error(f"Error al guardar thread: {e}")
+        logger.error(f"Error persistiendo sesión en PostgreSQL: {e}")
         return False
 
 # =============================================================================
-# FUNCIONES DE BUFFER EN REDIS
+# FUNCIONES DE BUFFER EN REDIS (SESIONES EN CURSO)
 # =============================================================================
 REDIS_TTL = int(os.getenv("REDIS_TTL", 604800))  # 7 días
 
 def sanear_datos_redis(datos: dict) -> dict:
-    """Convierte recursivamente None a valores válidos para Redis."""
     for key, value in list(datos.items()):
         if value is None:
-            if key in ["thread_id", "whatsapp", "nombre", "vendedor", "departamento", "municipio", "topologia", "fase_actual", "ultimo_mensaje"]:
+            if key in ["thread_id", "whatsapp", "nombre", "vendedor", "departamento", "municipio", "topologia", "fase_actual", "ultimo_mensaje", "tipo_producto"]:
                 datos[key] = ""
             elif key in ["contexto_tecnico", "pasos_completados"]:
                 datos[key] = {} if key == "contexto_tecnico" else []
@@ -162,10 +210,6 @@ def sanear_datos_redis(datos: dict) -> dict:
     return datos
 
 async def guardar_sesion_redis(redis_client: Optional[redis.Redis], identifier: str, data: dict, new_identifier: Optional[str] = None):
-    """
-    Guarda una sesión en Redis. Si new_identifier es proporcionado, elimina la clave antigua
-    y crea una nueva con el nuevo identificador (para actualizar el número de WhatsApp).
-    """
     if not redis_client:
         return
     try:
@@ -212,51 +256,6 @@ async def eliminar_sesion_redis(redis_client: Optional[redis.Redis], identifier:
         except Exception as e:
             logger.error(f"Error eliminando sesión de Redis: {e}")
 
-# =============================================================================
-# PERSISTENCIA FINAL EN POSTGRESQL
-# =============================================================================
-async def actualizar_metadatos_thread(thread_id: str, contexto: dict, nuevo_whatsapp: Optional[str] = None) -> bool:
-    try:
-        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
-        metadata = {
-            "nombre": contexto.get("nombre"),
-            "whatsapp": contexto.get("whatsapp"),
-            "vendedor": contexto.get("vendedor"),
-            "departamento": contexto.get("departamento"),
-            "municipio": contexto.get("municipio"),
-            "productos_interes": contexto.get("productos_interes", [])
-        }
-        if nuevo_whatsapp:
-            await conn.execute(
-                "UPDATE threads SET whatsapp_id = $1, metadata = $2 WHERE thread_id = $3",
-                nuevo_whatsapp, json.dumps(metadata), thread_id
-            )
-            logger.info(f"Thread {thread_id} actualizado con nuevo WhatsApp: {nuevo_whatsapp}")
-        else:
-            await conn.execute(
-                "UPDATE threads SET metadata = $1 WHERE thread_id = $2",
-                json.dumps(metadata), thread_id
-            )
-        await conn.close()
-        return True
-    except Exception as e:
-        logger.error(f"Error actualizando metadatos: {e}")
-        return False
-
-# =============================================================================
-# FUNCIÓN PARA SANEAR DATABASE_URL
-# =============================================================================
-def sanear_db_url(db_url: str) -> str:
-    try:
-        parsed = urlparse(db_url)
-        query = parse_qs(parsed.query)
-        for p in ["pool_size", "max_overflow", "pool_timeout"]:
-            query.pop(p, None)
-        clean_query = urlencode(query, doseq=True)
-        return urlunparse(parsed._replace(query=clean_query))
-    except Exception:
-        return db_url
-
 # ---------------------------------------------------------------------------
 # Ciclo de vida
 # ---------------------------------------------------------------------------
@@ -266,10 +265,7 @@ redis_client = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global graph, redis_client
-    raw_db_url = os.getenv("DATABASE_URL")
-    if not raw_db_url:
-        raise RuntimeError("DATABASE_URL no definida")
-    db_url = sanear_db_url(raw_db_url)
+    db_url = get_db_url()
 
     async with AsyncExitStack() as stack:
         checkpointer = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(db_url))
@@ -344,17 +340,14 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
     else:
         if not run_name or run_name == "Pendiente":
             try:
-                conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
-                row = await conn.fetchrow("SELECT whatsapp_id FROM threads WHERE thread_id = $1", thread_id)
-                await conn.close()
-                if row and row["whatsapp_id"]:
-                    run_name = row["whatsapp_id"]
+                whatsapp_actual = await obtener_whatsapp_por_thread(thread_id)
+                if whatsapp_actual:
+                    run_name = whatsapp_actual
             except Exception as e:
                 logger.warning(f"No se pudo obtener whatsapp para run_name: {e}")
 
-    # Si no hay run_name, usar thread_id como identificador único
     if not run_name or run_name == "Pendiente":
-        run_name = thread_id  # Para mantener unicidad en LangSmith
+        run_name = thread_id
 
     config["run_name"] = run_name
     config["metadata"]["whatsapp"] = run_name if run_name != thread_id else ""
@@ -375,9 +368,8 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
                 respuesta_final = msg.content
                 break
 
-        # --- ACTUALIZAR BUFFER EN REDIS Y run_name ---
+        # --- ACTUALIZAR REDIS Y METADATOS ---
         if redis_client:
-            # Determinar pasos completados
             pasos = []
             if ctx.get("nombre"):
                 pasos.append("nombre")
@@ -389,68 +381,54 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
                 pasos.append("municipio")
             if ctx.get("topologia"):
                 pasos.append("topologia")
+            if ctx.get("tipo_producto"):
+                pasos.append("tipo_producto")
 
-            if ctx.get("topologia") and not ctx.get("productos_interes"):
-                ctx["productos_interes"] = obtener_productos_relevantes(ctx["topologia"], max_items=5)
+            # Seleccionar productos si tenemos topologia y tipo_producto
+            if ctx.get("topologia") and ctx.get("tipo_producto") and not ctx.get("productos_interes"):
+                ctx["productos_interes"] = obtener_productos_relevantes(
+                    topologia=ctx["topologia"],
+                    tipo=ctx["tipo_producto"],
+                    max_items=5
+                )
+                logger.info(f"Productos seleccionados: {ctx['productos_interes']}")
 
-            # Obtener el número actual del contexto
             nuevo_whatsapp = ctx.get("whatsapp")
-
-            # Verificar si el número ha cambiado y es diferente al run_name actual y no es thread_id
             if nuevo_whatsapp and nuevo_whatsapp != run_name and nuevo_whatsapp != thread_id:
-                logger.info(f"Actualizando run_name de {run_name} a {nuevo_whatsapp}")
-                # Actualizar run_name en config para LangSmith
                 run_name = nuevo_whatsapp
                 config["run_name"] = run_name
                 config["metadata"]["whatsapp"] = run_name
 
-                # Preparar datos de sesión
-                data_sesion = {
-                    "thread_id": thread_id,
-                    "whatsapp": nuevo_whatsapp,
-                    "nombre": ctx.get("nombre"),
-                    "vendedor": ctx.get("vendedor"),
-                    "departamento": ctx.get("departamento"),
-                    "municipio": ctx.get("municipio"),
-                    "topologia": ctx.get("topologia"),
-                    "contexto_tecnico": ctx,
-                    "pasos_completados": pasos,
-                    "fase_actual": ctx.get("fase_actual", "conversacion"),
-                    "ultimo_mensaje": mensaje,
-                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }
-                # Guardar en Redis con nuevo identificador (el número)
-                await guardar_sesion_redis(redis_client, identifier, data_sesion, new_identifier=nuevo_whatsapp)
-                # Actualizar PostgreSQL con el nuevo número
-                await actualizar_metadatos_thread(thread_id, ctx, nuevo_whatsapp)
-                # Actualizar identifier para futuras referencias dentro de esta ejecución
-                identifier = nuevo_whatsapp
-                # Actualizar también en la sesión de Redis para que futuras peticiones usen el número
-                # (ya lo hicimos con guardar_sesion_redis con new_identifier)
-            else:
-                # Guardar normalmente (sin cambio de identificador)
-                data_sesion = {
-                    "thread_id": thread_id,
-                    "whatsapp": ctx.get("whatsapp") or run_name,
-                    "nombre": ctx.get("nombre"),
-                    "vendedor": ctx.get("vendedor"),
-                    "departamento": ctx.get("departamento"),
-                    "municipio": ctx.get("municipio"),
-                    "topologia": ctx.get("topologia"),
-                    "contexto_tecnico": ctx,
-                    "pasos_completados": pasos,
-                    "fase_actual": ctx.get("fase_actual", "conversacion"),
-                    "ultimo_mensaje": mensaje,
-                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }
-                await guardar_sesion_redis(redis_client, identifier, data_sesion)
+            # Añadir metadatos para LangSmith
+            if ctx.get("tipo_producto"):
+                config["metadata"]["tipo_producto"] = ctx["tipo_producto"]
+            if ctx.get("productos_interes"):
+                config["metadata"]["productos_tags"] = [p["tag"] for p in ctx["productos_interes"]]
+                config["metadata"]["productos_nombres"] = [p["nombre"] for p in ctx["productos_interes"]]
 
-            # Verificar si todos los pasos están completos para persistir definitivamente
-            pasos_requeridos = ["nombre", "whatsapp", "departamento", "municipio", "topologia"]
+            data_sesion = {
+                "thread_id": thread_id,
+                "whatsapp": ctx.get("whatsapp") or run_name,
+                "nombre": ctx.get("nombre"),
+                "vendedor": ctx.get("vendedor"),
+                "departamento": ctx.get("departamento"),
+                "municipio": ctx.get("municipio"),
+                "topologia": ctx.get("topologia"),
+                "tipo_producto": ctx.get("tipo_producto"),
+                "contexto_tecnico": ctx,
+                "pasos_completados": pasos,
+                "fase_actual": ctx.get("fase_actual", "conversacion"),
+                "ultimo_mensaje": mensaje,
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            }
+            await guardar_sesion_redis(redis_client, identifier, data_sesion, new_identifier=nuevo_whatsapp if nuevo_whatsapp and nuevo_whatsapp != thread_id else None)
+
+            # --- PERSISTIR EN POSTGRESQL SOLO SI LOS 6 PASOS ESTÁN COMPLETOS ---
+            pasos_requeridos = ["nombre", "whatsapp", "departamento", "municipio", "topologia", "tipo_producto"]
             if all(p in pasos for p in pasos_requeridos):
-                await actualizar_metadatos_thread(thread_id, ctx, nuevo_whatsapp if nuevo_whatsapp else None)
-                await eliminar_sesion_redis(redis_client, identifier if nuevo_whatsapp else thread_id)
-                logger.info(f"Sesión finalizada y persistida en PostgreSQL para {identifier}")
+                if await persistir_sesion_postgres(thread_id, ctx):
+                    await eliminar_sesion_redis(redis_client, nuevo_whatsapp if nuevo_whatsapp else identifier)
+                    logger.info(f"Sesión finalizada y persistida en PostgreSQL para {thread_id}")
 
         # Generar respuesta en SSE
         if respuesta_final:
@@ -460,7 +438,6 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
         else:
             yield f"data: {json.dumps({'token': 'No se pudo generar una respuesta.'})}\n\n"
 
-        # Incluir el contexto técnico final, con el run_name actualizado
         ctx_para_envio = ctx.copy()
         ctx_para_envio["run_name_actual"] = run_name
         yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
@@ -470,12 +447,11 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
 # =============================================================================
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
-    # Extraer identificador inicial (prioridad: metadata.whatsapp > metadata.number > thread_id)
     identifier = request.metadata.get("whatsapp") or request.metadata.get("number") or request.thread_id
     run_name = "Pendiente"
     thread_id_final = request.thread_id
 
-    # Intentar recuperar sesión de Redis
+    # 1. Intentar recuperar sesión de Redis
     sesion_redis = None
     if redis_client:
         sesion_redis = await obtener_sesion_redis(redis_client, identifier)
@@ -490,55 +466,60 @@ async def chat_endpoint(request: ChatRequest):
                      "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
         )
 
-    # Si no hay sesión en Redis, usar lógica de unificación con PostgreSQL
+    # 2. Si no está en Redis, buscar en PostgreSQL (para sesiones ya persistidas)
     whatsapp_raw = extraer_whatsapp(request.message)
     if whatsapp_raw:
         _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
         if whatsapp_norm and whatsapp_norm != "Pendiente":
-            run_name = whatsapp_norm
-            whatsapp_actual = await obtener_whatsapp_por_thread(request.thread_id)
-            if whatsapp_actual is None or whatsapp_actual == "":
-                # Thread no tiene número, asignar
-                await actualizar_thread_con_whatsapp(request.thread_id, whatsapp_norm)
-                thread_id_final = request.thread_id
-            elif whatsapp_actual == whatsapp_norm:
-                # Ya tiene el mismo número
-                thread_id_final = request.thread_id
+            existing_thread = await obtener_thread_por_whatsapp(whatsapp_norm)
+            if existing_thread:
+                thread_id_final = existing_thread
+                run_name = whatsapp_norm
+                if redis_client:
+                    data_inicial = {
+                        "thread_id": thread_id_final,
+                        "whatsapp": whatsapp_norm,
+                        "nombre": "Pendiente",
+                        "contexto_tecnico": {},
+                        "pasos_completados": [],
+                        "fase_actual": "inicio",
+                        "ultimo_mensaje": request.message,
+                        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    }
+                    await guardar_sesion_redis(redis_client, whatsapp_norm, data_inicial)
+                logger.info(f"Thread existente en PostgreSQL {thread_id_final} recuperado para {whatsapp_norm}")
+                return StreamingResponse(
+                    generar_tokens(thread_id_final, request.message, whatsapp_norm, run_name),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                             "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
+                )
             else:
-                # Thread tiene otro número, buscar thread existente para este número
-                existing = await obtener_thread_por_whatsapp(whatsapp_norm)
-                if existing:
-                    thread_id_final = existing
-                    logger.info(f"Redirigiendo al thread existente {thread_id_final} para {whatsapp_norm}")
-                else:
-                    # No existe, crear nuevo thread para este número
-                    new_thread = str(uuid.uuid4())
-                    await guardar_thread_si_no_existe(whatsapp_norm, new_thread)
-                    thread_id_final = new_thread
-                    logger.info(f"Nuevo thread creado {thread_id_final} para {whatsapp_norm}")
-
-            # Guardar en Redis con el número como identificador
-            if redis_client:
-                data_inicial = {
-                    "thread_id": thread_id_final,
-                    "whatsapp": whatsapp_norm,
-                    "nombre": "Pendiente",
-                    "contexto_tecnico": {},
-                    "pasos_completados": [],
-                    "fase_actual": "inicio",
-                    "ultimo_mensaje": request.message,
-                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }
-                await guardar_sesion_redis(redis_client, whatsapp_norm, data_inicial)
-
-            return StreamingResponse(
-                generar_tokens(thread_id_final, request.message, whatsapp_norm, run_name),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
-                         "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
-            )
+                # Nuevo número: no existe en PostgreSQL, crear solo en Redis
+                new_thread = str(uuid.uuid4())
+                thread_id_final = new_thread
+                run_name = whatsapp_norm
+                if redis_client:
+                    data_inicial = {
+                        "thread_id": thread_id_final,
+                        "whatsapp": whatsapp_norm,
+                        "nombre": "Pendiente",
+                        "contexto_tecnico": {},
+                        "pasos_completados": [],
+                        "fase_actual": "inicio",
+                        "ultimo_mensaje": request.message,
+                        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    }
+                    await guardar_sesion_redis(redis_client, whatsapp_norm, data_inicial)
+                logger.info(f"Nuevo thread creado en Redis {thread_id_final} para {whatsapp_norm}")
+                return StreamingResponse(
+                    generar_tokens(thread_id_final, request.message, whatsapp_norm, run_name),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                             "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
+                )
     else:
-        # No se detectó número: usar thread actual, pero registrar en Redis con thread_id como identificador
+        # No hay número: usar thread actual (puede ser nuevo o existente en Redis)
         if redis_client:
             sesion_existente = await obtener_sesion_redis(redis_client, identifier)
             if not sesion_existente:
@@ -553,7 +534,7 @@ async def chat_endpoint(request: ChatRequest):
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 }
                 await guardar_sesion_redis(redis_client, identifier, data_inicial)
-        # Si no hay número, usar thread_id como run_name para unicidad
+                logger.info(f"Nuevo thread creado en Redis con thread_id {request.thread_id}")
         run_name = request.thread_id
         thread_id_final = request.thread_id
 
