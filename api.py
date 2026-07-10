@@ -27,7 +27,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
 from schemas import ChatRequest, ChatResponse, AudioRequest, ImageRequest
-from agent_graph import create_graph, normalizar_contacto
+from agent_graph import create_graph, normalizar_contacto, obtener_productos_relevantes
 from config import ISOConfigValidator
 from telemetry import (
     trace_id_var, span_id_var, parent_span_id_var,
@@ -168,6 +168,33 @@ async def guardar_thread_si_no_existe(whatsapp: str, thread_id: str) -> bool:
         logger.error(f"Error al guardar thread: {e}")
         return False
 
+# =============================================================================
+# PERSISTENCIA DE METADATOS
+# =============================================================================
+async def actualizar_metadatos_thread(thread_id: str, contexto: dict) -> bool:
+    """Actualiza la columna metadata del thread con nombre, whatsapp, vendedor, ubicación y productos."""
+    try:
+        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+        metadata = {
+            "nombre": contexto.get("nombre"),
+            "whatsapp": contexto.get("whatsapp"),
+            "vendedor": contexto.get("vendedor"),
+            "departamento": contexto.get("departamento"),
+            "municipio": contexto.get("municipio"),
+            "productos_interes": contexto.get("productos_interes", [])
+        }
+        await conn.execute(
+            "UPDATE threads SET metadata = $1 WHERE thread_id = $2",
+            json.dumps(metadata),
+            thread_id
+        )
+        await conn.close()
+        logger.info(f"Metadatos actualizados para thread {thread_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Error actualizando metadatos: {e}")
+        return False
+
 # ---------------------------------------------------------------------------
 # Ciclo de vida
 # ---------------------------------------------------------------------------
@@ -276,6 +303,14 @@ async def generar_tokens(thread_id: str, mensaje: str, run_name: str | None = No
             if isinstance(msg, AIMessage):
                 respuesta_final = msg.content
                 break
+
+        # --- Actualización de metadatos si los datos principales están completos ---
+        if ctx.get("nombre") and ctx.get("whatsapp") and ctx.get("departamento"):
+            # Obtener productos relevantes
+            topologia = ctx.get("topologia")
+            ctx["productos_interes"] = obtener_productos_relevantes(topologia, max_items=5)
+            # Persistir en BD
+            await actualizar_metadatos_thread(thread_id, ctx)
 
         if respuesta_final:
             tokens = respuesta_final.split()
