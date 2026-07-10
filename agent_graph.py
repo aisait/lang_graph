@@ -35,7 +35,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 import config
 from audit import auditar_fase
-from ontology import obtener_fragmento_ontologia, cargar_ontologia, get_product_blocks
+from ontology import obtener_fragmento_ontologia, cargar_ontologia, obtener_productos_relevantes
 # --- CTFOM: módulo de telemetría cognitiva ---
 from telemetry import trace_id_var, span_id_var, parent_span_id_var, schedule_telemetry_event
 # --- Nuevo módulo de ubicación ---
@@ -130,10 +130,11 @@ class InferenciaEnergetica(TypedDict):
     requiere_auditoria_electrica: bool
     nombre: Optional[str]
     whatsapp: Optional[str]
-    # Nuevos campos
+    # Nuevos campos (Paso 6)
     departamento: Optional[str]
     municipio: Optional[str]
     vendedor: Optional[str]
+    tipo_producto: Optional[str]   # "sistema" o "unitario"
     productos_interes: Optional[list]
 
 
@@ -301,16 +302,34 @@ def extraer_intencion_humana(messages: list) -> str:
     return ""
 
 
+def extraer_tipo_producto(mensaje: str) -> Optional[str]:
+    """
+    Determina si el usuario busca un sistema completo o un producto unitario.
+    Retorna "sistema", "unitario" o None si no se puede determinar.
+    """
+    if not mensaje:
+        return None
+    mensaje_lower = mensaje.lower()
+    # Patrones para sistema
+    if re.search(r'\b(sistema|kit|completo|llave en mano|instalación completa|solar completo)\b', mensaje_lower):
+        return "sistema"
+    # Patrones para producto unitario
+    elif re.search(r'\b(producto|unitario|componente|inversor|panel|batería|bateria|calentador|bomba|controlador)\b', mensaje_lower):
+        return "unitario"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Función para obtener productos relevantes (Nueva)
 # ---------------------------------------------------------------------------
-def obtener_productos_relevantes(topologia: str, max_items: int = 5) -> list:
+def obtener_productos_relevantes(topologia: str, tipo: Optional[str] = None, max_items: int = 5) -> list:
     """
     Retorna una lista de hasta max_items productos de la ontología
-    que corresponden a la topología detectada.
+    que corresponden a la topología y tipo (sistema/unitario) detectados.
     """
+    from ontology import get_product_blocks
     ontologia = cargar_ontologia()
-    bloques = get_product_blocks(topologia)
+    bloques = get_product_blocks(topologia, tipo)
     productos = []
     for bid in bloques[:max_items]:
         if bid in ontologia:
@@ -318,7 +337,8 @@ def obtener_productos_relevantes(topologia: str, max_items: int = 5) -> list:
             productos.append({
                 "nombre": item["nombre"],
                 "tag": item["tag"],
-                "url": item["url"]
+                "url": item["url"],
+                "tipo": item.get("tipo", "desconocido")
             })
     return productos
 
@@ -349,13 +369,18 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     llm = ChatOpenAI(openai_api_key=DEFAULT_API_KEY, model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
     extractor_llm = llm.with_structured_output(ExtractorContacto)
 
-    # -------------------- Nodo: Clasificador Topológico --------------------
+    # -------------------- Nodo: Clasificador Topológico (Paso 2) --------------------
     @auditar_fase(nombre_fase="Clasificador Topológico", criticidad="MEDIA")
     @observe_node(node_name="clasificador_topologia")
     def clasificador_topologia_node(state: AgentState):
         """
         Infiere la topología del sistema (On‑Grid / Off‑Grid) a partir
         de las palabras clave detectadas en el último mensaje del usuario.
+
+        Prueba de caja negra:
+            - Mensaje "quiero ahorrar en mi factura" → topologia On‑Grid, auditoría True.
+            - Mensaje "vivo en una finca sin luz" → topologia Off‑Grid, auditoría True.
+            - Mensaje sin palabras clave → el contexto no se modifica.
         """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
@@ -370,7 +395,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["requiere_auditoria_electrica"] = True
         return {"contexto_tecnico": ctx}
 
-    # -------------------- Nodo: Validador Geográfico --------------------
+    # -------------------- Nodo: Validador Geográfico (Paso 3) --------------------
     @auditar_fase(nombre_fase="Validador Geográfico", criticidad="MEDIA")
     @observe_node(node_name="validador_geolocalizacion")
     def validador_geolocalizacion_node(state: AgentState):
@@ -399,13 +424,49 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         return {"contexto_tecnico": ctx}
 
-    # -------------------- Nodo: Chatbot (Inferencia principal) --------------------
+    # -------------------- Nodo: Definición de Producto/Sistema (Paso 6) --------------------
+    @auditar_fase(nombre_fase="Definición de Producto/Sistema", criticidad="ALTA")
+    @observe_node(node_name="definicion_producto")
+    def definicion_producto_node(state: AgentState):
+        """
+        Determina si el cliente busca un sistema completo o un producto unitario.
+        Si no está definido, genera un mensaje para preguntar.
+        Este es el PASO 6 del proceso de preventa.
+        """
+        ctx = dict(state.get("contexto_tecnico") or {})
+        ultimo = extraer_intencion_humana(state.get("messages", []))
+
+        # Si ya tenemos tipo_producto, no hacer nada
+        if ctx.get("tipo_producto"):
+            return {"contexto_tecnico": ctx}
+
+        # Si no hay mensaje, no podemos inferir
+        if not ultimo:
+            return {"contexto_tecnico": ctx}
+
+        # Intentar extraer del mensaje
+        tipo = extraer_tipo_producto(ultimo)
+        if tipo:
+            ctx["tipo_producto"] = tipo
+            import logging
+            logging.getLogger("jarvi.agent").info(f"Tipo de producto detectado: {tipo}")
+            return {"contexto_tecnico": ctx}
+
+        # Si no se puede inferir, preguntar
+        pregunta = ("Para poder recomendarte los productos más adecuados, ¿estás buscando un **sistema completo** "
+                    "(incluye paneles, inversor, estructura, cableado, etc.) o un **producto específico** "
+                    "(ej. solo paneles, solo inversor, baterías)?")
+        # Añadir el mensaje del asistente al historial
+        new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
+        return {"messages": new_messages, "contexto_tecnico": ctx}
+
+    # -------------------- Nodo: Chatbot (Inferencia principal - Paso 4 y 5) --------------------
     @auditar_fase(nombre_fase="Inferencia del Chatbot", criticidad="ALTA")
     @observe_node(node_name="chatbot")
     def chatbot_node(state: AgentState, config: RunnableConfig):
         """
         Nodo central que invoca al LLM con el contexto enriquecido.
-        También intenta extraer nombre, teléfono y vendedor.
+        También intenta extraer nombre, teléfono, vendedor y tipo de producto.
         """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
@@ -454,6 +515,24 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             if vendedor_match:
                 ctx["vendedor"] = vendedor_match.group(1).strip()
 
+        # Detectar tipo de producto si aún no se ha definido (por si el usuario responde en el chat)
+        if ultimo_mensaje and not ctx.get("tipo_producto"):
+            tipo = extraer_tipo_producto(ultimo_mensaje)
+            if tipo:
+                ctx["tipo_producto"] = tipo
+                import logging
+                logging.getLogger("jarvi.agent").info(f"Tipo de producto detectado en chatbot: {tipo}")
+
+        # Si ya tenemos topologia y tipo_producto, pero no productos_interes, seleccionarlos
+        if ctx.get("topologia") and ctx.get("tipo_producto") and not ctx.get("productos_interes"):
+            ctx["productos_interes"] = obtener_productos_relevantes(
+                topologia=ctx["topologia"],
+                tipo=ctx["tipo_producto"],
+                max_items=5
+            )
+            import logging
+            logging.getLogger("jarvi.agent").info(f"Productos seleccionados: {ctx['productos_interes']}")
+
         # Reglas de recolección de datos según topología
         if ctx.get("requiere_auditoria_electrica"):
             regla_datos = "1. DEBES recopilar sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta."
@@ -472,6 +551,10 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             config["metadata"] = {}
         config["metadata"]["whatsapp"] = whatsapp_run
         config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
+        if ctx.get("tipo_producto"):
+            config["metadata"]["tipo_producto"] = ctx["tipo_producto"]
+        if ctx.get("productos_interes"):
+            config["metadata"]["productos_tags"] = [p["tag"] for p in ctx["productos_interes"]]
 
         # Construcción del system prompt con todos los datos acumulados
         prompt_sistema = SystemMessage(
@@ -493,12 +576,14 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     # -------------------- Ensamblaje del grafo --------------------
     graph_builder.add_node("clasificador", clasificador_topologia_node)
     graph_builder.add_node("validador", validador_geolocalizacion_node)
+    graph_builder.add_node("definicion_producto", definicion_producto_node)
     graph_builder.add_node("chatbot", chatbot_node)
     graph_builder.add_node("tools", ToolNode([procesar_oportunidad_backend]))
 
     graph_builder.add_edge(START, "clasificador")
     graph_builder.add_edge("clasificador", "validador")
-    graph_builder.add_edge("validador", "chatbot")
+    graph_builder.add_edge("validador", "definicion_producto")
+    graph_builder.add_edge("definicion_producto", "chatbot")
     graph_builder.add_conditional_edges("chatbot", tools_condition)
     graph_builder.add_edge("tools", "chatbot")
 
@@ -514,4 +599,5 @@ if __name__ == "__main__":
     checkpointer_studio = MemorySaver()
     jarvi_graph = create_graph(checkpointer_studio)
 else:
+    # Esta variable se usa solo para el visualizador, no para la API.
     jarvi_graph = None
