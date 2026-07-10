@@ -180,52 +180,100 @@ def obtener_fragmento_ontologia(topologia: Optional[str]) -> str:
 
 
 # =============================================================================
-# NUEVA FUNCIÓN: Obtención de bloques de productos por topología (para agent_graph)
+# NUEVA FUNCIÓN: Obtención de bloques de productos con filtro por tipo
 # =============================================================================
-def get_product_blocks(topologia: Optional[str]) -> List[str]:
+def get_product_blocks(topologia: Optional[str], tipo: Optional[str] = None) -> List[str]:
     """
     Retorna la lista de IDs de bloques de productos correspondientes a la
-    topología detectada. Esta función es utilizada por agent_graph.py para
-    extraer los productos relevantes y almacenarlos en el contexto técnico
-    del cliente, permitiendo la trazabilidad de los intereses del usuario.
+    topología detectada, opcionalmente filtrada por tipo (sistema/unitario).
 
     Estándares aplicados:
-    - ISO/IEC/IEEE 12207:2008: esta función es un punto de extensión del
-      módulo de ontología para soportar la nueva funcionalidad de
-      recolección de productos de interés.
-    - ISO/IEC 26514:2021: documentación completa de la función.
-    - ISO/IEC 25010:2011: la función es determinista y eficiente (usa la
-      misma lógica de selección que obtener_fragmento_ontologia).
+    - ISO/IEC/IEEE 12207:2008: punto de extensión del módulo.
+    - ISO/IEC 26514:2021: documentación completa.
+    - ISO/IEC 25010:2011: determinista y eficiente.
     - ISO/IEC 29119:2022: pruebas de caja negra sugeridas.
 
     Parámetros:
-        topologia (str | None): topología detectada (On-Grid, Off-Grid, Bombeo, etc.)
+        topologia (str | None): topología detectada.
+        tipo (str | None): "sistema", "unitario" o None (sin filtro).
 
     Retorna:
-        List[str]: lista de IDs de bloques (strings) que corresponden a la topología.
+        List[str]: lista de IDs de bloques.
 
     Prueba de caja negra (ISO/IEC 29119):
-        1. topologia=None: devuelve los bloques por defecto.
-        2. topologia="ON-GRID": devuelve los bloques 1-10, 20, 35, 37, 38, 60, 61, 64, 79-81, 85.
-        3. topologia="OFF-GRID": devuelve bloques de sistemas aislados.
-        4. topologia="BOMBA": devuelve bloques de bombas y tuberías.
-        5. topologia desconocida: devuelve los bloques por defecto.
+        1. topologia=None, tipo=None: devuelve bloques por defecto.
+        2. topologia="ON-GRID", tipo="sistema": devuelve solo sistemas On‑Grid.
+        3. topologia="OFF-GRID", tipo="unitario": devuelve solo productos unitarios Off‑Grid.
     """
+    # Primero obtener los bloques por topología
     if not topologia:
-        return ["11", "12", "13", "14", "15", "18", "20", "26", "38", "46", "51"]
-    upper = topologia.upper()
-    if "ON-GRID" in upper or "ATADO" in upper:
-        return [str(i) for i in range(1, 11)] + ["20", "35", "37", "38", "60", "61", "64", "79", "80", "81", "85"]
-    elif "OFF-GRID" in upper or "AISLADO" in upper:
-        return ["14", "16", "18", "19", "20", "22", "23", "24", "26", "27", "28", "32", "34", "35", "45", "46", "50", "51", "52", "53", "62", "64", "81", "82", "86"]
-    elif "BOMBA" in upper or "HIDRO" in upper or "BOMBEO" in upper:
-        return ["12", "13", "15", "16", "39", "40", "41", "42", "55", "56", "57", "58", "59", "66", "73", "74", "77", "78", "83"]
+        base = ["11","12","13","14","15","18","20","26","38","46","51"]
+    elif "ON-GRID" in topologia.upper() or "ATADO" in topologia.upper():
+        base = [str(i) for i in range(1,11)] + ["20","35","37","38","60","61","64","79","80","81","85"]
+    elif "OFF-GRID" in topologia.upper() or "AISLADO" in topologia.upper():
+        base = ["14","16","18","19","20","22","23","24","26","27","28","32","34","35","45","46","50","51","52","53","62","64","81","82","86"]
+    elif "BOMBA" in topologia.upper() or "HIDRO" in topologia.upper() or "BOMBEO" in topologia.upper():
+        base = ["12","13","15","16","39","40","41","42","55","56","57","58","59","66","73","74","77","78","83"]
     else:
-        return ["11", "12", "13", "14", "15", "18", "20", "26", "38", "46", "51"]
+        base = ["11","12","13","14","15","18","20","26","38","46","51"]
+
+    # Si no se filtra por tipo, devolver todos
+    if not tipo:
+        return base
+
+    # Filtrar por tipo
+    ontologia = cargar_ontologia()
+    filtrados = []
+    for bid in base:
+        if bid in ontologia and ontologia[bid].get("tipo") == tipo:
+            filtrados.append(bid)
+    return filtrados
 
 
 # =============================================================================
-# NUEVA FUNCIÓN: Búsqueda semántica de productos por mensaje (para recolección)
+# NUEVA FUNCIÓN: Obtener productos relevantes (estructurados)
+# =============================================================================
+def obtener_productos_relevantes(topologia: str, tipo: Optional[str] = None, max_items: int = 5) -> List[Dict]:
+    """
+    Retorna una lista de hasta max_items productos de la ontología,
+    filtrados por topología y tipo (si se especifica).
+    Cada producto es un diccionario con 'nombre', 'tag', 'url', 'tipo'.
+
+    Estándares aplicados:
+    - ISO/IEC/IEEE 12207:2008: extensión para soportar selección estructurada.
+    - ISO/IEC 26514:2021: documentación completa.
+    - ISO/IEC 25010:2011: rápida y con caché.
+
+    Parámetros:
+        topologia (str): topología detectada.
+        tipo (str | None): "sistema", "unitario" o None.
+        max_items (int): máximo de productos a retornar.
+
+    Retorna:
+        List[Dict]: lista de productos.
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. topologia="ON-GRID", tipo="sistema": retorna hasta 5 sistemas.
+        2. topologia="OFF-GRID", tipo=None: retorna hasta 5 productos sin filtrar.
+        3. tipo no válido: retorna lista vacía.
+    """
+    ontologia = cargar_ontologia()
+    bloques = get_product_blocks(topologia, tipo)
+    productos = []
+    for bid in bloques[:max_items]:
+        if bid in ontologia:
+            item = ontologia[bid]
+            productos.append({
+                "nombre": item["nombre"],
+                "tag": item["tag"],
+                "url": item["url"],
+                "tipo": item.get("tipo", "desconocido")
+            })
+    return productos
+
+
+# =============================================================================
+# FUNCIÓN ORIGINAL: Búsqueda semántica de productos por mensaje
 # =============================================================================
 def buscar_productos_por_mensaje(mensaje: str, top_n: int = 5) -> List[str]:
     """
@@ -233,8 +281,7 @@ def buscar_productos_por_mensaje(mensaje: str, top_n: int = 5) -> List[str]:
     Retorna hasta top_n nombres de productos (según el campo 'nombre' de cada categoría).
 
     Esta función reutiliza el caché de cargar_ontologia(), por lo que es eficiente
-    y consistente con el resto del sistema. Se utiliza para enriquecer el contexto
-    del cliente con los productos que menciona durante la conversación.
+    y consistente con el resto del sistema.
 
     Estándares aplicados:
     - ISO/IEC/IEEE 12207:2008: extensión del módulo para soportar análisis semántico.
