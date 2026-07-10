@@ -1,9 +1,10 @@
 {
-  "__comentario_iso": "Archivo de ontología de catálogo de productos AISA Solar. Define 86 categorías con etiquetas, nombres, URLs y palabras clave. Propósito: servir como fuente de verdad referencial para el enrutamiento epistemológico del agente (ontology.py).\n\nEstándares aplicados:\n- ISO/IEC 26514:2021 (Documentación de software): cada entrada describe un producto con metadatos claros.\n- ISO/IEC 25010:2011 (Calidad del producto): las palabras clave permiten emparejamiento preciso con la intención del usuario, mejorando la adecuación funcional.\n- ISO/IEC 29119:2022 (Pruebas de software - caja negra):\n  Pruebas sugeridas:\n  1. Carga del archivo: verificar que la función cargar_ontologia() retorna un diccionario con 86 claves numéricas y un campo '__comentario_iso'.\n  2. Búsqueda de bloques: invocar obtener_fragmento_ontologia('On-Grid') y comprobar que se incluyen los bloques 1-10, 20, 35, 37, 38, 60, 61, 64, 79, 80, 81, 85.\n  3. Integridad: cada entrada debe contener 'tag', 'nombre', 'url' y 'keywords' (lista de 10 cadenas). La URL debe ser válida y pertenecer al dominio aisa.com.gt.\n  4. Rendimiento: la carga desde disco debe ser instantánea (<10ms) gracias al caché en memoria.\n- ISO/IEC/IEEE 12207:2008 (Ciclo de vida): este archivo es un ítem de configuración del sistema, mantenido bajo control de cambios.",
+  "__comentario_iso": "Archivo de ontología de catálogo de productos AISA Solar. Define 86 categorías con etiquetas, nombres, URLs, palabras clave y tipo (sistema/unitario). Propósito: servir como fuente de verdad referencial para el enrutamiento epistemológico del agente (ontology.py).\n\nEstándares aplicados:\n- ISO/IEC 26514:2021 (Documentación de software): cada entrada describe un producto con metadatos claros.\n- ISO/IEC 25010:2011 (Calidad del producto): las palabras clave permiten emparejamiento preciso con la intención del usuario, mejorando la adecuación funcional.\n- ISO/IEC 29119:2022 (Pruebas de software - caja negra):\n  Pruebas sugeridas:\n  1. Carga del archivo: verificar que la función cargar_ontologia() retorna un diccionario con 86 claves numéricas y un campo '__comentario_iso'.\n  2. Búsqueda de bloques: invocar obtener_fragmento_ontologia('On-Grid') y comprobar que se incluyen los bloques 1-10, 20, 35, 37, 38, 60, 61, 64, 79, 80, 81, 85.\n  3. Integridad: cada entrada debe contener 'tag', 'nombre', 'url', 'tipo' y 'keywords' (lista de 10 cadenas). La URL debe ser válida y pertenecer al dominio aisa.com.gt.\n  4. Rendimiento: la carga desde disco debe ser instantánea (<10ms) gracias al caché en memoria.\n- ISO/IEC/IEEE 12207:2008 (Ciclo de vida): este archivo es un ítem de configuración del sistema, mantenido bajo control de cambios.",
   "1": {
     "tag": "sistemas-solares-on-grid",
     "nombre": "SISTEMAS SOLARES CONECTADOS A LA RED ELECTRICA ON-GRID",
     "url": "https://www.aisa.com.gt/shop/category/sistemas-atados-a-la-red-7",
+    "tipo": "sistema",
     "keywords": [
       "paneles solares para casa",
       "energia solar para hogar",
@@ -21,6 +22,7 @@
     "tag": "kit-solar-basico-on-grid",
     "nombre": "KITS SOLARES ON-GRID DE CONSUMO BASICO PARA HOGAR PEQUENO",
     "url": "https://www.aisa.com.gt/shop/category/consumo-basico-on-grid-28",
+    "tipo": "sistema",
     "keywords": [
       "kit solar economico para casa",
       "paneles solares para apartamento",
@@ -38,6 +40,7 @@
     "tag": "sistema-intermedio-on-grid",
     "nombre": "SISTEMAS ON-GRID DE CONSUMO INTERMEDIO PARA FAMILIAS MEDIANAS",
     "url": "https://www.aisa.com.gt/shop/category/consumo-intermedio-on-grid-29",
+    "tipo": "sistema",
     "keywords": [
       "paneles solares para casa mediana",
       "sistema solar familiar 2.5kW",
@@ -55,6 +58,7 @@
     "tag": "inversores-monofasicos-on-grid",
     "nombre": "INVERSORES ON-GRID MONOFASICOS PARA SISTEMAS CONECTADOS A LA RED",
     "url": "https://www.aisa.com.gt/shop/category/inv-ongrid-42",
+    "tipo": "unitario",
     "keywords": [
       "inversor para paneles solares monofasico",
       "inversor 3kW para casa",
@@ -72,6 +76,7 @@
     "tag": "sistema-alto-on-grid",
     "nombre": "SISTEMAS ON-GRID DE CONSUMO ALTO PARA VIVIENDAS GRANDES Y OFICINAS",
     "url": "https://www.aisa.com.gt/shop/category/consumo-alto-on-grid-46",
+    "tipo": "sistema",
     "keywords": [
       "paneles solares para casa grande",
       "sistema solar 5kW para vivienda",
@@ -89,6 +94,7 @@
     "tag": "comercial-alto-on-grid",
     "nombre": "SISTEMA ON-GRID DE CONSUMO COMERCIAL ALTO PARA NEGOCIOS Y TALLERES",
     "url": "https://www.aisa.com.gt/shop/category/consumo-comercial-alto-on-grid-89",
+    "tipo": "sistema",
     "keywords": [
       "paneles solares para negocio",
       "sistema solar para taller",
@@ -106,6 +112,7 @@
     "tag": "industrial-on-grid",
     "nombre": "SISTEMA ON-GRID INDUSTRIAL PARA GRANDES DEMANDAS DE FABRICA",
     "url": "https://www.aisa.com.gt/shop/category/consumo-comercial-industrial-on-grid-90",
+    "tipo": "sistema",
     "keywords": [
       "paneles solares para industria",
       "sistema solar fabrica 30kW",
@@ -123,6 +130,7 @@
     "tag": "comercial-intermedio-on-grid",
     "nombre": "SISTEMA ON-GRID DE CONSUMO COMERCIAL INTERMEDIO PARA LOCAL PEQUENO",
     "url": "https://www.aisa.com.gt/shop/category/consumo-comercial-intermedio-on-grid-88",
+    "tipo": "sistema",
     "keywords": [
       "paneles solares para tienda",
       "kit solar 3kW comercio",
@@ -140,6 +148,7 @@
     "tag": "inversores-trifasicos-on-grid",
     "nombre": "INVERSORES ON-GRID TRIFASICOS PARA SISTEMAS COMERCIALES E INDUSTRIALES",
     "url": "https://www.aisa.com.gt/shop/category/inv-ongrid-trifasico-77",
+    "tipo": "unitario",
     "keywords": [
       "inversor solar trifasico 10kW",
       "inversor industrial para paneles solares",
@@ -157,6 +166,7 @@
     "tag": "comercial-basico-on-grid",
     "nombre": "SISTEMA ON-GRID COMERCIAL BASICO PARA PEQUENOS EMPRENDIMIENTOS",
     "url": "https://www.aisa.com.gt/shop/category/consumo-comercial-basico-on-grid-91",
+    "tipo": "sistema",
     "keywords": [
       "paneles solares para emprendimiento",
       "kit solar negocio pequeño 1kW",
@@ -174,6 +184,7 @@
     "tag": "calentadores-solares-residenciales",
     "nombre": "CALENTADORES SOLARES PARA AGUA CALIENTE RESIDENCIAL Y PISCINA",
     "url": "https://www.aisa.com.gt/shop/category/calentadores-solares-1",
+    "tipo": "unitario",
     "keywords": [
       "calentador solar de agua para casa",
       "boiler solar para ducha",
@@ -191,6 +202,7 @@
     "tag": "tuberia-conductos-hidrosanitarios",
     "nombre": "TUBERIA Y CONDUCTOS PARA INSTALACIONES HIDROSANITARIAS Y SOLARES",
     "url": "https://www.aisa.com.gt/shop/category/tuberia-4",
+    "tipo": "unitario",
     "keywords": [
       "tuberia pvc para agua caliente",
       "tubo cpvc precio",
@@ -208,6 +220,7 @@
     "tag": "accesorios-valvulas-tuberia",
     "nombre": "ACCESORIOS DE CONEXION Y VALVULAS PARA TUBERIA",
     "url": "https://www.aisa.com.gt/shop/category/accesorios-5",
+    "tipo": "unitario",
     "keywords": [
       "codo pvc 1/2 pulgada",
       "tee pvc roscable",
@@ -225,6 +238,7 @@
     "tag": "iluminacion-led-dc",
     "nombre": "ILUMINACION LED DE CORRIENTE DIRECTA 12V Y 24V",
     "url": "https://www.aisa.com.gt/shop/category/iluminacion-dc-6",
+    "tipo": "unitario",
     "keywords": [
       "foco led 12v para panel solar",
       "lampara solar recargable para casa",
@@ -242,6 +256,7 @@
     "tag": "bombas-perifericas-agua",
     "nombre": "BOMBAS PERIFERICAS PARA AGUA LIMPIA DE SUPERFICIE",
     "url": "https://www.aisa.com.gt/shop/category/bombas-perifericas-8",
+    "tipo": "unitario",
     "keywords": [
       "bomba de agua periferica 1hp",
       "bomba para tanque elevado",
@@ -259,6 +274,7 @@
     "tag": "bombas-sumergibles-bajo-caudal",
     "nombre": "BOMBAS SUMERGIBLES DE BAJO CAUDAL PARA POZOS ESTRECHOS",
     "url": "https://www.aisa.com.gt/shop/category/bombas-sumergibles-bajo-caudal-9",
+    "tipo": "unitario",
     "keywords": [
       "bomba sumergible para pozo 4 pulgadas",
       "bomba de agua 12v solar",
@@ -276,6 +292,7 @@
     "tag": "bombas-calor-calefaccion",
     "nombre": "BOMBAS DE CALOR PARA CALEFACCION Y AGUA CALIENTE EFICIENTES",
     "url": "https://www.aisa.com.gt/shop/category/bombas-de-calor-10",
+    "tipo": "unitario",
     "keywords": [
       "bomba de calor para piscina",
       "calefaccion solar para casa",
@@ -293,6 +310,7 @@
     "tag": "refrigeracion-solar-aislada",
     "nombre": "REFRIGERACION SOLAR Y NEVERAS PARA SISTEMAS AISLADOS",
     "url": "https://www.aisa.com.gt/shop/category/refrigeracion-solar-14",
+    "tipo": "unitario",
     "keywords": [
       "nevera solar para cabaña",
       "refrigerador 12v para panel solar",
@@ -310,6 +328,7 @@
     "tag": "sistemas-aislados-baterias",
     "nombre": "SISTEMAS SOLARES AISLADOS COMPLETOS CON BATERIAS",
     "url": "https://www.aisa.com.gt/shop/category/sistemas-aislados-17",
+    "tipo": "sistema",
     "keywords": [
       "kit solar para casa sin luz",
       "sistema solar para finca",
@@ -327,6 +346,7 @@
     "tag": "paneles-solares-fotovoltaicos",
     "nombre": "PANELES SOLARES FOTOVOLTAICOS MONOCRISTALINOS Y POLICRISTALINOS",
     "url": "https://www.aisa.com.gt/shop/category/paneles-solares-18",
+    "tipo": "unitario",
     "keywords": [
       "panel solar 450w precio",
       "modulo fotovoltaico monocristalino",
@@ -344,6 +364,7 @@
     "tag": "resistencias-calentadores-solares",
     "nombre": "RESISTENCIAS ELECTRICAS PARA CALENTADORES SOLARES Y TERMODUCHAS",
     "url": "https://www.aisa.com.gt/shop/category/resistencias-para-calentadores-19",
+    "tipo": "unitario",
     "keywords": [
       "resistencia para calentador solar",
       "resistencia de inmersion 110v",
@@ -361,6 +382,7 @@
     "tag": "turbinas-eolicas-pequenas",
     "nombre": "TURBINAS EOLICAS DE PEQUENA POTENCIA PARA SISTEMAS HIBRIDOS",
     "url": "https://www.aisa.com.gt/shop/category/turbinas-eolicas-20",
+    "tipo": "unitario",
     "keywords": [
       "aerogenerador para casa 1kW",
       "turbina eolica 500w 12v",
@@ -378,6 +400,7 @@
     "tag": "baterias-estacionarias-ciclo-profundo",
     "nombre": "BATERIAS SOLARES ESTACIONARIAS DE CICLO PROFUNDO GENERAL",
     "url": "https://www.aisa.com.gt/shop/category/baterias-solares-21",
+    "tipo": "unitario",
     "keywords": [
       "bateria solar 200ah",
       "bateria estacionaria para paneles solares",
@@ -395,6 +418,7 @@
     "tag": "baterias-gel-selladas",
     "nombre": "BATERIAS DE GEL SELLADAS LIBRES DE MANTENIMIENTO PARA SOLAR",
     "url": "https://www.aisa.com.gt/shop/category/baterias-solares-bateria-de-gel-26",
+    "tipo": "unitario",
     "keywords": [
       "bateria de gel 100ah 12v",
       "bateria vrla para solar",
@@ -412,6 +436,7 @@
     "tag": "baterias-ups-respaldo",
     "nombre": "BATERIAS PARA UPS Y RESPALDO DE ENERGIA ININTERRUMPIDA",
     "url": "https://www.aisa.com.gt/shop/category/baterias-solares-bateria-para-ups-97",
+    "tipo": "unitario",
     "keywords": [
       "bateria para ups 12v 7ah",
       "respaldo energia para computadora",
@@ -429,6 +454,7 @@
     "tag": "baterias-acido-plomo-abiertas",
     "nombre": "BATERIAS DE ACIDO-PLOMO LIQUIDO ABIERTAS ECONOMICAS",
     "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-de-acido-plomo-liquido-104",
+    "tipo": "unitario",
     "keywords": [
       "bateria acido plomo 200ah",
       "bateria electrolito liquido solar",
@@ -446,6 +472,7 @@
     "tag": "baterias-backup-emergencia",
     "nombre": "BATERIAS PARA BACKUP Y SISTEMAS DE ENERGIA DE EMERGENCIA",
     "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-backup-105",
+    "tipo": "unitario",
     "keywords": [
       "bateria de emergencia para casa",
       "respaldo electrico portatil",
@@ -463,6 +490,7 @@
     "tag": "baterias-hibridos-aislados",
     "nombre": "BATERIAS PARA SISTEMAS HIBRIDOS Y AISLADOS CON INVERSOR",
     "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-sistemas-hibridos-y-aislados-106",
+    "tipo": "unitario",
     "keywords": [
       "bateria litio 48v 100ah",
       "bateria para inversor hibrido",
@@ -480,6 +508,7 @@
     "tag": "baterias-telecomunicaciones",
     "nombre": "BATERIAS ESPECIALIZADAS PARA TELECOMUNICACIONES Y RADIOENLACES",
     "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-telecomunicaciones-107",
+    "tipo": "unitario",
     "keywords": [
       "bateria para radio base solar",
       "bateria estacionaria telecom",
@@ -497,6 +526,7 @@
     "tag": "baterias-alarma-seguridad",
     "nombre": "BATERIAS PARA SISTEMAS DE ALARMA Y SEGURIDAD RESIDENCIAL",
     "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-sistemas-de-alarma-108",
+    "tipo": "unitario",
     "keywords": [
       "bateria para alarma de casa",
       "respaldo energia para camara",
@@ -514,6 +544,7 @@
     "tag": "baterias-videovigilancia-camaras",
     "nombre": "BATERIAS PARA SISTEMAS DE VIDEOVIGILANCIA Y CAMARAS IP",
     "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-sistemas-de-videovigilancia-109",
+    "tipo": "unitario",
     "keywords": [
       "bateria para camara de seguridad",
       "respaldo dvr 12v",
@@ -531,6 +562,7 @@
     "tag": "baterias-iluminacion-portatil",
     "nombre": "BATERIAS PARA KITS DE ILUMINACION PORTATIL Y LINTERNAS SOLARES",
     "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-kits-de-iluminacion-110",
+    "tipo": "unitario",
     "keywords": [
       "bateria para linterna solar",
       "pack baterias aa recargables solares",
@@ -548,6 +580,7 @@
     "tag": "baterias-vehiculos-electricos",
     "nombre": "BATERIAS PARA VEHICULOS ELECTRICOS Y MOVILIDAD ELECTRICA LIVIANA",
     "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-vehiculos-electricos-111",
+    "tipo": "unitario",
     "keywords": [
       "bateria para scooter electrico 48v",
       "bateria litio bicicleta electrica",
@@ -565,6 +598,7 @@
     "tag": "baterias-usos-especiales",
     "nombre": "BATERIAS PARA USOS ESPECIALES, ENERGIA PORTATIL Y OTROS EQUIPOS",
     "url": "https://www.aisa.com.gt/shop/category/baterias-solares-baterias-para-otros-usos-112",
+    "tipo": "unitario",
     "keywords": [
       "bateria para equipo medico portatil",
       "bateria para pesca electrica",
@@ -582,6 +616,7 @@
     "tag": "inversores-corriente-solar",
     "nombre": "INVERSORES DE CORRIENTE PARA SISTEMAS SOLARES Y RESPALDO",
     "url": "https://www.aisa.com.gt/shop/category/inversores-22",
+    "tipo": "unitario",
     "keywords": [
       "inversor onda pura 3000w",
       "inversor para bateria 12v",
@@ -599,6 +634,7 @@
     "tag": "calentadores-deluxe-alta-eficiencia",
     "nombre": "CALENTADORES SOLARES DELUXE DE ALTA EFICIENCIA Y DISENO PREMIUM",
     "url": "https://www.aisa.com.gt/shop/category/calentadores-solares-deluxe-25",
+    "tipo": "unitario",
     "keywords": [
       "calentador solar de lujo",
       "calentador solar plano selectivo",
@@ -616,6 +652,7 @@
     "tag": "serie-smart-inversores",
     "nombre": "SERIE SMART DE INVERSORES Y CONTROL SOLAR INTELIGENTE",
     "url": "https://www.aisa.com.gt/shop/category/serie-smart-27",
+    "tipo": "unitario",
     "keywords": [
       "inversor solar wifi monitoreo",
       "inversor inteligente app",
@@ -633,6 +670,7 @@
     "tag": "instalacion-paneles-solares",
     "nombre": "SERVICIO DE INSTALACION PROFESIONAL DE PANELES SOLARES",
     "url": "https://www.aisa.com.gt/shop/category/instalacion-paneles-solares-33",
+    "tipo": "sistema",
     "keywords": [
       "instalacion paneles solares guatemala",
       "mano de obra paneles solares",
@@ -650,6 +688,7 @@
     "tag": "bombas-recirculacion-agua-caliente",
     "nombre": "BOMBAS DE RECIRCULACION PARA SISTEMAS DE AGUA CALIENTE SOLAR",
     "url": "https://www.aisa.com.gt/shop/category/bomba-de-recirculacion-34",
+    "tipo": "unitario",
     "keywords": [
       "bomba recirculadora agua caliente",
       "circulador solar termico",
@@ -667,6 +706,7 @@
     "tag": "unidades-recirculacion-silenciosa",
     "nombre": "UNIDADES INDIVIDUALES DE BOMBA DE RECIRCULACION SILENCIOSA",
     "url": "https://www.aisa.com.gt/shop/category/bomba-de-recirculacion-bombas-de-recirculacion-individuales-93",
+    "tipo": "unitario",
     "keywords": [
       "bomba recirculadora 3 velocidades",
       "bomba silenciosa para calefaccion",
@@ -684,6 +724,7 @@
     "tag": "sistemas-recirculacion-termico",
     "nombre": "SISTEMAS COMPLETOS DE BOMBA DE RECIRCULACION Y CONTROL TERMICO",
     "url": "https://www.aisa.com.gt/shop/category/bomba-de-recirculacion-sistemas-bomba-de-recirculacion-94",
+    "tipo": "sistema",
     "keywords": [
       "kit recirculacion solar completo",
       "sistema circulacion agua caliente solar",
@@ -701,6 +742,7 @@
     "tag": "bombas-presurizadoras-agua",
     "nombre": "BOMBAS PRESURIZADORAS DE AGUA PARA MEJORAR LA PRESION DOMICILIARIA",
     "url": "https://www.aisa.com.gt/shop/category/bomba-presurizadora-35",
+    "tipo": "unitario",
     "keywords": [
       "bomba para aumentar presion de agua",
       "bomba presurizadora automatica casa",
@@ -718,6 +760,7 @@
     "tag": "bombillas-led-alta-eficiencia",
     "nombre": "BOMBILLAS LED DE ALTA EFICIENCIA PARA HOGAR Y COMERCIO",
     "url": "https://www.aisa.com.gt/shop/category/bombilla-36",
+    "tipo": "unitario",
     "keywords": [
       "bombilla led 12w",
       "foco ahorrador e27",
@@ -735,6 +778,7 @@
     "tag": "congeladores-horizontales-electricos",
     "nombre": "CONGELADORES ELECTRICOS HORIZONTALES PARA ALMACENAMIENTO DE ALIMENTOS",
     "url": "https://www.aisa.com.gt/shop/category/congelador-38",
+    "tipo": "unitario",
     "keywords": [
       "congelador horizontal 7 pies",
       "congelador arcón para negocio",
@@ -752,6 +796,7 @@
     "tag": "controladores-mppt-alta-eficiencia",
     "nombre": "CONTROLADORES DE CARGA MPPT DE ALTA EFICIENCIA PARA PANELES",
     "url": "https://www.aisa.com.gt/shop/category/controlador-mppt-39",
+    "tipo": "unitario",
     "keywords": [
       "controlador mppt 60a",
       "regulador solar mppt 150v",
@@ -769,6 +814,7 @@
     "tag": "controladores-pwm-economicos",
     "nombre": "CONTROLADORES DE CARGA PWM ECONOMICOS PARA SISTEMAS PEQUENOS",
     "url": "https://www.aisa.com.gt/shop/category/controlador-pwm-40",
+    "tipo": "unitario",
     "keywords": [
       "controlador solar pwm 30a",
       "regulador carga panel solar 12v",
@@ -786,6 +832,7 @@
     "tag": "repuestos-calentadores-solares",
     "nombre": "REPUESTOS ORIGINALES PARA CALENTADORES SOLARES Y TERMOTANQUES",
     "url": "https://www.aisa.com.gt/shop/category/repuesto-de-calentador-41",
+    "tipo": "unitario",
     "keywords": [
       "repuesto calentador solar",
       "anodo de magnesio calentador",
@@ -803,6 +850,7 @@
     "tag": "inversores-auto-onda-modificada",
     "nombre": "INVERSORES DE AUTO CON ENTRADA 12V Y SALIDA 110V MODIFICADA",
     "url": "https://www.aisa.com.gt/shop/category/inv-car-43",
+    "tipo": "unitario",
     "keywords": [
       "inversor para carro 12v 110v",
       "inversor onda modificada 1000w",
@@ -820,6 +868,7 @@
     "tag": "inversores-onda-pura-profesional",
     "nombre": "INVERSORES DE ONDA PURA PROFESIONAL PARA EQUIPOS SENSIBLES",
     "url": "https://www.aisa.com.gt/shop/category/inv-pro-44",
+    "tipo": "unitario",
     "keywords": [
       "inversor senoidal puro 2000w",
       "inversor onda pura para motor",
@@ -837,6 +886,7 @@
     "tag": "mini-kits-solares-iluminacion",
     "nombre": "MINI KITS SOLARES PARA ILUMINACION BASICA Y CARGA DE DISPOSITIVOS",
     "url": "https://www.aisa.com.gt/shop/category/mini-kit-48",
+    "tipo": "sistema",
     "keywords": [
       "mini kit solar para casa",
       "kit solar para cargar celular",
@@ -854,6 +904,7 @@
     "tag": "kits-solares-necesidad-basica",
     "nombre": "KITS SOLARES PARA NECESIDAD BASICA DE ILUMINACION Y TV PEQUENA",
     "url": "https://www.aisa.com.gt/shop/category/necesidad-basica-49",
+    "tipo": "sistema",
     "keywords": [
       "kit solar basico 100w",
       "panel solar para tv 32 pulgadas",
@@ -871,6 +922,7 @@
     "tag": "kit-solar-amenidades-fin-semana",
     "nombre": "KIT SOLAR BASICO MAS AMENIDADES PARA VIVIENDA DE FIN DE SEMANA",
     "url": "https://www.aisa.com.gt/shop/category/basicos-mas-amenidades-50",
+    "tipo": "sistema",
     "keywords": [
       "kit solar casa fin de semana 200w",
       "panel solar 200w con bateria",
@@ -888,6 +940,7 @@
     "tag": "hogar-solar-completo-offgrid",
     "nombre": "HOGAR SOLAR COMPLETO CON ELECTRODOMESTICOS ESENCIALES OFF-GRID",
     "url": "https://www.aisa.com.gt/shop/category/hogar-solar-51",
+    "tipo": "sistema",
     "keywords": [
       "kit solar para vivienda 1kW",
       "sistema solar aislado completo",
@@ -905,6 +958,7 @@
     "tag": "repuestos-estructuras-paneles",
     "nombre": "REPUESTOS Y HERRAJES PARA ESTRUCTURAS DE PANELES SOLARES",
     "url": "https://www.aisa.com.gt/shop/category/repuestos-y-herrajes-52",
+    "tipo": "unitario",
     "keywords": [
       "soporte para panel solar techo",
       "perfil aluminio estructura solar",
@@ -922,6 +976,7 @@
     "tag": "bombas-caudal-no-sumergible",
     "nombre": "BOMBAS DE CAUDAL NO SUMERGIBLES PARA TRASVASE DE AGUA SUPERFICIAL",
     "url": "https://www.aisa.com.gt/shop/category/bomba-caudal-no-sumergible-54",
+    "tipo": "unitario",
     "keywords": [
       "bomba para trasvase de agua",
       "motobomba gasolina 2 pulgadas",
@@ -939,6 +994,7 @@
     "tag": "sistemas-bombas-sumergibles-solares",
     "nombre": "SISTEMAS COMPLETOS DE BOMBAS SUMERGIBLES SOLARES PARA POZO",
     "url": "https://www.aisa.com.gt/shop/category/sistemas-bombas-sumergibles-56",
+    "tipo": "sistema",
     "keywords": [
       "kit bomba sumergible solar",
       "bomba pozo profundo con panel solar",
@@ -956,6 +1012,7 @@
     "tag": "sistemas-bombas-perifericas-solares",
     "nombre": "SISTEMAS DE BOMBAS PERIFERICAS CON PANEL SOLAR PARA TANQUES ELEVADOS",
     "url": "https://www.aisa.com.gt/shop/category/sistemas-de-bombas-perifericas-57",
+    "tipo": "sistema",
     "keywords": [
       "bombeo solar periferico",
       "bomba periferica con panel solar",
@@ -973,6 +1030,7 @@
     "tag": "sistema-bomba-desalojo",
     "nombre": "SISTEMA DE BOMBA SUMERGIBLE DE CAUDAL ALTO CON DESALOJO DE AGUAS",
     "url": "https://www.aisa.com.gt/shop/category/sistema-bomba-caudal-sumergible-alto-d-59",
+    "tipo": "sistema",
     "keywords": [
       "bomba sumergible trituradora",
       "bomba para aguas residuales solar",
@@ -990,6 +1048,7 @@
     "tag": "sistema-bombas-caudal-riego",
     "nombre": "SISTEMA DE BOMBAS DE CAUDAL NO SUMERGIBLE PARA RIEGO DE SUPERFICIE",
     "url": "https://www.aisa.com.gt/shop/category/sistema-bombas-de-caudal-no-sumergible-60",
+    "tipo": "sistema",
     "keywords": [
       "kit riego solar superficial",
       "bomba centrifuga solar para riego",
@@ -1007,6 +1066,7 @@
     "tag": "interruptores-termomagneticos",
     "nombre": "FLIPONES O INTERRUPTORES TERMOMAGNETICOS PARA PROTECCION ELECTRICA",
     "url": "https://www.aisa.com.gt/shop/category/flipones-61",
+    "tipo": "unitario",
     "keywords": [
       "breaker termomagnetico 20a",
       "interruptor automatico enchufable",
@@ -1024,6 +1084,7 @@
     "tag": "conectores-mc4-paneles-solares",
     "nombre": "CONECTORES MC4 PARA PANELES SOLARES Y CABLEADO FOTOVOLTAICO",
     "url": "https://www.aisa.com.gt/shop/category/conectores-mc4-62",
+    "tipo": "unitario",
     "keywords": [
       "conector mc4 panel solar",
       "cable solar con mc4",
@@ -1041,6 +1102,7 @@
     "tag": "congeladores-solares-corriente-directa",
     "nombre": "CONGELADORES SOLARES DE CORRIENTE DIRECTA PARA ZONAS SIN RED",
     "url": "https://www.aisa.com.gt/shop/category/congelador-solar-64",
+    "tipo": "unitario",
     "keywords": [
       "congelador solar 12v",
       "congelador para sistema aislado",
@@ -1058,6 +1120,7 @@
     "tag": "refrigeradores-electricos-eficientes",
     "nombre": "REFRIGERADORES ELECTRICOS DOMESTICOS Y COMERCIALES EFICIENTES",
     "url": "https://www.aisa.com.gt/shop/category/refrigerador-65",
+    "tipo": "unitario",
     "keywords": [
       "refrigerador 110v bajo consumo",
       "refrigerador inverter ahorrador",
@@ -1075,6 +1138,7 @@
     "tag": "inversores-hibridos-solares",
     "nombre": "INVERSORES HIBRIDOS SOLARES CON RESPALDO DE BATERIAS Y RED",
     "url": "https://www.aisa.com.gt/shop/category/inversor-hibrido-67",
+    "tipo": "unitario",
     "keywords": [
       "inversor hibrido 5kw 48v",
       "inversor solar con bateria y red",
@@ -1092,6 +1156,7 @@
     "tag": "compresores-hermeticos-refrigeracion",
     "nombre": "COMPRESORES HERMETICOS PARA REFRIGERACION Y AIRE ACONDICIONADO",
     "url": "https://www.aisa.com.gt/shop/category/compresor-68",
+    "tipo": "unitario",
     "keywords": [
       "compresor hermetico 1/4 hp",
       "compresor nevera domestica",
@@ -1109,6 +1174,7 @@
     "tag": "sistema-bombeo-profundo",
     "nombre": "SISTEMA DE BOMBA SUMERGIBLE DE ALTO CAUDAL PARA POZO PROFUNDO",
     "url": "https://www.aisa.com.gt/shop/category/sistema-bomba-caudal-sumergible-alto-69",
+    "tipo": "sistema",
     "keywords": [
       "bomba sumergible 3hp pozo profundo",
       "bomba para pozo 6 pulgadas",
@@ -1126,6 +1192,7 @@
     "tag": "todos-calentadores-solares",
     "nombre": "TODOS LOS CALENTADORES SOLARES EN UN SOLO LUGAR",
     "url": "https://www.aisa.com.gt/shop/category/all-calentadores-70",
+    "tipo": "unitario",
     "keywords": [
       "catalogo calentadores solares",
       "calentador solar barato guatemala",
@@ -1143,6 +1210,7 @@
     "tag": "tanques-almacenamiento-agua",
     "nombre": "TANQUES DE ALMACENAMIENTO DE AGUA PLUVIAL Y RESERVA DOMICILIARIA",
     "url": "https://www.aisa.com.gt/shop/category/tanques-71",
+    "tipo": "unitario",
     "keywords": [
       "tanque rotoplas 1100 litros",
       "cisterna para agua de lluvia",
@@ -1160,6 +1228,7 @@
     "tag": "respaldo-energetico-basico-hogar",
     "nombre": "SISTEMA DE RESPALDO ENERGETICO BASICO CON BATERIAS PARA HOGAR",
     "url": "https://www.aisa.com.gt/shop/category/sistemas-de-respaldo-cb-72",
+    "tipo": "sistema",
     "keywords": [
       "respaldo electrico para casa basico",
       "bateria para apagones 12v",
@@ -1177,6 +1246,7 @@
     "tag": "respaldo-intermedio-vivienda",
     "nombre": "SISTEMA DE RESPALDO INTERMEDIO PARA VIVIENDA CON ELECTRODOMESTICOS",
     "url": "https://www.aisa.com.gt/shop/category/sistemas-de-respaldo-ci-73",
+    "tipo": "sistema",
     "keywords": [
       "backup energia casa intermedio",
       "respaldo electrico nevera y tv",
@@ -1194,6 +1264,7 @@
     "tag": "respaldo-avanzado-casa-completa",
     "nombre": "SISTEMA DE RESPALDO AVANZADO PARA CASA COMPLETA ANTE APAGONES",
     "url": "https://www.aisa.com.gt/shop/category/sistemas-de-respaldo-ca-74",
+    "tipo": "sistema",
     "keywords": [
       "respaldo energia toda la casa",
       "bateria litio 10kwh",
@@ -1211,6 +1282,7 @@
     "tag": "marcos-soportes-calentadores",
     "nombre": "MARCOS Y SOPORTES EXCLUSIVOS PARA CALENTADORES SOLARES DE TUBOS",
     "url": "https://www.aisa.com.gt/shop/category/marcos-de-calentadores-75",
+    "tipo": "unitario",
     "keywords": [
       "marco para calentador solar 10 tubos",
       "soporte calentador solar techo plano",
@@ -1228,6 +1300,7 @@
     "tag": "controladores-electronicos-bombas",
     "nombre": "CONTROLADORES ELECTRONICOS PARA BOMBAS SUMERGIBLES Y DE SUPERFICIE",
     "url": "https://www.aisa.com.gt/shop/category/controladores-bombas-82",
+    "tipo": "unitario",
     "keywords": [
       "controlador nivel agua bomba",
       "variador frecuencia bomba sumergible",
@@ -1245,6 +1318,7 @@
     "tag": "flotadores-nivel-agua",
     "nombre": "FLOTADORES ELECTRICOS Y MECANICOS PARA CONTROL DE NIVEL DE AGUA",
     "url": "https://www.aisa.com.gt/shop/category/flotadores-84",
+    "tipo": "unitario",
     "keywords": [
       "flotador interruptor tanque agua",
       "flotador electrico bomba",
@@ -1262,6 +1336,7 @@
     "tag": "maquinas-hielo-comerciales",
     "nombre": "MAQUINAS DE HIELO ELECTRICAS COMERCIALES PARA CUBITOS Y ESCAMAS",
     "url": "https://www.aisa.com.gt/shop/category/ice-maker-85",
+    "tipo": "unitario",
     "keywords": [
       "maquina de hielo comercial",
       "ice maker 50kg dia",
@@ -1279,6 +1354,7 @@
     "tag": "maquinas-granizados-raspaos",
     "nombre": "MAQUINAS DE GRANIZADOS Y RASPAOS COMERCIALES PARA NEGOCIO",
     "url": "https://www.aisa.com.gt/shop/category/ice-maker-maquinas-de-granizados-115",
+    "tipo": "unitario",
     "keywords": [
       "maquina de granizados comercial",
       "raspadora de hielo electrica",
@@ -1296,6 +1372,7 @@
     "tag": "bombas-sumergibles-aguas-residuales",
     "nombre": "BOMBAS SUMERGIBLES PARA AGUAS RESIDUALES Y DESECHOS SOLIDOS",
     "url": "https://www.aisa.com.gt/shop/category/bombas-de-caudal-sumergible-desechos-92",
+    "tipo": "unitario",
     "keywords": [
       "bomba sumergible aguas negras",
       "bomba fecal pozo septico",
@@ -1313,6 +1390,7 @@
     "tag": "bombas-sumergibles-alto-caudal",
     "nombre": "BOMBAS SUMERGIBLES DE ALTO CAUDAL PARA ABASTECIMIENTO Y RIEGO",
     "url": "https://www.aisa.com.gt/shop/category/bombas-sumergibles-alto-caudal-95",
+    "tipo": "unitario",
     "keywords": [
       "bomba sumergible 5hp pozo",
       "bomba caudal 15 m3/h",
@@ -1330,6 +1408,7 @@
     "tag": "sistemas-hibridos-respaldo",
     "nombre": "SISTEMAS SOLARES HIBRIDOS CONECTADOS A RED Y RESPALDO DE BATERIA",
     "url": "https://www.aisa.com.gt/shop/category/sistemas-hibridos-96",
+    "tipo": "sistema",
     "keywords": [
       "kit solar hibrido 3kw",
       "sistema solar con respaldo bateria",
@@ -1347,6 +1426,7 @@
     "tag": "cables-electricos-generales",
     "nombre": "CABLES ELECTRICOS GENERALES PARA INSTALACIONES Y CONEXIONES",
     "url": "https://www.aisa.com.gt/shop/category/cables-99",
+    "tipo": "unitario",
     "keywords": [
       "cable thhn 12 awg",
       "cable electrico numero 10",
@@ -1364,6 +1444,7 @@
     "tag": "cable-solar-fotovoltaico",
     "nombre": "CABLE SOLAR ESPECIALIZADO PARA PANELES FOTOVOLTAICOS",
     "url": "https://www.aisa.com.gt/shop/category/cables-cable-solar-37",
+    "tipo": "unitario",
     "keywords": [
       "cable solar 6mm2",
       "cable fotovoltaico 4mm2",
@@ -1381,6 +1462,7 @@
     "tag": "cable-bateria-alta-flexibilidad",
     "nombre": "CABLE PARA BATERIAS DE ALTA FLEXIBILIDAD Y GRAN SECCION",
     "url": "https://www.aisa.com.gt/shop/category/cables-cable-bateria-100",
+    "tipo": "unitario",
     "keywords": [
       "cable bateria 2/0 awg",
       "cable flexible para inversor",
@@ -1398,6 +1480,7 @@
     "tag": "cable-sumergible-plano",
     "nombre": "CABLE SUMERGIBLE PLANO PARA BOMBAS DE POZO PROFUNDO",
     "url": "https://www.aisa.com.gt/shop/category/cables-cable-sumergible-101",
+    "tipo": "unitario",
     "keywords": [
       "cable sumergible 4 hilos",
       "cable para bomba pozo profundo",
@@ -1415,6 +1498,7 @@
     "tag": "cable-tsj-uso-rudo",
     "nombre": "CABLES TSJ PARA USO RUDO Y EXTENSIONES ELECTRICAS FLEXIBLES",
     "url": "https://www.aisa.com.gt/shop/category/cables-tsj-102",
+    "tipo": "unitario",
     "keywords": [
       "cable tsj 3x14",
       "cable uso rudo extension",
@@ -1432,6 +1516,7 @@
     "tag": "kit-cables-prearmados-solar",
     "nombre": "KIT DE CABLES PREARMADOS PARA CONEXION DE SISTEMAS SOLARES",
     "url": "https://www.aisa.com.gt/shop/category/cables-kit-cable-103",
+    "tipo": "sistema",
     "keywords": [
       "kit cable mc4 10m",
       "cableado prearmado paneles solares",
@@ -1449,6 +1534,7 @@
     "tag": "hieleras-portatiles-termoelectricas",
     "nombre": "HIELERAS PORTATILES TERMOELECTRICAS Y DE COMPRESOR 12V/110V",
     "url": "https://www.aisa.com.gt/shop/category/hielera-portatil-122",
+    "tipo": "unitario",
     "keywords": [
       "hielera electrica para carro",
       "hielera portatil 12v",
