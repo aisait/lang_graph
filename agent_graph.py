@@ -1,12 +1,6 @@
 """
-agent_graph.py
-Módulo central del grafo agéntico de JARVI 2.0.
-Contiene la definición del estado compartido, herramientas, nodos de razonamiento
-y la función de construcción del grafo con persistencia en PostgreSQL.
-Incorpora el decorador CTFOM de telemetría cognitiva para la observabilidad
-de cada nodo del grafo (trazas, latencia, errores).
-
-Estándares: ISO/IEC/IEEE 12207, ISO/IEC 26514, ISO/IEC 25010, ISO/IEC 29119.
+agent_graph.py - Grafo agéntico de JARVI 2.0 con 6 pasos y selección de productos.
+Incluye extracción forzada de nombre y número, detección de tipo de producto, y selección de hasta 5 productos.
 """
 
 import os
@@ -36,14 +30,11 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 import config
 from audit import auditar_fase
 from ontology import obtener_fragmento_ontologia, cargar_ontologia, obtener_productos_relevantes
-# --- CTFOM: módulo de telemetría cognitiva ---
 from telemetry import trace_id_var, span_id_var, parent_span_id_var, schedule_telemetry_event
-# --- Nuevo módulo de ubicación ---
 from ubicacion import buscar_ubicacion
 
 # =============================================================================
 # Configuración de API Key (compatible con OPENAI_API_KEY_1, _2, _3)
-# CAPA DE RESILIENCIA: Permite fallback entre múltiples claves de OpenAI.
 # =============================================================================
 OPENAI_KEYS = [os.getenv(f"OPENAI_API_KEY_{i}") for i in range(1, 4)]
 OPENAI_KEYS = [k for k in OPENAI_KEYS if k]
@@ -52,9 +43,7 @@ if not DEFAULT_API_KEY:
     raise RuntimeError("No se encontró ninguna API Key de OpenAI.")
 
 # ---------------------------------------------------------------------------
-# Diccionario de códigos de área para Centroamérica
-# Prueba de caja negra: Inyectar ubicaciones con nombres de países y verificar
-# que se asigna el código correcto.
+# Códigos de área Centroamérica
 # ---------------------------------------------------------------------------
 CODIGOS_AREA = {
     "belice": "+501", "costa rica": "+506", "el salvador": "+503",
@@ -62,45 +51,31 @@ CODIGOS_AREA = {
     "panama": "+507", "panamá": "+507"
 }
 
-
 def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) -> tuple:
     """
-    Normaliza el nombre, el número de WhatsApp y el código de área del cliente.
-
-    Parámetros:
-        nombre_raw (str): nombre tal cual fue extraído.
-        whatsapp_raw (str): número de teléfono en cualquier formato.
-        ubicacion_raw (str): texto que podría contener un país.
-
-    Retorna:
-        tuple: (nombre_normalizado, whatsapp_formateado)
-
-    Prueba de caja negra (ISO/IEC 29119):
-        - Entrada: ("José", "12345678", "guatemala") -> ("José", "+502 1234-5678")
-        - Entrada: ("maria", "87654321", "honduras") -> ("Maria", "+504 8765-4321")
-        - Entrada: ("", "50212345678", "Guatemala") -> ("Usuario", "+502 1234-5678")
+    Normaliza el nombre y el número de WhatsApp usando el código de área del país detectado.
+    Si no se detecta país, usa +502 (Guatemala) por defecto.
     """
     nombre_str = str(nombre_raw).strip() if nombre_raw else "Usuario"
     nombre_partes = nombre_str.split()
     nombre_normalizado = " ".join([p.capitalize() for p in nombre_partes]) if nombre_partes else "Usuario"
 
-    # Determinación del código de área a partir de la ubicación
-    codigo_area = "+502"  # Guatemala por defecto
+    # Detectar código de área a partir de la ubicación
+    codigo_area = "+502"
     ubicacion_lower = str(ubicacion_raw).lower() if ubicacion_raw else ""
     for pais, codigo in CODIGOS_AREA.items():
         if pais in ubicacion_lower:
             codigo_area = codigo
             break
 
-    # Limpieza y formateo del número de WhatsApp
-    whatsapp_str = str(whatsapp_raw) if whatsapp_raw else ""
-    digits = re.sub(r'\D', '', whatsapp_str)
+    # Limpiar y formatear número
+    digits = re.sub(r'\D', '', whatsapp_raw if whatsapp_raw else "")
     if not digits:
         whatsapp_formateado = "Pendiente"
     else:
         codigo_limpio = codigo_area.replace('+', '')
-        # Si el número ya incluye el código de área, lo extraemos
-        if digits.startswith(codigo_limpio) and len(digits) > len(codigo_limpio) + 5:
+        # Si el número ya incluye el código de área, extraerlo
+        if digits.startswith(codigo_limpio) and len(digits) >= len(codigo_limpio) + 8:
             base = digits[len(codigo_limpio):]
         else:
             base = digits
@@ -110,18 +85,14 @@ def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) 
             whatsapp_formateado = f"{codigo_area} {base}"
     return nombre_normalizado, whatsapp_formateado
 
-
 # ---------------------------------------------------------------------------
-# Esquemas de datos para extracción de contacto y contexto técnico
+# Esquemas de datos
 # ---------------------------------------------------------------------------
 class ExtractorContacto(BaseModel):
-    """Esquema de salida estructurada para identificar nombre y teléfono."""
     nombre: Optional[str] = Field(None, description="Nombre de pila y apellidos.")
     telefono: Optional[str] = Field(None, description="Número telefónico.")
 
-
 class InferenciaEnergetica(TypedDict):
-    """Estructura del contexto técnico que persiste durante toda la conversación."""
     ciudad: Optional[str]
     empresa_electrica: Optional[str]
     tarifa_base_gtq: Optional[float]
@@ -130,31 +101,20 @@ class InferenciaEnergetica(TypedDict):
     requiere_auditoria_electrica: bool
     nombre: Optional[str]
     whatsapp: Optional[str]
-    # Nuevos campos (Paso 6)
     departamento: Optional[str]
     municipio: Optional[str]
     vendedor: Optional[str]
     tipo_producto: Optional[str]   # "sistema" o "unitario"
     productos_interes: Optional[list]
 
-
 class AgentState(TypedDict):
-    """Estado global del agente: historial de mensajes y contexto técnico."""
     messages: Annotated[list, add_messages]
     contexto_tecnico: InferenciaEnergetica
 
-
 # ---------------------------------------------------------------------------
-# Decorador CTFOM para nodos del grafo (telemetría cognitiva)
+# Decorador CTFOM
 # ---------------------------------------------------------------------------
 def observe_node(layer: str = "graph", node_name: str = ""):
-    """
-    Decorador síncrono que envuelve funciones del grafo para registrar eventos
-    de telemetría (inicio/fin/error) con trace_id, span_id, latencia, etc.
-
-    Requiere que el contexto de traza haya sido inicializado (desde el middleware HTTP).
-    Agenda la telemetria sin bloquear el flujo del grafo.
-    """
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -162,12 +122,10 @@ def observe_node(layer: str = "graph", node_name: str = ""):
             span_id = str(uuid.uuid4())
             parent = span_id_var.get()
             span_id_var.set(span_id)
-
             start = time.perf_counter()
             try:
                 result = func(*args, **kwargs)
                 elapsed = (time.perf_counter() - start) * 1000
-                # Registrar evento exitoso de forma asíncrona no bloqueante
                 schedule_telemetry_event(
                     trace_id, span_id, parent,
                     layer=layer, node_name=node_name,
@@ -188,9 +146,8 @@ def observe_node(layer: str = "graph", node_name: str = ""):
         return wrapper
     return decorator
 
-
 # ---------------------------------------------------------------------------
-# Herramienta de persistencia de oportunidades comerciales
+# Herramienta de persistencia de oportunidades
 # ---------------------------------------------------------------------------
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
@@ -204,22 +161,9 @@ def procesar_oportunidad_backend(
     numero_whatsapp: str,
     resumen_18_palabras: str
 ) -> str:
-    """
-    Envía de forma asíncrona los leads estructurados capturados por la IA
-    hacia los canales del Controller (correo Gmail y webhook de WhatsApp).
-
-    Prueba de caja negra (ISO/IEC 29119):
-        - Verificar que se envíe un correo al Controller y un mensaje de WhatsApp
-          usando los parámetros de entrada.
-        - Verificar que, aunque falle uno de los canales, el otro se ejecute.
-        - La herramienta debe retornar un mensaje de éxito incluyendo el contacto normalizado.
-    """
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
-
     def tarea_background():
-        """Ejecuta el envío de notificaciones en segundo plano para no bloquear el flujo principal."""
         num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
-        # ----- Envío de correo mediante Gmail API -----
         try:
             msg = MIMEMultipart()
             msg['To'] = config.CONTROLLER_EMAIL
@@ -246,7 +190,6 @@ def procesar_oportunidad_backend(
         except Exception as e:
             print(f"Fallo en envío de correo: {e}")
 
-        # ----- Envío de mensaje por WhatsApp (webhook) -----
         payload_wa = {
             "instance_id": os.getenv("APICHAT_INSTANCE", ""),
             "number": num_limpio,
@@ -268,27 +211,10 @@ def procesar_oportunidad_backend(
             )
         except Exception as e:
             print(f"Fallo en envío de webhook: {e}")
-
-    # Ejecución en hilo separado para no bloquear la respuesta al usuario
     threading.Thread(target=tarea_background).start()
     return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
 
-
 def extraer_intencion_humana(messages: list) -> str:
-    """
-    Extrae el último mensaje de texto enviado por el usuario.
-
-    Parámetros:
-        messages (list): lista de mensajes del estado del grafo.
-
-    Retorna:
-        str: contenido textual del último mensaje humano, en minúsculas.
-
-    Prueba de caja negra:
-        - Si el último mensaje es HumanMessage con contenido de texto, retorna ese texto.
-        - Si es de tipo lista (multimodal), concatena los fragmentos de texto.
-        - Si no hay mensaje humano, retorna cadena vacía.
-    """
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
             if isinstance(msg.content, str):
@@ -301,87 +227,26 @@ def extraer_intencion_humana(messages: list) -> str:
                 ])
     return ""
 
-
 def extraer_tipo_producto(mensaje: str) -> Optional[str]:
-    """
-    Determina si el usuario busca un sistema completo o un producto unitario.
-    Retorna "sistema", "unitario" o None si no se puede determinar.
-    """
-    if not mensaje:
-        return None
     mensaje_lower = mensaje.lower()
-    # Patrones para sistema
-    if re.search(r'\b(sistema|kit|completo|llave en mano|instalación completa|solar completo)\b', mensaje_lower):
+    if re.search(r'\b(sistema|kit|completo|llave en mano|instalación completa)\b', mensaje_lower):
         return "sistema"
-    # Patrones para producto unitario
-    elif re.search(r'\b(producto|unitario|componente|inversor|panel|batería|bateria|calentador|bomba|controlador)\b', mensaje_lower):
+    elif re.search(r'\b(producto|unitario|componente|inversor|panel|batería|calentador|bomba|controlador)\b', mensaje_lower):
         return "unitario"
     return None
 
-
 # ---------------------------------------------------------------------------
-# Función para obtener productos relevantes (Nueva)
-# ---------------------------------------------------------------------------
-def obtener_productos_relevantes(topologia: str, tipo: Optional[str] = None, max_items: int = 5) -> list:
-    """
-    Retorna una lista de hasta max_items productos de la ontología
-    que corresponden a la topología y tipo (sistema/unitario) detectados.
-    """
-    from ontology import get_product_blocks
-    ontologia = cargar_ontologia()
-    bloques = get_product_blocks(topologia, tipo)
-    productos = []
-    for bid in bloques[:max_items]:
-        if bid in ontologia:
-            item = ontologia[bid]
-            productos.append({
-                "nombre": item["nombre"],
-                "tag": item["tag"],
-                "url": item["url"],
-                "tipo": item.get("tipo", "desconocido")
-            })
-    return productos
-
-
-# ---------------------------------------------------------------------------
-# Construcción del grafo del agente
+# Construcción del grafo
 # ---------------------------------------------------------------------------
 def create_graph(checkpointer: BaseCheckpointSaver):
-    """
-    Crea y compila el grafo de estados del agente JARVI.
-
-    Parámetros:
-        checkpointer (BaseCheckpointSaver): instancia de persistencia (AsyncPostgresSaver).
-
-    Retorna:
-        CompiledStateGraph: grafo compilado listo para invocar.
-
-    Prueba de caja negra (ISO/IEC 29119):
-        - Inyectar una secuencia de mensajes y verificar que el estado
-          'contexto_tecnico' se actualice correctamente tras cada nodo.
-        - Comprobar que la herramienta de persistencia se invoca solo cuando el LLM
-          decide llamarla (tools_condition).
-    """
     graph_builder = StateGraph(AgentState)
-
-    # Modelo de lenguaje principal (GPT-4o mini) con la herramienta de persistencia
-    # Uso de DEFAULT_API_KEY (resiliencia con OPENAI_API_KEY_1, _2, _3)
     llm = ChatOpenAI(openai_api_key=DEFAULT_API_KEY, model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
     extractor_llm = llm.with_structured_output(ExtractorContacto)
 
-    # -------------------- Nodo: Clasificador Topológico (Paso 2) --------------------
+    # -------------------- Nodo: Clasificador Topológico --------------------
     @auditar_fase(nombre_fase="Clasificador Topológico", criticidad="MEDIA")
     @observe_node(node_name="clasificador_topologia")
     def clasificador_topologia_node(state: AgentState):
-        """
-        Infiere la topología del sistema (On‑Grid / Off‑Grid) a partir
-        de las palabras clave detectadas en el último mensaje del usuario.
-
-        Prueba de caja negra:
-            - Mensaje "quiero ahorrar en mi factura" → topologia On‑Grid, auditoría True.
-            - Mensaje "vivo en una finca sin luz" → topologia Off‑Grid, auditoría True.
-            - Mensaje sin palabras clave → el contexto no se modifica.
-        """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
@@ -395,19 +260,14 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["requiere_auditoria_electrica"] = True
         return {"contexto_tecnico": ctx}
 
-    # -------------------- Nodo: Validador Geográfico (Paso 3) --------------------
+    # -------------------- Nodo: Validador Geográfico --------------------
     @auditar_fase(nombre_fase="Validador Geográfico", criticidad="MEDIA")
     @observe_node(node_name="validador_geolocalizacion")
     def validador_geolocalizacion_node(state: AgentState):
-        """
-        Determina la ciudad, departamento y municipio basándose en la ubicación detectada.
-        Usa el módulo ubicacion.py que hace matching fuzzy con el JSON de municipios.
-        """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
             return {"contexto_tecnico": ctx}
-
         if not ctx.get("departamento") or not ctx.get("municipio"):
             resultado = buscar_ubicacion(ultimo)
             if resultado:
@@ -416,85 +276,59 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["ciudad"] = resultado["municipio"]
                 import logging
                 logging.getLogger("jarvi.agent").info(f"Ubicación detectada: {resultado['label']}")
-
         if ctx.get("requiere_auditoria_electrica") and ctx.get("departamento"):
             if ctx["departamento"].lower() == "guatemala":
                 ctx["empresa_electrica"] = "EEGSA"
                 ctx["tarifa_base_gtq"] = 1.45
-
         return {"contexto_tecnico": ctx}
 
-    # -------------------- Nodo: Definición de Producto/Sistema (Paso 6) --------------------
+    # -------------------- Nodo: Definición de Producto (Paso 6) --------------------
     @auditar_fase(nombre_fase="Definición de Producto/Sistema", criticidad="ALTA")
     @observe_node(node_name="definicion_producto")
     def definicion_producto_node(state: AgentState):
-        """
-        Determina si el cliente busca un sistema completo o un producto unitario.
-        Si no está definido, genera un mensaje para preguntar.
-        Este es el PASO 6 del proceso de preventa.
-        """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
-
-        # Si ya tenemos tipo_producto, no hacer nada
         if ctx.get("tipo_producto"):
             return {"contexto_tecnico": ctx}
-
-        # Si no hay mensaje, no podemos inferir
         if not ultimo:
             return {"contexto_tecnico": ctx}
-
-        # Intentar extraer del mensaje
         tipo = extraer_tipo_producto(ultimo)
         if tipo:
             ctx["tipo_producto"] = tipo
-            import logging
-            logging.getLogger("jarvi.agent").info(f"Tipo de producto detectado: {tipo}")
             return {"contexto_tecnico": ctx}
-
-        # Si no se puede inferir, preguntar
         pregunta = ("Para poder recomendarte los productos más adecuados, ¿estás buscando un **sistema completo** "
                     "(incluye paneles, inversor, estructura, cableado, etc.) o un **producto específico** "
                     "(ej. solo paneles, solo inversor, baterías)?")
-        # Añadir el mensaje del asistente al historial
         new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
         return {"messages": new_messages, "contexto_tecnico": ctx}
 
-    # -------------------- Nodo: Chatbot (Inferencia principal - Paso 4 y 5) --------------------
+    # -------------------- Nodo: Chatbot (Inferencia principal) --------------------
     @auditar_fase(nombre_fase="Inferencia del Chatbot", criticidad="ALTA")
     @observe_node(node_name="chatbot")
     def chatbot_node(state: AgentState, config: RunnableConfig):
-        """
-        Nodo central que invoca al LLM con el contexto enriquecido.
-        También intenta extraer nombre, teléfono, vendedor y tipo de producto.
-        """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
-        # --- NUEVA EXTRACCIÓN FORZADA DE NOMBRE Y NÚMERO ---
-        # Esto garantiza que cada vez que el usuario mencione su nombre o número,
-        # se actualice el contexto, incluso si antes ya tenía otros valores.
+        # --- EXTRACCIÓN FORZADA DE NOMBRE Y NÚMERO (SOBRESCRITURA) ---
         if ultimo_mensaje:
-            # 1. Extraer número de WhatsApp (similar a api.py)
+            # Extraer número de WhatsApp
             num_match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', ultimo_mensaje)
             if num_match:
                 raw_num = num_match.group(0)
-                _, num_norm = normalizar_contacto("", raw_num, "")
+                _, num_norm = normalizar_contacto("", raw_num, ctx.get("ciudad", ""))
                 if num_norm and num_norm != "Pendiente":
-                    ctx["whatsapp"] = num_norm
+                    ctx["whatsapp"] = num_norm  # Sobrescribe siempre
                     import logging
                     logging.getLogger("jarvi.agent").info(f"Extraído número de WhatsApp: {num_norm}")
-            # 2. Extraer nombre mediante regex (patrones comunes)
-            name_match = re.search(r'(?:mi\s+nombre\s+es|nombre[:]\s*|me\s+llamo)\s*([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)', ultimo_mensaje, re.IGNORECASE)
+            # Extraer nombre (regex ampliado)
+            name_match = re.search(r'(?:mi\s+nombre\s+es|nombre[:]\s*|me\s+llamo|soy\s+)([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)', ultimo_mensaje, re.IGNORECASE)
             if name_match:
                 raw_name = name_match.group(1).strip()
                 if raw_name and len(raw_name) > 1:
-                    ctx["nombre"] = raw_name
+                    ctx["nombre"] = raw_name  # Sobrescribe siempre
                     logging.getLogger("jarvi.agent").info(f"Extraído nombre: {raw_name}")
-        # --- FIN DE EXTRACCIÓN FORZADA ---
 
-        # Extracción de contacto vía modelo estructurado (se mantiene como respaldo)
-        # Se ejecuta solo si no se ha extraído nombre o whatsapp mediante regex.
+        # Extracción con modelo estructurado (respaldo)
         if ultimo_mensaje and (not ctx.get("nombre") or ctx.get("nombre") == "Usuario" or not ctx.get("whatsapp")):
             try:
                 extraccion = extractor_llm.invoke(f"Identifica nombre o teléfono. Mensaje: {ultimo_mensaje}")
@@ -505,25 +339,19 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             except Exception:
                 pass
 
-        # Extracción de vendedor mediante expresión regular
+        # Extracción de vendedor
         if ultimo_mensaje and not ctx.get("vendedor"):
-            vendedor_match = re.search(
-                r'(?:mi\s+vendedor\s+es|vendedor[:]\s*)([A-Za-z0-9\s]+)',
-                ultimo_mensaje,
-                re.IGNORECASE
-            )
+            vendedor_match = re.search(r'(?:mi\s+vendedor\s+es|vendedor[:]\s*)([A-Za-z0-9\s]+)', ultimo_mensaje, re.IGNORECASE)
             if vendedor_match:
                 ctx["vendedor"] = vendedor_match.group(1).strip()
 
-        # Detectar tipo de producto si aún no se ha definido (por si el usuario responde en el chat)
+        # Detectar tipo de producto si aún no se ha definido
         if ultimo_mensaje and not ctx.get("tipo_producto"):
             tipo = extraer_tipo_producto(ultimo_mensaje)
             if tipo:
                 ctx["tipo_producto"] = tipo
-                import logging
-                logging.getLogger("jarvi.agent").info(f"Tipo de producto detectado en chatbot: {tipo}")
 
-        # Si ya tenemos topologia y tipo_producto, pero no productos_interes, seleccionarlos
+        # Seleccionar productos si tenemos topología y tipo_producto
         if ctx.get("topologia") and ctx.get("tipo_producto") and not ctx.get("productos_interes"):
             ctx["productos_interes"] = obtener_productos_relevantes(
                 topologia=ctx["topologia"],
@@ -545,7 +373,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         whatsapp_ctx = ctx.get("whatsapp", "Pendiente")
         nombre_run, whatsapp_run = normalizar_contacto(nombre_ctx, whatsapp_ctx, ctx.get("ciudad", ""))
 
-        # Inyección de trazabilidad en el config (LangSmith)
         config["run_name"] = f"Lead: {nombre_run}"
         if "metadata" not in config:
             config["metadata"] = {}
@@ -556,7 +383,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if ctx.get("productos_interes"):
             config["metadata"]["productos_tags"] = [p["tag"] for p in ctx["productos_interes"]]
 
-        # Construcción del system prompt con todos los datos acumulados
         prompt_sistema = SystemMessage(
             content=(
                 f"Eres Jarvi, Ingeniero de Preventa de AISA Solar. "
@@ -569,7 +395,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             )
         )
 
-        # Invocación del LLM con todo el historial
         respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
@@ -589,15 +414,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     return graph_builder.compile(checkpointer=checkpointer)
 
-
-# ---------------------------------------------------------------------------
-# PASO 1: Exportación limpia para LangGraph Studio (Servicio Visualizador)
-# Se protege la creación del grafo para evitar errores al importar.
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     from langgraph.checkpoint.memory import MemorySaver
     checkpointer_studio = MemorySaver()
     jarvi_graph = create_graph(checkpointer_studio)
 else:
-    # Esta variable se usa solo para el visualizador, no para la API.
     jarvi_graph = None
