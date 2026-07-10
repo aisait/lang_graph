@@ -311,7 +311,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         # --- EXTRACCIÓN FORZADA DE NOMBRE Y NÚMERO (SOBRESCRITURA) ---
         if ultimo_mensaje:
-            # Extraer número de WhatsApp
             num_match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', ultimo_mensaje)
             if num_match:
                 raw_num = num_match.group(0)
@@ -320,7 +319,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     ctx["whatsapp"] = num_norm  # Sobrescribe siempre
                     import logging
                     logging.getLogger("jarvi.agent").info(f"Extraído número de WhatsApp: {num_norm}")
-            # Extraer nombre (regex ampliado)
             name_match = re.search(r'(?:mi\s+nombre\s+es|nombre[:]\s*|me\s+llamo|soy\s+)([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)', ultimo_mensaje, re.IGNORECASE)
             if name_match:
                 raw_name = name_match.group(1).strip()
