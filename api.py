@@ -146,6 +146,7 @@ async def guardar_thread_si_no_existe(whatsapp: str, thread_id: str) -> bool:
 REDIS_TTL = int(os.getenv("REDIS_TTL", 604800))  # 7 días
 
 def sanear_datos_redis(datos: dict) -> dict:
+    """Convierte recursivamente None a valores válidos para Redis."""
     for key, value in list(datos.items()):
         if value is None:
             if key in ["thread_id", "whatsapp", "nombre", "vendedor", "departamento", "municipio", "topologia", "fase_actual", "ultimo_mensaje"]:
@@ -168,13 +169,11 @@ async def guardar_sesion_redis(redis_client: Optional[redis.Redis], identifier: 
     if not redis_client:
         return
     try:
-        # Sanear datos
         data_clean = sanear_datos_redis(data.copy())
         for field in ["contexto_tecnico", "pasos_completados"]:
             if field in data_clean:
                 data_clean[field] = json.dumps(data_clean[field])
 
-        # Si hay nuevo identificador, eliminar la clave antigua
         if new_identifier and new_identifier != identifier:
             old_key = f"session:{identifier}"
             await redis_client.delete(old_key)
@@ -227,7 +226,6 @@ async def actualizar_metadatos_thread(thread_id: str, contexto: dict, nuevo_what
             "municipio": contexto.get("municipio"),
             "productos_interes": contexto.get("productos_interes", [])
         }
-        # Si se proporciona nuevo_whatsapp, actualizar la columna whatsapp_id
         if nuevo_whatsapp:
             await conn.execute(
                 "UPDATE threads SET whatsapp_id = $1, metadata = $2 WHERE thread_id = $3",
@@ -397,15 +395,16 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
 
             # Obtener el número actual del contexto
             nuevo_whatsapp = ctx.get("whatsapp")
-            # Si el número ha cambiado y es diferente al run_name actual (y no es thread_id)
+
+            # Verificar si el número ha cambiado y es diferente al run_name actual y no es thread_id
             if nuevo_whatsapp and nuevo_whatsapp != run_name and nuevo_whatsapp != thread_id:
                 logger.info(f"Actualizando run_name de {run_name} a {nuevo_whatsapp}")
+                # Actualizar run_name en config para LangSmith
                 run_name = nuevo_whatsapp
-                # Actualizar config para LangSmith
                 config["run_name"] = run_name
                 config["metadata"]["whatsapp"] = run_name
 
-                # Actualizar clave en Redis (eliminar antigua y crear nueva con nuevo identificador)
+                # Preparar datos de sesión
                 data_sesion = {
                     "thread_id": thread_id,
                     "whatsapp": nuevo_whatsapp,
@@ -420,14 +419,16 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
                     "ultimo_mensaje": mensaje,
                     "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 }
-                # Guardar con nuevo identificador (el número)
+                # Guardar en Redis con nuevo identificador (el número)
                 await guardar_sesion_redis(redis_client, identifier, data_sesion, new_identifier=nuevo_whatsapp)
                 # Actualizar PostgreSQL con el nuevo número
                 await actualizar_metadatos_thread(thread_id, ctx, nuevo_whatsapp)
-                # También actualizar identifier para futuras referencias
+                # Actualizar identifier para futuras referencias dentro de esta ejecución
                 identifier = nuevo_whatsapp
+                # Actualizar también en la sesión de Redis para que futuras peticiones usen el número
+                # (ya lo hicimos con guardar_sesion_redis con new_identifier)
             else:
-                # Guardar normalmente
+                # Guardar normalmente (sin cambio de identificador)
                 data_sesion = {
                     "thread_id": thread_id,
                     "whatsapp": ctx.get("whatsapp") or run_name,
@@ -448,7 +449,7 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
             pasos_requeridos = ["nombre", "whatsapp", "departamento", "municipio", "topologia"]
             if all(p in pasos for p in pasos_requeridos):
                 await actualizar_metadatos_thread(thread_id, ctx, nuevo_whatsapp if nuevo_whatsapp else None)
-                await eliminar_sesion_redis(redis_client, identifier)
+                await eliminar_sesion_redis(redis_client, identifier if nuevo_whatsapp else thread_id)
                 logger.info(f"Sesión finalizada y persistida en PostgreSQL para {identifier}")
 
         # Generar respuesta en SSE
