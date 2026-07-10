@@ -10,6 +10,7 @@ import threading
 import requests
 import re
 import functools
+import logging  # <-- Import global para evitar UnboundLocalError
 from typing import Annotated, TypedDict, Optional
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -32,6 +33,8 @@ from audit import auditar_fase
 from ontology import obtener_fragmento_ontologia, cargar_ontologia, obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, parent_span_id_var, schedule_telemetry_event
 from ubicacion import buscar_ubicacion
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Configuración de API Key (compatible con OPENAI_API_KEY_1, _2, _3)
@@ -74,7 +77,6 @@ def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) 
         whatsapp_formateado = "Pendiente"
     else:
         codigo_limpio = codigo_area.replace('+', '')
-        # Si el número ya incluye el código de área, extraerlo
         if digits.startswith(codigo_limpio) and len(digits) >= len(codigo_limpio) + 8:
             base = digits[len(codigo_limpio):]
         else:
@@ -198,7 +200,7 @@ def procesar_oportunidad_backend(
             raw = base64.urlsafe_b64encode(msg.as_bytes()).decode('utf-8')
             service.users().messages().send(userId="me", body={'raw': raw}).execute()
         except Exception as e:
-            print(f"Fallo en envío de correo: {e}")
+            logger.error(f"Fallo en envío de correo: {e}")
 
         payload_wa = {
             "instance_id": os.getenv("APICHAT_INSTANCE", ""),
@@ -220,7 +222,7 @@ def procesar_oportunidad_backend(
                 timeout=15
             )
         except Exception as e:
-            print(f"Fallo en envío de webhook: {e}")
+            logger.error(f"Fallo en envío de webhook: {e}")
     threading.Thread(target=tarea_background).start()
     return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
 
@@ -284,8 +286,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["departamento"] = resultado["departamento"]
                 ctx["municipio"] = resultado["municipio"]
                 ctx["ciudad"] = resultado["municipio"]
-                import logging
-                logging.getLogger("jarvi.agent").info(f"Ubicación detectada: {resultado['label']}")
+                logger.info(f"Ubicación detectada: {resultado['label']}")
         if ctx.get("requiere_auditoria_electrica") and ctx.get("departamento"):
             if ctx["departamento"].lower() == "guatemala":
                 ctx["empresa_electrica"] = "EEGSA"
@@ -326,15 +327,14 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 raw_num = num_match.group(0)
                 _, num_norm = normalizar_contacto("", raw_num, ctx.get("ciudad", ""))
                 if num_norm and num_norm != "Pendiente":
-                    ctx["whatsapp"] = num_norm  # Sobrescribe siempre
-                    import logging
-                    logging.getLogger("jarvi.agent").info(f"Extraído número de WhatsApp: {num_norm}")
+                    ctx["whatsapp"] = num_norm
+                    logger.info(f"Extraído número de WhatsApp: {num_norm}")
             name_match = re.search(r'(?:mi\s+nombre\s+es|nombre[:]\s*|me\s+llamo|soy\s+)([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)', ultimo_mensaje, re.IGNORECASE)
             if name_match:
                 raw_name = name_match.group(1).strip()
                 if raw_name and len(raw_name) > 1:
-                    ctx["nombre"] = raw_name  # Sobrescribe siempre
-                    logging.getLogger("jarvi.agent").info(f"Extraído nombre: {raw_name}")
+                    ctx["nombre"] = raw_name
+                    logger.info(f"Extraído nombre: {raw_name}")
 
         # Extracción con modelo estructurado (respaldo)
         if ultimo_mensaje and (not ctx.get("nombre") or ctx.get("nombre") == "Usuario" or not ctx.get("whatsapp")):
@@ -366,8 +366,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 tipo=ctx["tipo_producto"],
                 max_items=5
             )
-            import logging
-            logging.getLogger("jarvi.agent").info(f"Productos seleccionados: {ctx['productos_interes']}")
+            logger.info(f"Productos seleccionados: {ctx['productos_interes']}")
 
         # Reglas de recolección de datos según topología
         if ctx.get("requiere_auditoria_electrica"):
