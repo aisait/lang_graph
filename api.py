@@ -12,8 +12,7 @@ import logging
 import re
 import uuid
 from collections import defaultdict
-from typing import AsyncGenerator
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from typing import AsyncGenerator, Optional  # <--- IMPORTACIÓN AÑADIDA
 
 import psutil
 import asyncpg
@@ -27,13 +26,9 @@ from pydantic import BaseModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
-from schemas import ChatRequest, ChatResponse, AudioRequest, ImageRequest
+from schemas import ChatRequest, AudioRequest, ImageRequest
 from agent_graph import create_graph, normalizar_contacto, obtener_productos_relevantes
-from config import ISOConfigValidator
-from telemetry import (
-    trace_id_var, span_id_var, parent_span_id_var,
-    generate_trace_span, log_telemetry_event, start_batch_worker
-)
+from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 
 # ---------------------------------------------------------------------------
 # Esquemas adicionales
@@ -77,7 +72,6 @@ def taxonomy_error(exc: Exception) -> str:
 # FUNCIONES DE UNIFICACIÓN
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
-    """Extrae el primer número de WhatsApp del mensaje."""
     if not mensaje:
         return None
     match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', mensaje)
@@ -94,13 +88,9 @@ def extraer_whatsapp(mensaje: str) -> str | None:
     return None
 
 async def obtener_thread_por_whatsapp(whatsapp: str) -> str | None:
-    """Busca thread_id asociado a un WhatsApp."""
     try:
         conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
-        row = await conn.fetchrow(
-            "SELECT thread_id FROM threads WHERE whatsapp_id = $1",
-            whatsapp
-        )
+        row = await conn.fetchrow("SELECT thread_id FROM threads WHERE whatsapp_id = $1", whatsapp)
         await conn.close()
         return row["thread_id"] if row else None
     except Exception as e:
@@ -108,13 +98,9 @@ async def obtener_thread_por_whatsapp(whatsapp: str) -> str | None:
         return None
 
 async def obtener_whatsapp_por_thread(thread_id: str) -> str | None:
-    """Obtiene el WhatsApp asociado a un thread_id (buffer de estado)."""
     try:
         conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
-        row = await conn.fetchrow(
-            "SELECT whatsapp_id FROM threads WHERE thread_id = $1",
-            thread_id
-        )
+        row = await conn.fetchrow("SELECT whatsapp_id FROM threads WHERE thread_id = $1", thread_id)
         await conn.close()
         return row["whatsapp_id"] if row else None
     except Exception as e:
@@ -122,17 +108,11 @@ async def obtener_whatsapp_por_thread(thread_id: str) -> str | None:
         return None
 
 async def actualizar_thread_con_whatsapp(thread_id: str, whatsapp: str) -> bool:
-    """Asocia un WhatsApp a un thread existente (si no tiene ya uno)."""
     try:
         conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
         await conn.execute(
-            """
-            UPDATE threads
-            SET whatsapp_id = $1
-            WHERE thread_id = $2 AND (whatsapp_id IS NULL OR whatsapp_id = '')
-            """,
-            whatsapp,
-            thread_id
+            "UPDATE threads SET whatsapp_id = $1 WHERE thread_id = $2 AND (whatsapp_id IS NULL OR whatsapp_id = '')",
+            whatsapp, thread_id
         )
         await conn.close()
         logger.info(f"Thread {thread_id} actualizado con WhatsApp {whatsapp}")
@@ -142,25 +122,15 @@ async def actualizar_thread_con_whatsapp(thread_id: str, whatsapp: str) -> bool:
         return False
 
 async def guardar_thread_si_no_existe(whatsapp: str, thread_id: str) -> bool:
-    """Inserta un thread en BD si no existe para ese WhatsApp."""
     try:
         conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
-        row = await conn.fetchrow(
-            "SELECT thread_id FROM threads WHERE whatsapp_id = $1",
-            whatsapp
-        )
+        row = await conn.fetchrow("SELECT thread_id FROM threads WHERE whatsapp_id = $1", whatsapp)
         if row:
             await conn.close()
             return True
         await conn.execute(
-            """
-            INSERT INTO threads (thread_id, whatsapp_id, nombre_cliente, metadata)
-            VALUES ($1, $2, $3, $4)
-            """,
-            thread_id,
-            whatsapp,
-            "Pendiente",
-            json.dumps({"status": "inicial"})
+            "INSERT INTO threads (thread_id, whatsapp_id, nombre_cliente, metadata) VALUES ($1, $2, $3, $4)",
+            thread_id, whatsapp, "Pendiente", json.dumps({"status": "inicial"})
         )
         await conn.close()
         logger.info(f"Nuevo thread creado y guardado: {thread_id} para {whatsapp}")
@@ -178,7 +148,6 @@ async def guardar_sesion_redis(redis_client: Optional[redis.Redis], identifier: 
     if not redis_client:
         return
     key = f"session:{identifier}"
-    # Convertir diccionarios anidados a JSON
     for field in ["contexto_tecnico", "pasos_completados"]:
         if field in data and isinstance(data[field], (dict, list)):
             data[field] = json.dumps(data[field])
@@ -192,7 +161,6 @@ async def obtener_sesion_redis(redis_client: Optional[redis.Redis], identifier: 
     data = await redis_client.hgetall(key)
     if not data:
         return None
-    # Convertir JSONs anidados de vuelta
     for field in ["contexto_tecnico", "pasos_completados"]:
         if field in data and isinstance(data[field], str):
             try:
@@ -255,7 +223,6 @@ async def lifespan(app: FastAPI):
         await checkpointer.setup()
         graph = create_graph(checkpointer)
         logger.info("JARVI 2.0 API inicializada – Grafo listo")
-        # Conexión a Redis
         redis_url = os.getenv("REDIS_URL")
         if redis_url:
             redis_client = redis.from_url(redis_url, decode_responses=True)
@@ -301,9 +268,6 @@ async def telemetry_middleware(request: Request, call_next):
         )
         raise
 
-# ---------------------------------------------------------------------------
-# Endpoint ACK
-# ---------------------------------------------------------------------------
 @app.post("/ack/{trace_id}")
 async def acknowledge_dispatch(trace_id: str):
     return {"status": "ACK received", "trace_id": trace_id}
@@ -317,16 +281,13 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
     config["metadata"] = config.get("metadata", {})
     config["metadata"]["trace_id"] = trace_id
 
-    # Intentar recuperar sesión de Redis para obtener run_name y contexto previo
     sesion_redis = None
     if redis_client:
         sesion_redis = await obtener_sesion_redis(redis_client, identifier)
     if sesion_redis:
         if not run_name or run_name == "Pendiente":
             run_name = sesion_redis.get("whatsapp") or "Pendiente"
-        # El contexto previo se puede pasar al estado inicial, pero lo manejamos en la invocación
     else:
-        # Si no hay sesión en Redis, intentar obtener de PostgreSQL
         if not run_name or run_name == "Pendiente":
             try:
                 conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
@@ -343,9 +304,7 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
     else:
         config["run_name"] = "Usuario"
 
-    # Preparar estado inicial (si hay contexto en Redis, se puede inyectar)
     estado_inicial = {"messages": [HumanMessage(content=mensaje)]}
-    # Si existe sesión en Redis con contexto_tecnico, se puede pasar como estado inicial
     if sesion_redis and sesion_redis.get("contexto_tecnico"):
         estado_inicial["contexto_tecnico"] = sesion_redis["contexto_tecnico"]
 
@@ -361,9 +320,7 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
                 respuesta_final = msg.content
                 break
 
-        # --- ACTUALIZAR BUFFER EN REDIS ---
         if redis_client:
-            # Determinar pasos completados (ejemplo: nombre, whatsapp, departamento, municipio, topologia)
             pasos = []
             if ctx.get("nombre"):
                 pasos.append("nombre")
@@ -376,7 +333,6 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
             if ctx.get("topologia"):
                 pasos.append("topologia")
 
-            # Extraer productos si topología está definida
             if ctx.get("topologia") and not ctx.get("productos_interes"):
                 ctx["productos_interes"] = obtener_productos_relevantes(ctx["topologia"], max_items=5)
 
@@ -396,14 +352,12 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
             }
             await guardar_sesion_redis(redis_client, identifier, data_sesion)
 
-            # Si todos los pasos principales están completos, persistir en PostgreSQL y eliminar de Redis
             pasos_requeridos = ["nombre", "whatsapp", "departamento", "municipio", "topologia"]
             if all(p in pasos for p in pasos_requeridos):
                 await actualizar_metadatos_thread(thread_id, ctx)
                 await eliminar_sesion_redis(redis_client, identifier)
                 logger.info(f"Sesión finalizada y persistida en PostgreSQL para {identifier}")
 
-        # Generar respuesta en SSE
         if respuesta_final:
             tokens = respuesta_final.split()
             for i, token in enumerate(tokens):
@@ -418,22 +372,17 @@ async def generar_tokens(thread_id: str, mensaje: str, identifier: str, run_name
 # =============================================================================
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
-    """Endpoint principal que unifica threads y mantiene buffer en Redis."""
-    # 1. Extraer identificador (prioridad: metadata.whatsapp > metadata.number > thread_id)
     identifier = request.metadata.get("whatsapp") or request.metadata.get("number") or request.thread_id
     run_name = "Pendiente"
     thread_id_final = request.thread_id
 
-    # 2. Intentar recuperar sesión de Redis
     sesion_redis = None
     if redis_client:
         sesion_redis = await obtener_sesion_redis(redis_client, identifier)
     if sesion_redis:
-        # Usar thread_id de Redis si existe
         thread_id_final = sesion_redis.get("thread_id", request.thread_id)
         run_name = sesion_redis.get("whatsapp") or "Pendiente"
         logger.info(f"Sesión recuperada de Redis para {identifier} con thread {thread_id_final}")
-        # Si el thread_id de Redis difiere del request, se redirige
         return StreamingResponse(
             generar_tokens(thread_id_final, request.message, identifier, run_name),
             media_type="text/event-stream",
@@ -441,7 +390,6 @@ async def chat_endpoint(request: ChatRequest):
                      "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
         )
 
-    # 3. Si no hay sesión en Redis, usar lógica de unificación con PostgreSQL
     whatsapp_raw = extraer_whatsapp(request.message)
     if whatsapp_raw:
         _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
@@ -461,7 +409,6 @@ async def chat_endpoint(request: ChatRequest):
                     new_thread = str(uuid.uuid4())
                     await guardar_thread_si_no_existe(whatsapp_norm, new_thread)
                     thread_id_final = new_thread
-            # Guardar en Redis la nueva sesión
             if redis_client:
                 data_inicial = {
                     "thread_id": thread_id_final,
@@ -481,9 +428,7 @@ async def chat_endpoint(request: ChatRequest):
                          "X-Accel-Buffering": "no", "Access-Control-Allow-Origin": "*"}
             )
     else:
-        # No se detectó número: usar thread actual, pero registrar en Redis con identifier = thread_id
         if redis_client:
-            # Verificar si ya existe sesión para este thread_id
             sesion_existente = await obtener_sesion_redis(redis_client, identifier)
             if not sesion_existente:
                 data_inicial = {
@@ -497,7 +442,6 @@ async def chat_endpoint(request: ChatRequest):
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 }
                 await guardar_sesion_redis(redis_client, identifier, data_inicial)
-        # Obtener run_name desde PostgreSQL
         whatsapp_del_thread = await obtener_whatsapp_por_thread(request.thread_id)
         if whatsapp_del_thread:
             run_name = whatsapp_del_thread
