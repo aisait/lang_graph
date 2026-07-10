@@ -10,7 +10,7 @@ import threading
 import requests
 import re
 import functools
-import logging  # <-- Import global para evitar UnboundLocalError
+import logging  # Import global para evitar UnboundLocalError
 from typing import Annotated, TypedDict, Optional
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -77,6 +77,7 @@ def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) 
         whatsapp_formateado = "Pendiente"
     else:
         codigo_limpio = codigo_area.replace('+', '')
+        # Si el número ya incluye el código de área, extraerlo
         if digits.startswith(codigo_limpio) and len(digits) >= len(codigo_limpio) + 8:
             base = digits[len(codigo_limpio):]
         else:
