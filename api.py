@@ -145,34 +145,64 @@ async def guardar_thread_si_no_existe(whatsapp: str, thread_id: str) -> bool:
 # =============================================================================
 REDIS_TTL = int(os.getenv("REDIS_TTL", 604800))  # 7 días
 
+def sanear_datos_redis(datos: dict) -> dict:
+    """Convierte recursivamente None a valores válidos para Redis."""
+    for key, value in list(datos.items()):
+        if value is None:
+            # Si el valor es None, lo reemplazamos según el tipo esperado
+            if key in ["thread_id", "whatsapp", "nombre", "vendedor", "departamento", "municipio", "topologia", "fase_actual", "ultimo_mensaje"]:
+                datos[key] = ""
+            elif key in ["contexto_tecnico", "pasos_completados"]:
+                datos[key] = {} if key == "contexto_tecnico" else []
+            else:
+                datos[key] = ""
+        elif isinstance(value, dict):
+            datos[key] = sanear_datos_redis(value)
+        elif isinstance(value, list):
+            datos[key] = [sanear_datos_redis(v) if isinstance(v, dict) else v for v in value]
+    return datos
+
 async def guardar_sesion_redis(redis_client: Optional[redis.Redis], identifier: str, data: dict):
     if not redis_client:
         return
-    key = f"session:{identifier}"
-    for field in ["contexto_tecnico", "pasos_completados"]:
-        if field in data and isinstance(data[field], (dict, list)):
-            data[field] = json.dumps(data[field])
-    await redis_client.hset(key, mapping=data)
-    await redis_client.expire(key, REDIS_TTL)
+    try:
+        key = f"session:{identifier}"
+        # Sanear datos antes de guardar
+        data_clean = sanear_datos_redis(data.copy())
+        # Convertir campos anidados a JSON
+        for field in ["contexto_tecnico", "pasos_completados"]:
+            if field in data_clean:
+                data_clean[field] = json.dumps(data_clean[field])
+        await redis_client.hset(key, mapping=data_clean)
+        await redis_client.expire(key, REDIS_TTL)
+    except Exception as e:
+        logger.error(f"Error guardando sesión en Redis para {identifier}: {e}")
 
 async def obtener_sesion_redis(redis_client: Optional[redis.Redis], identifier: str) -> Optional[dict]:
     if not redis_client:
         return None
-    key = f"session:{identifier}"
-    data = await redis_client.hgetall(key)
-    if not data:
+    try:
+        key = f"session:{identifier}"
+        data = await redis_client.hgetall(key)
+        if not data:
+            return None
+        for field in ["contexto_tecnico", "pasos_completados"]:
+            if field in data and isinstance(data[field], str):
+                try:
+                    data[field] = json.loads(data[field])
+                except:
+                    data[field] = {} if field == "contexto_tecnico" else []
+        return data
+    except Exception as e:
+        logger.error(f"Error obteniendo sesión de Redis para {identifier}: {e}")
         return None
-    for field in ["contexto_tecnico", "pasos_completados"]:
-        if field in data and isinstance(data[field], str):
-            try:
-                data[field] = json.loads(data[field])
-            except:
-                pass
-    return data
 
 async def eliminar_sesion_redis(redis_client: Optional[redis.Redis], identifier: str):
     if redis_client:
-        await redis_client.delete(f"session:{identifier}")
+        try:
+            await redis_client.delete(f"session:{identifier}")
+        except Exception as e:
+            logger.error(f"Error eliminando sesión de Redis para {identifier}: {e}")
 
 # =============================================================================
 # PERSISTENCIA FINAL EN POSTGRESQL
