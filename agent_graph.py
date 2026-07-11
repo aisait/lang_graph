@@ -10,7 +10,7 @@ import threading
 import requests
 import re
 import functools
-import logging  # Import global para evitar UnboundLocalError
+import logging
 from typing import Annotated, TypedDict, Optional
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -77,7 +77,6 @@ def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) 
         whatsapp_formateado = "Pendiente"
     else:
         codigo_limpio = codigo_area.replace('+', '')
-        # Si el número ya incluye el código de área, extraerlo
         if digits.startswith(codigo_limpio) and len(digits) >= len(codigo_limpio) + 8:
             base = digits[len(codigo_limpio):]
         else:
@@ -328,13 +327,13 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 raw_num = num_match.group(0)
                 _, num_norm = normalizar_contacto("", raw_num, ctx.get("ciudad", ""))
                 if num_norm and num_norm != "Pendiente":
-                    ctx["whatsapp"] = num_norm
+                    ctx["whatsapp"] = num_norm  # Sobrescribe siempre
                     logger.info(f"Extraído número de WhatsApp: {num_norm}")
             name_match = re.search(r'(?:mi\s+nombre\s+es|nombre[:]\s*|me\s+llamo|soy\s+)([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)', ultimo_mensaje, re.IGNORECASE)
             if name_match:
                 raw_name = name_match.group(1).strip()
                 if raw_name and len(raw_name) > 1:
-                    ctx["nombre"] = raw_name
+                    ctx["nombre"] = raw_name  # Sobrescribe siempre
                     logger.info(f"Extraído nombre: {raw_name}")
 
         # Extracción con modelo estructurado (respaldo)
