@@ -1,8 +1,6 @@
 """
-api.py - Servidor FastAPI con endpoints /chat y /api/chat/stream.
-SIEMPRE usa fingerprint como identificador principal. Si no hay fingerprint, se fuerza una nueva sesión.
-Nunca reutiliza sesiones sin fingerprint.
-run_name se actualiza al número de WhatsApp tan pronto como se detecta.
+api.py - Servidor FastAPI con unificación por número WhatsApp o fingerprint.
+Cada mensaje incluye un "Caso No." con los últimos 12 dígitos del thread_id.
 Historial completo en Redis.
 Cumple con ISO/IEC 25010, 29119, 27001.
 """
@@ -292,9 +290,11 @@ async def generar_resumen_con_llm(historial: list, contexto: dict) -> str:
 # LÓGICA COMPARTIDA CON CORRECCIÓN DEFINITIVA
 # =============================================================================
 async def process_chat_request(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
-    # 1. Extraer fingerprint
+    # 1. Extraer datos
     fingerprint = chat_request.metadata.get("fingerprint") or http_request.headers.get("X-Fingerprint")
     thread_id_from_request = chat_request.thread_id
+    ip = http_request.client.host if http_request.client else "unknown"
+    user_agent = http_request.headers.get("User-Agent", "unknown")
 
     # 2. Extraer número de WhatsApp
     whatsapp_raw = extraer_whatsapp(chat_request.message)
@@ -304,51 +304,48 @@ async def process_chat_request(chat_request: ChatRequest, http_request: Request)
         if whatsapp_norm and whatsapp_norm != "Pendiente":
             logger.info(f"WhatsApp detectado: {whatsapp_norm}")
 
-    # 3. Determinar chat_id y origen
+    # 3. Determinar chat_id (prioridad: número > fingerprint > ip+user-agent)
     chat_id = None
     origen = "desconocido"
     thread_id_final = None
     run_name = "Pendiente"
 
-    # --- PRIORIDAD ABSOLUTA: FINGERPRINT ---
-    if fingerprint:
-        # Buscar si el fingerprint ya tiene un chat_id asociado
+    if whatsapp_norm:
+        # PRIMERA PRIORIDAD: NÚMERO DE WHATSAPP
+        chat_id = whatsapp_norm
+        origen = "pantalla" if not chat_request.metadata.get("from_odoo") else "odoo"
+        if fingerprint and redis_client:
+            await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
+        logger.info(f"Chat_id asignado por número WhatsApp: {chat_id}")
+    elif fingerprint:
+        # SEGUNDA PRIORIDAD: FINGERPRINT
         chat_id_por_fingerprint = await obtener_chat_id_por_fingerprint(redis_client, fingerprint) if redis_client else None
         if chat_id_por_fingerprint:
             chat_id = chat_id_por_fingerprint
             origen = "pantalla"
             logger.info(f"Chat_id recuperado por fingerprint: {chat_id}")
-        elif whatsapp_norm:
-            # Asociar el número al fingerprint
-            chat_id = whatsapp_norm
-            origen = "pantalla" if not chat_request.metadata.get("from_odoo") else "odoo"
-            if redis_client:
-                await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
-            logger.info(f"Chat_id asignado por número y asociado a fingerprint: {chat_id}")
         else:
-            # Crear nuevo chat_id a partir del fingerprint
             chat_id = fingerprint
             origen = "pantalla"
             if redis_client:
                 await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
             logger.info(f"Nuevo chat_id generado desde fingerprint: {chat_id}")
-    elif whatsapp_norm:
-        # No hay fingerprint, pero hay número
-        chat_id = whatsapp_norm
-        origen = "pantalla" if not chat_request.metadata.get("from_odoo") else "odoo"
-        logger.info(f"Chat_id asignado por número WhatsApp (sin fingerprint): {chat_id}")
     else:
-        # NO hay fingerprint NI número: FORZAR NUEVA SESIÓN
-        nuevo_thread_id = str(uuid.uuid4())
-        chat_id = nuevo_thread_id
-        thread_id_final = nuevo_thread_id
-        origen = "desconocido"
-        logger.info(f"Nueva sesión forzada (sin fingerprint ni número) con thread_id: {nuevo_thread_id}")
+        # TERCERA PRIORIDAD: IP + User-Agent (fallback)
+        fallback_id = f"{ip}_{user_agent[:20]}"
+        chat_id_por_fallback = await obtener_sesion_redis(redis_client, fallback_id) if redis_client else None
+        if chat_id_por_fallback:
+            chat_id = fallback_id
+            origen = "desconocido"
+            logger.info(f"Chat_id recuperado por fallback (IP+UA): {chat_id}")
+        else:
+            chat_id = fallback_id
+            origen = "desconocido"
+            logger.info(f"Nuevo chat_id generado por fallback: {chat_id}")
 
     # 4. Obtener o crear sesión en Redis
     sesion_redis = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
     if sesion_redis:
-        # Si la sesión no tiene fingerprint y el fingerprint es nuevo, actualizar
         if fingerprint and not sesion_redis.get("fingerprint"):
             sesion_redis["fingerprint"] = fingerprint
             await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
@@ -387,11 +384,10 @@ async def process_chat_request(chat_request: ChatRequest, http_request: Request)
                 await guardar_whatsapp_redis(redis_client, whatsapp_norm, chat_id)
         logger.info(f"Nueva sesión creada para chat_id {chat_id}")
 
-    # 5. Actualizar run_name si hay número
     if whatsapp_norm:
         run_name = whatsapp_norm
 
-    # 6. Generar respuesta
+    # 5. Generar respuesta
     return StreamingResponse(
         generar_tokens(thread_id_final, chat_request.message, chat_id, run_name, whatsapp_norm, origen, fingerprint),
         media_type="text/event-stream",
@@ -486,7 +482,7 @@ async def chat_endpoint_stream(request: ChatRequest, http_request: Request):
     return await process_chat_request(request, http_request)
 
 # ---------------------------------------------------------------------------
-# Función de generación de tokens (con historial completo)
+# Función de generación de tokens (con historial completo y "Caso No.")
 # ---------------------------------------------------------------------------
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido", fingerprint: str | None = None) -> AsyncGenerator[str, None]:
@@ -498,6 +494,12 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     config["metadata"]["origen"] = origen
     if fingerprint:
         config["metadata"]["fingerprint"] = fingerprint
+
+    # Generar el número de caso (últimos 12 caracteres alfanuméricos del thread_id)
+    caso = thread_id.replace('-', '')[-12:] if thread_id else "000000000000"
+    mensaje_con_caso = f"{mensaje} [Caso No. {caso}]"
+    # Añadir caso a metadatos de LangSmith
+    config["metadata"]["caso"] = caso
 
     sesion_redis = None
     historial = []
@@ -519,11 +521,13 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     config["run_name"] = run_name if run_name != thread_id else thread_id
     config["metadata"]["whatsapp"] = run_name if run_name != thread_id else ""
 
+    # Construir mensajes con historial (ya incluyen sufijo si se guardaron así)
     messages = []
     for item in historial:
         messages.append(HumanMessage(content=item["input"]))
         messages.append(AIMessage(content=item["output"]))
-    messages.append(HumanMessage(content=mensaje))
+    # Añadir el nuevo mensaje del usuario con el caso
+    messages.append(HumanMessage(content=mensaje_con_caso))
 
     estado_inicial = {
         "messages": messages,
@@ -541,9 +545,17 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                 respuesta_final = msg.content
                 break
 
-        if redis_client and respuesta_final:
-            await guardar_historial_redis(redis_client, chat_id, mensaje, respuesta_final)
+        # Agregar caso a la respuesta final
+        if respuesta_final:
+            respuesta_final_con_caso = f"{respuesta_final} [Caso No. {caso}]"
+        else:
+            respuesta_final_con_caso = f"No se pudo generar respuesta. [Caso No. {caso}]"
 
+        # Guardar historial en Redis (input y output con caso)
+        if redis_client and respuesta_final_con_caso:
+            await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final_con_caso)
+
+        # Actualizar sesión en Redis
         if redis_client:
             if not sesion_redis:
                 sesion_redis = {}
@@ -568,7 +580,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                     pasos.append(key)
             sesion_redis["pasos_completados"] = pasos
             sesion_redis["fase_actual"] = ctx.get("fase_actual", "conversacion")
-            sesion_redis["ultimo_mensaje"] = mensaje
+            sesion_redis["ultimo_mensaje"] = mensaje_con_caso  # Guardamos el mensaje con caso
 
             if ctx.get("topologia") and ctx.get("tipo_producto") and not ctx.get("productos_interes"):
                 ctx["productos_interes"] = obtener_productos_relevantes(ctx["topologia"], ctx["tipo_producto"], 5)
@@ -585,9 +597,12 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                 await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
                 logger.info(f"Resumen guardado en PostgreSQL para chat_id {chat_id}")
 
-        if respuesta_final:
-            for token in respuesta_final.split():
-                yield f"data: {json.dumps({'token': token + ' '})}\n\n"
+        # Enviar respuesta en SSE (con el sufijo)
+        if respuesta_final_con_caso:
+            # Dividir en tokens para streaming
+            tokens = respuesta_final_con_caso.split()
+            for i, token in enumerate(tokens):
+                yield f"data: {json.dumps({'token': token + (' ' if i < len(tokens)-1 else '')})}\n\n"
         else:
             yield f"data: {json.dumps({'token': 'No se pudo generar respuesta.'})}\n\n"
 
@@ -598,7 +613,8 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             "run_name_actual": run_name,
             "historial_count": len(historial) + 1,
             "origen": origen,
-            "fingerprint": fingerprint
+            "fingerprint": fingerprint,
+            "caso": caso
         })
         yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
 
