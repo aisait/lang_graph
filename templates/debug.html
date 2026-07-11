@@ -1,70 +1,5 @@
 <!DOCTYPE html>
 <html lang="es">
-    <script>
-    
-// =============================================
-// GENERACIÓN DEL FINGERPRINT (traza de pantalla)
-// =============================================
-async function generarFingerprint() {
-    let fp = localStorage.getItem('jarvi_fingerprint');
-    if (fp) return fp;
-    const screenData = `${window.screen.width}x${window.screen.height}_${window.devicePixelRatio}`;
-    let gpu = "unknown";
-    try {
-        const canvas = document.createElement('canvas');
-        const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-        gpu = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
-    } catch (e) {}
-    const raw = `${screenData}_${gpu}`;
-    const encoder = new TextEncoder();
-    const data = encoder.encode(raw);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    fp = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 32);
-    localStorage.setItem('jarvi_fingerprint', fp);
-    return fp;
-}
-
-// =============================================
-// ENVÍO DE MENSAJES CON FINGERPRINT
-// =============================================
-// Modifique la función sendMessage para que use este código:
-
-async function sendMessage(message) {
-    if (!message) return;
-    addUserMessage(message);
-    const fingerprint = await generarFingerprint();
-    const threadId = localStorage.getItem('debug_thread_id') || crypto.randomUUID();
-    localStorage.setItem('debug_thread_id', threadId);
-    let chatId = localStorage.getItem('jarvi_chat_id') || '';
-
-    const response = await fetch('/api/chat/stream', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-Fingerprint': fingerprint,  // <-- CLAVE: ENVÍO DEL FINGERPRINT
-            'X-Chat-ID': chatId
-        },
-        body: JSON.stringify({
-            thread_id: threadId,
-            message: message,
-            metadata: {
-                fingerprint: fingerprint,
-                chat_id: chatId
-            }
-        })
-    });
-
-    // Leer el nuevo chat_id de la respuesta
-    const newChatId = response.headers.get('X-Chat-ID');
-    if (newChatId && newChatId !== chatId) {
-        chatId = newChatId;
-        localStorage.setItem('jarvi_chat_id', chatId);
-    }
-    // ... (procesar el stream de la respuesta como antes) ...
-}            
-</script>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -104,36 +39,11 @@ async function sendMessage(message) {
             min-height: 0;
             margin-bottom: 10px;
         }
-        /* Estilos para mensajes tipo chat */
-        .message-user {
-            color: #ffcc00;
-            font-weight: bold;
-            margin: 6px 0 2px 0;
-        }
-        .message-assistant {
-            color: #00ff99;
-            margin: 4px 0 8px 0;
-            padding-left: 10px;
-            border-left: 2px solid #00ff99;
-        }
-        .message-context {
-            color: #8888ff;
-            font-style: italic;
-            border-top: 1px solid #333;
-            margin-top: 8px;
-            padding-top: 8px;
-            font-size: 0.8rem;
-        }
-        .message-system {
-            color: #66aaff;
-            margin: 4px 0;
-        }
-        .message-error {
-            color: #ff4444;
-            background: #331111;
-            padding: 2px 6px;
-            border-radius: 4px;
-        }
+        .message-user { color: #ffcc00; font-weight: bold; margin: 6px 0 2px 0; }
+        .message-assistant { color: #00ff99; margin: 4px 0 8px 0; padding-left: 10px; border-left: 2px solid #00ff99; }
+        .message-context { color: #8888ff; font-style: italic; border-top: 1px solid #333; margin-top: 8px; padding-top: 8px; font-size: 0.8rem; }
+        .message-system { color: #66aaff; margin: 4px 0; }
+        .message-error { color: #ff4444; background: #331111; padding: 2px 6px; border-radius: 4px; }
         #input-area {
             display: flex;
             gap: 10px;
@@ -193,25 +103,19 @@ async function sendMessage(message) {
         }
         .tool-row button:hover { background: #0055aa; }
         .separator { border: none; border-top: 1px dashed #2a4a2a; margin: 6px 0; }
-        /* Indicador de escritura */
-        .typing {
-            color: #66ffaa;
-            animation: pulse 1s infinite;
-        }
+        .typing { color: #66ffaa; animation: pulse 1s infinite; }
         @keyframes pulse {
             0% { opacity: 0.4; }
             50% { opacity: 1; }
             100% { opacity: 0.4; }
         }
     </style>
-    
 </head>
 <body>
     <div id="header">
         <span class="title">⚡ JARVI · DEBUG CONSOLE</span>
         <span class="status" id="status">🟢 Conectado a: <span id="backend-url">{{ backend_url }}</span></span>
     </div>
-    <!-- Barra de herramientas para pegar enlaces -->
     <div class="tool-row">
         <input type="text" id="url-input" placeholder="Pega aquí el enlace de imagen (.jpg, .png) o audio (.mp3, .wav)">
         <button id="process-url-btn">Procesar</button>
@@ -228,17 +132,36 @@ async function sendMessage(message) {
         <input type="text" id="user-input" placeholder="Escribe tu mensaje de depuración..." autofocus>
         <button id="send-btn">Enviar</button>
     </div>
+
     <script>
         (function() {
-            const output = document.getElementById('output');
-            const input = document.getElementById('user-input');
-            const sendBtn = document.getElementById('send-btn');
-            const threadDisplay = document.getElementById('thread-id');
-            const urlInput = document.getElementById('url-input');
-            const processUrlBtn = document.getElementById('process-url-btn');
-            const clearBtn = document.getElementById('clear-btn');
+            // =====================================================
+            // 1. GENERACIÓN DEL FINGERPRINT (traza de pantalla)
+            // =====================================================
+            async function generarFingerprint() {
+                let fp = localStorage.getItem('jarvi_fingerprint');
+                if (fp) return fp;
+                const screenData = `${window.screen.width}x${window.screen.height}_${window.devicePixelRatio}`;
+                let gpu = "unknown";
+                try {
+                    const canvas = document.createElement('canvas');
+                    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                    gpu = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+                } catch (e) {}
+                const raw = `${screenData}_${gpu}`;
+                const encoder = new TextEncoder();
+                const data = encoder.encode(raw);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                fp = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 32);
+                localStorage.setItem('jarvi_fingerprint', fp);
+                return fp;
+            }
 
-            let currentThreadId = null;
+            // =====================================================
+            // 2. ID DE THREAD (persistente)
+            // =====================================================
             function getThreadId() {
                 let tid = localStorage.getItem('debug_thread_id');
                 if (!tid) {
@@ -247,10 +170,26 @@ async function sendMessage(message) {
                 }
                 return tid;
             }
-            currentThreadId = getThreadId();
-            threadDisplay.textContent = currentThreadId;
 
-            // ----- Funciones para agregar mensajes al output -----
+            // =====================================================
+            // 3. VARIABLES GLOBALES Y DOM
+            // =====================================================
+            const output = document.getElementById('output');
+            const input = document.getElementById('user-input');
+            const sendBtn = document.getElementById('send-btn');
+            const threadDisplay = document.getElementById('thread-id');
+            const urlInput = document.getElementById('url-input');
+            const processUrlBtn = document.getElementById('process-url-btn');
+            const clearBtn = document.getElementById('clear-btn');
+
+            let currentThreadId = getThreadId();
+            threadDisplay.textContent = currentThreadId;
+            let chatId = localStorage.getItem('jarvi_chat_id') || '';
+            let fingerprint = '';
+
+            // =====================================================
+            // 4. FUNCIONES DE MENSAJES EN EL OUTPUT
+            // =====================================================
             function addMessage(text, type = 'assistant') {
                 const div = document.createElement('div');
                 div.className = `message-${type}`;
@@ -259,20 +198,10 @@ async function sendMessage(message) {
                 output.scrollTop = output.scrollHeight;
                 return div;
             }
+            function addUserMessage(text) { addMessage(text, 'user'); }
+            function addSystemMessage(text) { addMessage(text, 'system'); }
+            function addErrorMessage(text) { addMessage(text, 'error'); }
 
-            function addUserMessage(text) {
-                addMessage(text, 'user');
-            }
-
-            function addSystemMessage(text) {
-                addMessage(text, 'system');
-            }
-
-            function addErrorMessage(text) {
-                addMessage(text, 'error');
-            }
-
-            // Variable para el mensaje del asistente en curso
             let assistantDiv = null;
             let currentAssistantMessage = '';
 
@@ -284,20 +213,15 @@ async function sendMessage(message) {
                 output.appendChild(assistantDiv);
                 output.scrollTop = output.scrollHeight;
             }
-
             function appendToken(token) {
-                if (!assistantDiv) {
-                    startAssistantMessage();
-                }
+                if (!assistantDiv) startAssistantMessage();
                 currentAssistantMessage += token;
                 assistantDiv.textContent = currentAssistantMessage + '▌';
                 output.scrollTop = output.scrollHeight;
             }
-
             function finishAssistantMessage(contexto = null) {
                 if (assistantDiv) {
                     assistantDiv.textContent = currentAssistantMessage;
-                    assistantDiv.id = '';
                     assistantDiv = null;
                 }
                 if (contexto && Object.keys(contexto).length > 0) {
@@ -310,7 +234,9 @@ async function sendMessage(message) {
                 currentAssistantMessage = '';
             }
 
-            // ----- Envío de mensaje de texto -----
+            // =====================================================
+            // 5. ENVÍO DE MENSAJE CON FINGERPRINT Y CHAT_ID
+            // =====================================================
             async function sendMessage(message) {
                 if (!message) return;
                 addUserMessage(message);
@@ -318,7 +244,11 @@ async function sendMessage(message) {
                 input.disabled = true;
                 sendBtn.disabled = true;
 
-                // Indicador de carga
+                // Obtener fingerprint (si no existe, se genera y guarda)
+                if (!fingerprint) {
+                    fingerprint = await generarFingerprint();
+                }
+
                 const loadingDiv = document.createElement('div');
                 loadingDiv.className = 'message-assistant typing';
                 loadingDiv.textContent = '...';
@@ -329,9 +259,28 @@ async function sendMessage(message) {
                 try {
                     const response = await fetch('/api/chat/stream', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ thread_id: currentThreadId, message: message })
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Fingerprint': fingerprint,        // <--- ENVÍA EL FINGERPRINT
+                            'X-Chat-ID': chatId
+                        },
+                        body: JSON.stringify({
+                            thread_id: currentThreadId,
+                            message: message,
+                            metadata: {
+                                fingerprint: fingerprint,
+                                chat_id: chatId
+                            }
+                        })
                     });
+
+                    // Leer el header X-Chat-ID de la respuesta y almacenarlo
+                    const newChatId = response.headers.get('X-Chat-ID');
+                    if (newChatId && newChatId !== chatId) {
+                        chatId = newChatId;
+                        localStorage.setItem('jarvi_chat_id', chatId);
+                        addSystemMessage(`[Sistema] Chat ID actualizado: ${chatId}`);
+                    }
 
                     const loader = document.getElementById('loading-indicator');
                     if (loader) loader.remove();
@@ -370,9 +319,12 @@ async function sendMessage(message) {
                                     addErrorMessage(`[ERROR] ${data.error}`);
                                 } else if (data.contexto_tecnico) {
                                     contexto = data.contexto_tecnico;
+                                    if (contexto.chat_id) {
+                                        chatId = contexto.chat_id;
+                                        localStorage.setItem('jarvi_chat_id', chatId);
+                                    }
                                     finishAssistantMessage(contexto);
                                 } else {
-                                    // Si no es token, mostrar como información
                                     addSystemMessage(`[EVENTO] ${jsonStr}`);
                                 }
                             } catch (e) {
@@ -394,18 +346,18 @@ async function sendMessage(message) {
                 }
             }
 
-            // ----- Procesar URL (imagen/audio) -----
+            // =====================================================
+            // 6. EVENTOS DE LA INTERFAZ
+            // =====================================================
             processUrlBtn.addEventListener('click', async () => {
                 const url = urlInput.value.trim();
                 if (!url) {
                     addErrorMessage('Por favor, pega una URL válida.');
                     return;
                 }
-
                 const lower = url.toLowerCase();
                 let endpoint = '';
                 let desc = '';
-
                 if (lower.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/)) {
                     endpoint = '/api/vision/analyze';
                     desc = 'Imagen';
@@ -416,16 +368,13 @@ async function sendMessage(message) {
                     addErrorMessage('El enlace no parece ser de imagen o audio válido.');
                     return;
                 }
-
                 addSystemMessage(`Procesando ${desc} desde URL: ${url}`);
-
                 try {
                     const response = await fetch(endpoint, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ url: url })
                     });
-
                     const data = await response.json();
                     if (response.ok) {
                         if (endpoint === '/api/vision/analyze') {
@@ -444,7 +393,6 @@ async function sendMessage(message) {
                 }
             });
 
-            // ----- Limpiar output -----
             clearBtn.addEventListener('click', () => {
                 while (output.children.length > 0) {
                     output.removeChild(output.lastChild);
@@ -460,7 +408,6 @@ async function sendMessage(message) {
                 output.appendChild(sep);
             });
 
-            // ----- Enviar al presionar Enter -----
             sendBtn.addEventListener('click', () => {
                 const msg = input.value.trim();
                 if (msg) sendMessage(msg);
@@ -471,6 +418,13 @@ async function sendMessage(message) {
                     const msg = input.value.trim();
                     if (msg) sendMessage(msg);
                 }
+            });
+
+            // Al iniciar, mostrar el fingerprint en consola (para depuración)
+            generarFingerprint().then(fp => {
+                console.log('Fingerprint generado:', fp);
+                // Opcional: mostrar en la interfaz
+                // addSystemMessage(`[Fingerprint] ${fp}`);
             });
 
             input.focus();
