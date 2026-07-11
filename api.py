@@ -380,15 +380,12 @@ async def chat_endpoint(request: ChatRequest, http_request: Request):
 
     # 3. Si viene chat_id, intentar usarlo directamente
     if chat_id_provided:
-        # Verificar si existe en Redis
         sesion = await obtener_sesion_redis(redis_client, chat_id_provided) if redis_client else None
         if sesion:
             chat_id = chat_id_provided
-            origen = sesion.get("origen", "odoo")  # si existe, usar el origen guardado
+            origen = sesion.get("origen", "odoo")
         else:
             # Si no existe, pero viene de Odoo, creamos la sesión con origen "odoo"
-            # Nota: si viene de pantalla con chat_id pero no existe en Redis, puede ser que se haya perdido,
-            # entonces lo tratamos como nuevo.
             pass
 
     # 4. Si no hay chat_id o no existe en Redis, intentar por fingerprint
@@ -396,15 +393,13 @@ async def chat_endpoint(request: ChatRequest, http_request: Request):
         chat_id_por_fingerprint = await obtener_chat_id_por_fingerprint(redis_client, fingerprint)
         if chat_id_por_fingerprint:
             chat_id = chat_id_por_fingerprint
-            origen = "pantalla"  # se recuperó por fingerprint
+            origen = "pantalla"
 
     # 5. Si aún no hay chat_id, crear uno nuevo (pantalla sin chat_id previo)
     if not chat_id:
-        # Generar nuevo thread_id para LangGraph
         nuevo_thread_id = str(uuid.uuid4())
         chat_id = obtener_chat_id_desde_thread_id(nuevo_thread_id)
-        origen = "pantalla"  # nuevo usuario desde pantalla
-        # Guardar asociación fingerprint -> chat_id si hay fingerprint
+        origen = "pantalla"
         if fingerprint and redis_client:
             await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
         logger.info(f"Nuevo chat_id {chat_id} creado para pantalla con fingerprint {fingerprint}")
@@ -414,16 +409,12 @@ async def chat_endpoint(request: ChatRequest, http_request: Request):
     if sesion_redis:
         thread_id_final = sesion_redis.get("thread_id", chat_id)
         run_name = sesion_redis.get("whatsapp") or "Pendiente"
-        # Si el origen era desconocido pero la sesión tiene origen, actualizar
         if origen == "desconocido":
             origen = sesion_redis.get("origen", "desconocido")
         logger.info(f"Sesión recuperada para chat_id {chat_id}")
     else:
-        # Crear nueva sesión
-        # Si el chat_id vino de Odoo (chat_id_provided) y no existía, origen debe ser "odoo"
         if chat_id_provided and chat_id == chat_id_provided:
             origen = "odoo"
-        # Si vino por fingerprint o es nuevo, origen es "pantalla"
         elif fingerprint:
             origen = "pantalla"
         else:
@@ -504,7 +495,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             run_name = sesion_redis.get("whatsapp") or thread_id
         contexto_previo = sesion_redis.get("contexto_tecnico", {})
         pasos_completados = sesion_redis.get("pasos_completados", [])
-        # Actualizar fingerprint y origen si no están
         if fingerprint and not sesion_redis.get("fingerprint"):
             sesion_redis["fingerprint"] = fingerprint
         if origen and origen != "desconocido" and not sesion_redis.get("origen"):
@@ -520,7 +510,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             sesion_redis["whatsapp"] = nuevo_whatsapp
         else:
             sesion_redis = {"whatsapp": nuevo_whatsapp}
-        # También guardar mapeo inverso (whatsapp -> chat_id)
         if redis_client and nuevo_whatsapp:
             await guardar_whatsapp_redis(redis_client, nuevo_whatsapp, chat_id)
 
@@ -608,13 +597,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             # 7. Verificar si se completaron los 6 pasos O se alcanzó el límite de historial
             pasos_requeridos = ["nombre", "whatsapp", "departamento", "municipio", "topologia", "tipo_producto"]
             if all(p in pasos for p in pasos_requeridos) or len(historial) + 1 >= HISTORIAL_LIMITE:
-                # Generar resumen con LLM
                 resumen = await generar_resumen_con_llm(historial, ctx)
-                # Guardar en PostgreSQL
                 await guardar_resumen_postgres(chat_id, resumen, ctx, fingerprint, origen)
-                # Limpiar historial de Redis
                 await eliminar_historial_redis(redis_client, chat_id)
-                # Marcar sesión como completada
                 sesion_redis["fase_actual"] = "completado"
                 await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
                 logger.info(f"Resumen generado y persistido para chat_id {chat_id}")
@@ -642,15 +627,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
 # =============================================================================
 @app.post("/webhook/whatsapp")
 async def webhook_whatsapp(payload: dict):
-    """
-    Recibe mensajes desde WhatsApp (n8n). Los 6 pasos ya vienen completos en el payload.
-    Se da el mismo tratamiento: se busca/crea chat_id, se guarda historial y se responde.
-    """
     whatsapp = payload.get("number")
     mensaje = payload.get("text")
-    # Datos de los 6 pasos (pueden venir completos o parciales)
-    datos_cliente = payload.get("datos_cliente", {})  # nombre, ubicación, topologia, etc.
-    # Si el payload incluye chat_id, usarlo
+    datos_cliente = payload.get("datos_cliente", {})
     chat_id_provided = payload.get("chat_id")
 
     if not whatsapp or not mensaje:
@@ -660,32 +639,26 @@ async def webhook_whatsapp(payload: dict):
     if not whatsapp_norm or whatsapp_norm == "Pendiente":
         raise HTTPException(400, "Número de WhatsApp inválido")
 
-    # 1. Determinar chat_id
     chat_id = chat_id_provided
     if not chat_id:
-        # Si no viene chat_id, buscar por número
         if redis_client:
             chat_id = await obtener_chat_id_por_whatsapp(redis_client, whatsapp_norm)
     if not chat_id:
-        # Crear nuevo chat_id a partir de un thread_id generado
         nuevo_thread_id = str(uuid.uuid4())
         chat_id = obtener_chat_id_desde_thread_id(nuevo_thread_id)
         if redis_client:
             await guardar_whatsapp_redis(redis_client, whatsapp_norm, chat_id)
         logger.info(f"Nuevo chat_id {chat_id} creado para WhatsApp {whatsapp_norm}")
 
-    # 2. Obtener sesión existente o crear nueva
     sesion_redis = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
     if sesion_redis:
         thread_id = sesion_redis.get("thread_id", chat_id)
         run_name = sesion_redis.get("whatsapp") or whatsapp_norm
-        # Actualizar datos del cliente si vienen completos
         if datos_cliente:
             for key in ["nombre", "vendedor", "departamento", "municipio", "topologia", "tipo_producto"]:
                 if key in datos_cliente and datos_cliente[key]:
                     sesion_redis[key] = datos_cliente[key]
             sesion_redis["contexto_tecnico"] = datos_cliente
-            # Actualizar pasos completados
             pasos = []
             if sesion_redis.get("nombre"):
                 pasos.append("nombre")
@@ -706,7 +679,6 @@ async def webhook_whatsapp(payload: dict):
     else:
         thread_id = chat_id
         run_name = whatsapp_norm
-        # Crear sesión con los datos del cliente (los pasos ya vienen completos)
         data_inicial = {
             "thread_id": thread_id,
             "chat_id": chat_id,
@@ -729,9 +701,6 @@ async def webhook_whatsapp(payload: dict):
             await guardar_sesion_redis(redis_client, chat_id, data_inicial)
             await guardar_whatsapp_redis(redis_client, whatsapp_norm, chat_id)
 
-    # 3. Generar respuesta usando el mismo mecanismo de tokens
-    # Nota: aquí se podría llamar a generar_tokens, pero como es webhook, no enviamos SSE.
-    # Simulamos la respuesta recogiendo el primer token.
     response_generator = generar_tokens(thread_id, mensaje, chat_id, run_name, nuevo_whatsapp=None, origen="odoo", fingerprint=None)
     respuesta_final = ""
     async for chunk in response_generator:
