@@ -3,7 +3,7 @@
     <script>
     
 // =============================================
-// GENERACIÓN DEL FINGERPRINT
+// GENERACIÓN DEL FINGERPRINT (traza de pantalla)
 // =============================================
 async function generarFingerprint() {
     let fp = localStorage.getItem('jarvi_fingerprint');
@@ -27,10 +27,13 @@ async function generarFingerprint() {
 }
 
 // =============================================
-// ENVÍO DE MENSAJES
+// ENVÍO DE MENSAJES CON FINGERPRINT
 // =============================================
+// Modifique la función sendMessage para que use este código:
+
 async function sendMessage(message) {
     if (!message) return;
+    addUserMessage(message);
     const fingerprint = await generarFingerprint();
     const threadId = localStorage.getItem('debug_thread_id') || crypto.randomUUID();
     localStorage.setItem('debug_thread_id', threadId);
@@ -40,7 +43,7 @@ async function sendMessage(message) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'X-Fingerprint': fingerprint,
+            'X-Fingerprint': fingerprint,  // <-- CLAVE: ENVÍO DEL FINGERPRINT
             'X-Chat-ID': chatId
         },
         body: JSON.stringify({
@@ -59,9 +62,8 @@ async function sendMessage(message) {
         chatId = newChatId;
         localStorage.setItem('jarvi_chat_id', chatId);
     }
-    // ... procesar el stream ...
-}
-            
+    // ... (procesar el stream de la respuesta como antes) ...
+}            
 </script>
 <head>
     <meta charset="UTF-8">
