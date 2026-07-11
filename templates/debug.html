@@ -1,266 +1,68 @@
 <!DOCTYPE html>
 <html lang="es">
     <script>
-    (function() {
-        const output = document.getElementById('output');
-        const input = document.getElementById('user-input');
-        const sendBtn = document.getElementById('send-btn');
-        const threadDisplay = document.getElementById('thread-id');
-        const urlInput = document.getElementById('url-input');
-        const processUrlBtn = document.getElementById('process-url-btn');
-        const clearBtn = document.getElementById('clear-btn');
+    
+// =============================================
+// GENERACIÓN DEL FINGERPRINT (traza de pantalla)
+// =============================================
+async function generarFingerprint() {
+    let fp = localStorage.getItem('jarvi_fingerprint');
+    if (fp) return fp;
+    const screenData = `${window.screen.width}x${window.screen.height}_${window.devicePixelRatio}`;
+    let gpu = "unknown";
+    try {
+        const canvas = document.createElement('canvas');
+        const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+        gpu = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+    } catch (e) {}
+    const raw = `${screenData}_${gpu}`;
+    const encoder = new TextEncoder();
+    const data = encoder.encode(raw);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    fp = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 32);
+    localStorage.setItem('jarvi_fingerprint', fp);
+    return fp;
+}
 
-        // ---- GENERACIÓN DE client_id (persistente) ----
-        function getClientId() {
-            let cid = localStorage.getItem('jarvi_client_id');
-            if (!cid) {
-                cid = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
-                localStorage.setItem('jarvi_client_id', cid);
+// =============================================
+// ENVÍO DE MENSAJES CON FINGERPRINT Y CHAT_ID
+// =============================================
+// Modifique la función sendMessage para que use este código:
+
+async function sendMessage(message) {
+    if (!message) return;
+    addUserMessage(message);
+    const fingerprint = await generarFingerprint();
+    let chatId = localStorage.getItem('jarvi_chat_id') || '';
+
+    const response = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Fingerprint': fingerprint,
+            'X-Chat-ID': chatId
+        },
+        body: JSON.stringify({
+            thread_id: currentThreadId,
+            message: message,
+            metadata: {
+                fingerprint: fingerprint,
+                chat_id: chatId
             }
-            return cid;
-        }
-        const clientId = getClientId();
+        })
+    });
 
-        // ---- GENERACIÓN DE thread_id (NUEVO por sesión, no se almacena en localStorage) ----
-        function generateNewThreadId() {
-            return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
-        }
-        let currentThreadId = generateNewThreadId();
-        threadDisplay.textContent = currentThreadId;
-
-        // Mostrar en consola para depuración
-        console.log('Client ID:', clientId);
-        console.log('Thread ID:', currentThreadId);
-
-        // ----- Funciones para agregar mensajes al output (sin cambios) -----
-        function addMessage(text, type = 'assistant') {
-            const div = document.createElement('div');
-            div.className = `message-${type}`;
-            div.textContent = text;
-            output.appendChild(div);
-            output.scrollTop = output.scrollHeight;
-            return div;
-        }
-
-        function addUserMessage(text) {
-            addMessage(text, 'user');
-        }
-
-        function addSystemMessage(text) {
-            addMessage(text, 'system');
-        }
-
-        function addErrorMessage(text) {
-            addMessage(text, 'error');
-        }
-
-        let assistantDiv = null;
-        let currentAssistantMessage = '';
-
-        function startAssistantMessage() {
-            currentAssistantMessage = '';
-            assistantDiv = document.createElement('div');
-            assistantDiv.className = 'message-assistant';
-            assistantDiv.textContent = '▌';
-            output.appendChild(assistantDiv);
-            output.scrollTop = output.scrollHeight;
-        }
-
-        function appendToken(token) {
-            if (!assistantDiv) {
-                startAssistantMessage();
-            }
-            currentAssistantMessage += token;
-            assistantDiv.textContent = currentAssistantMessage + '▌';
-            output.scrollTop = output.scrollHeight;
-        }
-
-        function finishAssistantMessage(contexto = null) {
-            if (assistantDiv) {
-                assistantDiv.textContent = currentAssistantMessage;
-                assistantDiv.id = '';
-                assistantDiv = null;
-            }
-            if (contexto && Object.keys(contexto).length > 0) {
-                const ctxDiv = document.createElement('div');
-                ctxDiv.className = 'message-context';
-                ctxDiv.textContent = `[CONTEXTO] ${JSON.stringify(contexto, null, 2)}`;
-                output.appendChild(ctxDiv);
-                output.scrollTop = output.scrollHeight;
-            }
-            currentAssistantMessage = '';
-        }
-
-        // ----- Envío de mensaje de texto (MODIFICADO para enviar client_id) -----
-        async function sendMessage(message) {
-            if (!message) return;
-            addUserMessage(message);
-            input.value = '';
-            input.disabled = true;
-            sendBtn.disabled = true;
-
-            const loadingDiv = document.createElement('div');
-            loadingDiv.className = 'message-assistant typing';
-            loadingDiv.textContent = '...';
-            loadingDiv.id = 'loading-indicator';
-            output.appendChild(loadingDiv);
-            output.scrollTop = output.scrollHeight;
-
-            try {
-                const response = await fetch('/api/chat/stream', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        thread_id: currentThreadId,
-                        message: message,
-                        metadata: {
-                            client_id: clientId
-                        }
-                    })
-                });
-
-                const loader = document.getElementById('loading-indicator');
-                if (loader) loader.remove();
-
-                if (!response.ok) {
-                    const errText = await response.text();
-                    addErrorMessage(`Error HTTP ${response.status}: ${errText}`);
-                    return;
-                }
-
-                startAssistantMessage();
-                let contexto = {};
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder('utf-8');
-                let buffer = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-                    let lines = buffer.split('\n');
-                    buffer = lines.pop() || '';
-
-                    for (let line of lines) {
-                        line = line.trim();
-                        if (!line || !line.startsWith('data: ')) continue;
-                        const jsonStr = line.slice(6);
-                        try {
-                            const data = JSON.parse(jsonStr);
-                            if (data.token !== undefined) {
-                                appendToken(data.token);
-                            } else if (data.info) {
-                                addSystemMessage(`[INFO] ${data.info}`);
-                            } else if (data.error) {
-                                addErrorMessage(`[ERROR] ${data.error}`);
-                            } else if (data.contexto_tecnico) {
-                                // Actualizar thread_id si el backend devuelve uno nuevo
-                                if (data.contexto_tecnico.thread_id_actual) {
-                                    currentThreadId = data.contexto_tecnico.thread_id_actual;
-                                    threadDisplay.textContent = currentThreadId;
-                                }
-                                contexto = data.contexto_tecnico;
-                                finishAssistantMessage(contexto);
-                            } else {
-                                addSystemMessage(`[EVENTO] ${jsonStr}`);
-                            }
-                        } catch (e) {
-                            addSystemMessage(`[PARSE] ${jsonStr}`);
-                        }
-                    }
-                }
-                if (currentAssistantMessage) {
-                    finishAssistantMessage();
-                }
-            } catch (error) {
-                const loader = document.getElementById('loading-indicator');
-                if (loader) loader.remove();
-                addErrorMessage(`Excepción: ${error.message}`);
-            } finally {
-                input.disabled = false;
-                sendBtn.disabled = false;
-                input.focus();
-            }
-        }
-
-        // ----- Procesar URL (imagen/audio) (sin cambios) -----
-        processUrlBtn.addEventListener('click', async () => {
-            const url = urlInput.value.trim();
-            if (!url) {
-                addErrorMessage('Por favor, pega una URL válida.');
-                return;
-            }
-            const lower = url.toLowerCase();
-            let endpoint = '';
-            let desc = '';
-            if (lower.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/)) {
-                endpoint = '/api/vision/analyze';
-                desc = 'Imagen';
-            } else if (lower.match(/\.(mp3|wav|m4a|flac|ogg|aac)$/)) {
-                endpoint = '/api/stt';
-                desc = 'Audio';
-            } else {
-                addErrorMessage('El enlace no parece ser de imagen o audio válido.');
-                return;
-            }
-            addSystemMessage(`Procesando ${desc} desde URL: ${url}`);
-            try {
-                const response = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: url, thread_id: currentThreadId, client_id: clientId })
-                });
-                const data = await response.json();
-                if (response.ok) {
-                    if (endpoint === '/api/vision/analyze') {
-                        const extracted = data.extracted_data || {};
-                        addSystemMessage(`Factura: Empresa: ${extracted.empresa_electrica || 'N/A'}, Consumo: ${extracted.consumo_kwh || 'N/A'} kWh, Monto: Q${extracted.monto_factura || 'N/A'}`);
-                    } else if (endpoint === '/api/stt') {
-                        const transcript = data.transcript || '';
-                        addSystemMessage(`Transcripción: ${transcript}`);
-                    }
-                    urlInput.value = '';
-                } else {
-                    addErrorMessage(`Error: ${data.error || 'Desconocido'}`);
-                }
-            } catch (error) {
-                addErrorMessage(`Excepción al procesar URL: ${error.message}`);
-            }
-        });
-
-        // ----- Limpiar output (sin cambios) -----
-        clearBtn.addEventListener('click', () => {
-            while (output.children.length > 0) {
-                output.removeChild(output.lastChild);
-            }
-            addSystemMessage('Consola limpiada.');
-            addSystemMessage('Escribe tu mensaje o pega un enlace de archivo multimedia.');
-            const sys3 = document.createElement('div');
-            sys3.className = 'message-system';
-            sys3.innerHTML = 'Thread ID: <span id="thread-id">' + currentThreadId + '</span>';
-            output.appendChild(sys3);
-            const sep = document.createElement('hr');
-            sep.className = 'separator';
-            output.appendChild(sep);
-        });
-
-        // ----- Enviar al presionar Enter (sin cambios) -----
-        sendBtn.addEventListener('click', () => {
-            const msg = input.value.trim();
-            if (msg) sendMessage(msg);
-        });
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                const msg = input.value.trim();
-                if (msg) sendMessage(msg);
-            }
-        });
-
-        input.focus();
-        console.log('Debug CLI cargado. Client ID:', clientId, 'Thread ID:', currentThreadId);
-    })();
+    // Leer el nuevo chat_id de la respuesta
+    const newChatId = response.headers.get('X-Chat-ID');
+    if (newChatId && newChatId !== chatId) {
+        chatId = newChatId;
+        localStorage.setItem('jarvi_chat_id', chatId);
+    }
+    // ... (procesar el stream de la respuesta como antes) ...
+}
+        
 </script>
 <head>
     <meta charset="UTF-8">
@@ -401,6 +203,7 @@
             100% { opacity: 0.4; }
         }
     </style>
+    
 </head>
 <body>
     <div id="header">
