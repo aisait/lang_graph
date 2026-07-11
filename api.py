@@ -1,6 +1,7 @@
 """
-api.py - Servidor FastAPI con endpoints /chat (para Odoo) y /api/chat/stream (para frontend).
-Unificación por fingerprint > número WhatsApp > thread_id.
+api.py - Servidor FastAPI con endpoints /chat y /api/chat/stream.
+SIEMPRE usa fingerprint como identificador principal. Si no hay fingerprint, se fuerza una nueva sesión.
+Nunca reutiliza sesiones sin fingerprint.
 run_name se actualiza al número de WhatsApp tan pronto como se detecta.
 Historial completo en Redis.
 Cumple con ISO/IEC 25010, 29119, 27001.
@@ -288,13 +289,14 @@ async def generar_resumen_con_llm(historial: list, contexto: dict) -> str:
     return response.content
 
 # =============================================================================
-# LÓGICA COMPARTIDA PARA AMBOS ENDPOINTS
+# LÓGICA COMPARTIDA CON CORRECCIÓN DEFINITIVA
 # =============================================================================
 async def process_chat_request(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
-    """Función auxiliar que contiene la lógica de unificación y generación de tokens."""
+    # 1. Extraer fingerprint
     fingerprint = chat_request.metadata.get("fingerprint") or http_request.headers.get("X-Fingerprint")
     thread_id_from_request = chat_request.thread_id
 
+    # 2. Extraer número de WhatsApp
     whatsapp_raw = extraer_whatsapp(chat_request.message)
     whatsapp_norm = None
     if whatsapp_raw:
@@ -302,48 +304,59 @@ async def process_chat_request(chat_request: ChatRequest, http_request: Request)
         if whatsapp_norm and whatsapp_norm != "Pendiente":
             logger.info(f"WhatsApp detectado: {whatsapp_norm}")
 
+    # 3. Determinar chat_id y origen
     chat_id = None
     origen = "desconocido"
+    thread_id_final = None
+    run_name = "Pendiente"
 
+    # --- PRIORIDAD ABSOLUTA: FINGERPRINT ---
     if fingerprint:
+        # Buscar si el fingerprint ya tiene un chat_id asociado
         chat_id_por_fingerprint = await obtener_chat_id_por_fingerprint(redis_client, fingerprint) if redis_client else None
         if chat_id_por_fingerprint:
             chat_id = chat_id_por_fingerprint
             origen = "pantalla"
             logger.info(f"Chat_id recuperado por fingerprint: {chat_id}")
         elif whatsapp_norm:
+            # Asociar el número al fingerprint
             chat_id = whatsapp_norm
             origen = "pantalla" if not chat_request.metadata.get("from_odoo") else "odoo"
             if redis_client:
                 await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
             logger.info(f"Chat_id asignado por número y asociado a fingerprint: {chat_id}")
         else:
+            # Crear nuevo chat_id a partir del fingerprint
             chat_id = fingerprint
             origen = "pantalla"
             if redis_client:
                 await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
             logger.info(f"Nuevo chat_id generado desde fingerprint: {chat_id}")
     elif whatsapp_norm:
+        # No hay fingerprint, pero hay número
         chat_id = whatsapp_norm
         origen = "pantalla" if not chat_request.metadata.get("from_odoo") else "odoo"
-        logger.info(f"Chat_id asignado por número WhatsApp: {chat_id}")
+        logger.info(f"Chat_id asignado por número WhatsApp (sin fingerprint): {chat_id}")
     else:
-        chat_id = thread_id_from_request
+        # NO hay fingerprint NI número: FORZAR NUEVA SESIÓN
+        nuevo_thread_id = str(uuid.uuid4())
+        chat_id = nuevo_thread_id
+        thread_id_final = nuevo_thread_id
         origen = "desconocido"
-        logger.warning(f"Sin fingerprint ni número, usando thread_id como chat_id: {chat_id}")
+        logger.info(f"Nueva sesión forzada (sin fingerprint ni número) con thread_id: {nuevo_thread_id}")
 
+    # 4. Obtener o crear sesión en Redis
     sesion_redis = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
-    thread_id_final = thread_id_from_request
-    run_name = "Pendiente"
-
     if sesion_redis:
-        thread_id_final = sesion_redis.get("thread_id", thread_id_final)
-        run_name = sesion_redis.get("whatsapp") or "Pendiente"
-        if origen == "desconocido":
-            origen = sesion_redis.get("origen", "desconocido")
+        # Si la sesión no tiene fingerprint y el fingerprint es nuevo, actualizar
         if fingerprint and not sesion_redis.get("fingerprint"):
             sesion_redis["fingerprint"] = fingerprint
             await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
+        if not thread_id_final:
+            thread_id_final = sesion_redis.get("thread_id", thread_id_from_request)
+        run_name = sesion_redis.get("whatsapp") or "Pendiente"
+        if origen == "desconocido":
+            origen = sesion_redis.get("origen", "desconocido")
         logger.info(f"Sesión recuperada para chat_id {chat_id}")
     else:
         if not thread_id_final:
@@ -374,9 +387,11 @@ async def process_chat_request(chat_request: ChatRequest, http_request: Request)
                 await guardar_whatsapp_redis(redis_client, whatsapp_norm, chat_id)
         logger.info(f"Nueva sesión creada para chat_id {chat_id}")
 
+    # 5. Actualizar run_name si hay número
     if whatsapp_norm:
         run_name = whatsapp_norm
 
+    # 6. Generar respuesta
     return StreamingResponse(
         generar_tokens(thread_id_final, chat_request.message, chat_id, run_name, whatsapp_norm, origen, fingerprint),
         media_type="text/event-stream",
@@ -461,10 +476,6 @@ async def acknowledge_dispatch(trace_id: str):
 # =============================================================================
 @app.post("/chat")
 async def chat_endpoint_original(request: ChatRequest, http_request: Request):
-    """
-    Endpoint original /chat. Mantiene la misma firma y comportamiento que la versión anterior.
-    Utiliza la lógica compartida process_chat_request.
-    """
     return await process_chat_request(request, http_request)
 
 # =============================================================================
@@ -472,9 +483,6 @@ async def chat_endpoint_original(request: ChatRequest, http_request: Request):
 # =============================================================================
 @app.post("/api/chat/stream")
 async def chat_endpoint_stream(request: ChatRequest, http_request: Request):
-    """
-    Endpoint específico para el frontend de depuración. Utiliza la misma lógica que /chat.
-    """
     return await process_chat_request(request, http_request)
 
 # ---------------------------------------------------------------------------
