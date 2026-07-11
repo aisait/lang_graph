@@ -377,6 +377,7 @@ async def chat_endpoint(request: ChatRequest, http_request: Request):
 
     origen = "desconocido"
     chat_id = None
+    run_name = "Pendiente"  # <-- Valor predeterminado para evitar UnboundLocalError
 
     # 3. Si viene chat_id, intentar usarlo directamente
     if chat_id_provided:
@@ -384,6 +385,7 @@ async def chat_endpoint(request: ChatRequest, http_request: Request):
         if sesion:
             chat_id = chat_id_provided
             origen = sesion.get("origen", "odoo")
+            run_name = sesion.get("whatsapp") or "Pendiente"
         else:
             # Si no existe, pero viene de Odoo, creamos la sesión con origen "odoo"
             pass
@@ -394,12 +396,16 @@ async def chat_endpoint(request: ChatRequest, http_request: Request):
         if chat_id_por_fingerprint:
             chat_id = chat_id_por_fingerprint
             origen = "pantalla"
+            sesion_existente = await obtener_sesion_redis(redis_client, chat_id)
+            if sesion_existente:
+                run_name = sesion_existente.get("whatsapp") or "Pendiente"
 
     # 5. Si aún no hay chat_id, crear uno nuevo (pantalla sin chat_id previo)
     if not chat_id:
         nuevo_thread_id = str(uuid.uuid4())
         chat_id = obtener_chat_id_desde_thread_id(nuevo_thread_id)
         origen = "pantalla"
+        run_name = "Pendiente"
         if fingerprint and redis_client:
             await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
         logger.info(f"Nuevo chat_id {chat_id} creado para pantalla con fingerprint {fingerprint}")
