@@ -24,7 +24,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph import StateGraph, START, END  # <-- Importar END aquí
+from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -308,7 +308,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if tipo:
             ctx["tipo_producto"] = tipo
             return {"contexto_tecnico": ctx}
-        pregunta = ("Para poder recomendarte los productos más adecuados, ¿estás buscando un **sistema completo** "
+        # Mensaje formal usando "usted"
+        pregunta = ("Para poder recomendarle los productos más adecuados, ¿está usted buscando un **sistema completo** "
                     "(incluye paneles, inversor, estructura, cableado, etc.) o un **producto específico** "
                     "(ej. solo paneles, solo inversor, baterías)?")
         new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
@@ -391,9 +392,13 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if ctx.get("productos_interes"):
             config["metadata"]["productos_tags"] = [p["tag"] for p in ctx["productos_interes"]]
 
+        # System prompt con instrucción de tratamiento formal
         prompt_sistema = SystemMessage(
             content=(
                 f"Eres Jarvi, Ingeniero de Preventa de AISA Solar. "
+                f"Siempre trata al cliente de **usted**, de manera formal y profesional. "
+                f"Utiliza el pronombre 'usted' y conjuga los verbos en tercera persona del singular. "
+                f"Evita cualquier tono coloquial o de amistad. Mantén una actitud respetuosa y cortés en todo momento.\n\n"
                 f"Responde con los datos auditados:\n"
                 f"- Ubicación: {ctx.get('ciudad', 'PENDIENTE')}\n"
                 f"- Distribuidora: {ctx.get('empresa_electrica', 'PENDIENTE')}\n"
@@ -430,22 +435,19 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder.add_node("append_case", append_case_node)
     graph_builder.add_node("tools", ToolNode([procesar_oportunidad_backend]))
 
-    # Definir flujo
-    graph_builder.add_edge(START, "clasificador")
-    graph_builder.add_edge("clasificador", "validador")
-    graph_builder.add_edge("validador", "definicion_producto")
-    graph_builder.add_edge("definicion_producto", "chatbot")
-
-    # Condicional desde chatbot: si hay llamada a herramientas, va a tools; si no, a append_case
     def my_tools_condition(state: AgentState):
         messages = state.get("messages", [])
         if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
             return "tools"
         return "append_case"
 
+    graph_builder.add_edge(START, "clasificador")
+    graph_builder.add_edge("clasificador", "validador")
+    graph_builder.add_edge("validador", "definicion_producto")
+    graph_builder.add_edge("definicion_producto", "chatbot")
     graph_builder.add_conditional_edges("chatbot", my_tools_condition)
     graph_builder.add_edge("tools", "append_case")
-    graph_builder.add_edge("append_case", END)  # Ahora END está definido
+    graph_builder.add_edge("append_case", END)
 
     return graph_builder.compile(checkpointer=checkpointer)
 
