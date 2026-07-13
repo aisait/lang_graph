@@ -1,6 +1,6 @@
 """
 api.py - Servidor FastAPI con trazabilidad única por thread_id.
-El caso (últimas 12 posiciones del thread_id) se añade al input del usuario y al output del asistente mediante el grafo.
+El caso (últimas 12 posiciones del thread_id) se añade al input del usuario y al output del asistente.
 chat_id solo se usa en webhook de Odoo.
 Vendedor asignado desde vendedores.json (solo email).
 Empresas eléctricas actualizadas.
@@ -227,7 +227,6 @@ async def guardar_sesion_redis(redis_client: Optional[redis.Redis], chat_id: str
         return
     try:
         key = f"session:{chat_id}"
-        # Serializar todos los valores a strings JSON si son dict o list
         data_serialized = {}
         for k, v in data.items():
             data_serialized[k] = serializar_para_redis(v)
@@ -245,7 +244,6 @@ async def obtener_sesion_redis(redis_client: Optional[redis.Redis], chat_id: str
         data = await redis_client.hgetall(key)
         if not data:
             return None
-        # Intentar deserializar campos que podrían ser JSON
         for field in ["contexto_tecnico", "pasos_completados", "productos_interes"]:
             if field in data and isinstance(data[field], str):
                 try:
@@ -264,7 +262,7 @@ async def eliminar_sesion_redis(redis_client: Optional[redis.Redis], chat_id: st
         except Exception as e:
             logger.error(f"Error eliminando sesión: {e}")
 
-# --- Funciones para el historial (ya estaban bien) ---
+# --- Funciones para el historial ---
 async def guardar_historial_redis(redis_client: Optional[redis.Redis], chat_id: str, input_msg: str, output_msg: str):
     if not redis_client:
         return
@@ -358,11 +356,12 @@ async def generar_resumen_con_llm(historial: list, contexto: dict) -> str:
     return response.content
 
 # =============================================================================
-# LÓGICA PARA FRONTEND (NO USA chat_id)
+# LÓGICA PARA FRONTEND (CORREGIDA – UNIFICACIÓN DE THREADS)
 # =============================================================================
 async def process_chat_frontend(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
+    # 1. Extraer datos de la petición
     fingerprint = chat_request.metadata.get("fingerprint") or http_request.headers.get("X-Fingerprint")
-    thread_id_from_request = chat_request.thread_id
+    thread_id_from_request = chat_request.thread_id  # Este es el UUID que envía el frontend (persistente)
 
     whatsapp_norm = None
     whatsapp_raw = extraer_whatsapp(chat_request.message)
@@ -371,54 +370,62 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
         if whatsapp_norm and whatsapp_norm != "Pendiente":
             logger.info(f"WhatsApp detectado: {whatsapp_norm}")
 
+    # 2. Determinar chat_id y thread_id final
     chat_id = None
     origen = "pantalla"
-    thread_id_final = None
+    thread_id_final = thread_id_from_request  # Por defecto, usamos el que envía el frontend
 
+    # 2.1. Si hay fingerprint, intentar recuperar chat_id asociado
     if fingerprint:
         chat_id_por_fingerprint = await obtener_chat_id_por_fingerprint(redis_client, fingerprint) if redis_client else None
         if chat_id_por_fingerprint:
             chat_id = chat_id_por_fingerprint
+            # Recuperar sesión para obtener thread_id
             sesion = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
             if sesion:
-                thread_id_final = sesion.get("thread_id")
-                if not thread_id_final:
-                    thread_id_final = str(uuid.uuid4())
-                    sesion["thread_id"] = thread_id_final
-                    await guardar_sesion_redis(redis_client, chat_id, sesion)
-            else:
-                thread_id_final = str(uuid.uuid4())
-                chat_id = fingerprint
-                await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
+                thread_id_guardado = sesion.get("thread_id")
+                if thread_id_guardado:
+                    thread_id_final = thread_id_guardado
+            logger.info(f"Chat_id recuperado por fingerprint: {chat_id}")
         else:
-            thread_id_final = str(uuid.uuid4())
-            chat_id = fingerprint
+            # Si no hay chat_id por fingerprint, usamos el thread_id de la request como chat_id
+            chat_id = thread_id_from_request
             await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
+            logger.info(f"Nuevo chat_id asignado por fingerprint: {chat_id}")
     else:
-        thread_id_final = str(uuid.uuid4())
-        chat_id = thread_id_final
-        logger.info(f"Nuevo thread forzado (sin fingerprint): {thread_id_final}")
+        # 2.2. Sin fingerprint: usar thread_id de la request como chat_id
+        chat_id = thread_id_from_request
+        logger.info(f"Chat_id asignado desde thread_id: {chat_id}")
 
+    # 2.3. Si se detectó número de WhatsApp, intentar buscar sesión por ese número
     if whatsapp_norm:
         sesion_por_numero = await obtener_sesion_redis(redis_client, whatsapp_norm) if redis_client else None
         if sesion_por_numero:
-            thread_id_final = sesion_por_numero.get("thread_id", thread_id_final)
-            chat_id = whatsapp_norm
-            origen = "pantalla"
-            logger.info(f"Sesión recuperada por número: {chat_id} con thread {thread_id_final}")
+            # Si existe sesión con ese número, reutilizar su thread_id
+            thread_id_guardado = sesion_por_numero.get("thread_id")
+            if thread_id_guardado:
+                thread_id_final = thread_id_guardado
+                chat_id = whatsapp_norm
+                logger.info(f"Sesión recuperada por número: {chat_id} con thread {thread_id_final}")
+                # Actualizar fingerprint si es necesario
+                if fingerprint and not sesion_por_numero.get("fingerprint"):
+                    sesion_por_numero["fingerprint"] = fingerprint
+                    await guardar_sesion_redis(redis_client, chat_id, sesion_por_numero)
         else:
+            # Si no hay sesión por número, asociar el número al chat_id actual
             if chat_id != whatsapp_norm:
-                sesion_antigua = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
-                if sesion_antigua:
-                    sesion_antigua["chat_id"] = whatsapp_norm
-                    sesion_antigua["thread_id"] = thread_id_final
-                    await guardar_sesion_redis(redis_client, whatsapp_norm, sesion_antigua)
+                # Mover la sesión actual al nuevo chat_id (número)
+                sesion_actual = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
+                if sesion_actual:
+                    sesion_actual["chat_id"] = whatsapp_norm
+                    await guardar_sesion_redis(redis_client, whatsapp_norm, sesion_actual)
                     await eliminar_sesion_redis(redis_client, chat_id)
                 chat_id = whatsapp_norm
                 if fingerprint:
                     await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
                 logger.info(f"Chat_id actualizado a número: {chat_id}")
 
+    # 3. Crear o actualizar sesión en Redis
     sesion_redis = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
     if not sesion_redis:
         data_inicial = {
@@ -447,9 +454,24 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
             if whatsapp_norm:
                 await guardar_whatsapp_redis(redis_client, whatsapp_norm, chat_id)
         logger.info(f"Sesión creada para chat_id {chat_id} con thread {thread_id_final}")
+    else:
+        # Si la sesión ya existe, actualizar thread_id si es diferente
+        if sesion_redis.get("thread_id") != thread_id_final:
+            sesion_redis["thread_id"] = thread_id_final
+            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
+            logger.info(f"Sesión actualizada: thread_id {thread_id_final} para chat_id {chat_id}")
+        # Actualizar fingerprint si no existe
+        if fingerprint and not sesion_redis.get("fingerprint"):
+            sesion_redis["fingerprint"] = fingerprint
+            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
+        # Actualizar número si no existe
+        if whatsapp_norm and not sesion_redis.get("whatsapp"):
+            sesion_redis["whatsapp"] = whatsapp_norm
+            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
 
     run_name = obtener_run_name(thread_id_final)
 
+    # 4. Generar respuesta
     return StreamingResponse(
         generar_tokens(thread_id_final, chat_request.message, chat_id, run_name, whatsapp_norm, origen, fingerprint),
         media_type="text/event-stream",
@@ -703,10 +725,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
         logger.info(f"Vendedor asignado: {vendedor_email}")
 
-    # Añadir caso al mensaje del usuario (para historial)
+    # Añadir caso al mensaje del usuario
     mensaje_con_caso = f"{mensaje} [Caso No. {caso}]"
 
-    # Construir mensajes del historial (ya tienen caso) + nuevo mensaje con caso
     messages = []
     for item in historial:
         messages.append(HumanMessage(content=item["input"]))
