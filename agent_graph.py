@@ -1,6 +1,7 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con 6 pasos y selección de productos.
 Incluye extracción forzada de nombre y número, detección de tipo de producto, y selección de hasta 5 productos.
+Al final, añade el caso (últimas 12 posiciones del thread_id) a la respuesta del asistente.
 """
 
 import os
@@ -327,13 +328,13 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 raw_num = num_match.group(0)
                 _, num_norm = normalizar_contacto("", raw_num, ctx.get("ciudad", ""))
                 if num_norm and num_norm != "Pendiente":
-                    ctx["whatsapp"] = num_norm  # Sobrescribe siempre
+                    ctx["whatsapp"] = num_norm
                     logger.info(f"Extraído número de WhatsApp: {num_norm}")
             name_match = re.search(r'(?:mi\s+nombre\s+es|nombre[:]\s*|me\s+llamo|soy\s+)([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)', ultimo_mensaje, re.IGNORECASE)
             if name_match:
                 raw_name = name_match.group(1).strip()
                 if raw_name and len(raw_name) > 1:
-                    ctx["nombre"] = raw_name  # Sobrescribe siempre
+                    ctx["nombre"] = raw_name
                     logger.info(f"Extraído nombre: {raw_name}")
 
         # Extracción con modelo estructurado (respaldo)
@@ -405,11 +406,30 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
+    # -------------------- Nodo: Añadir Caso a la Respuesta (NUEVO) --------------------
+    @observe_node(node_name="append_case")
+    def append_case_node(state: AgentState, config: RunnableConfig):
+        """
+        Añade el caso (últimas 12 posiciones del thread_id) al último mensaje del asistente.
+        Esto garantiza que LangSmith capture el caso en el output del grafo.
+        """
+        messages = state.get("messages", [])
+        caso = config.get("metadata", {}).get("caso", "000000000000")
+        if messages and isinstance(messages[-1], AIMessage):
+            # Si el último mensaje es del asistente, añadir el sufijo
+            last_msg = messages[-1]
+            if not last_msg.content.endswith(f"[Caso No. {caso}]"):
+                new_content = f"{last_msg.content} [Caso No. {caso}]"
+                # Reemplazar el mensaje
+                messages[-1] = AIMessage(content=new_content, additional_kwargs=last_msg.additional_kwargs)
+        return {"messages": messages}
+
     # -------------------- Ensamblaje del grafo --------------------
     graph_builder.add_node("clasificador", clasificador_topologia_node)
     graph_builder.add_node("validador", validador_geolocalizacion_node)
     graph_builder.add_node("definicion_producto", definicion_producto_node)
     graph_builder.add_node("chatbot", chatbot_node)
+    graph_builder.add_node("append_case", append_case_node)
     graph_builder.add_node("tools", ToolNode([procesar_oportunidad_backend]))
 
     graph_builder.add_edge(START, "clasificador")
@@ -418,6 +438,59 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder.add_edge("definicion_producto", "chatbot")
     graph_builder.add_conditional_edges("chatbot", tools_condition)
     graph_builder.add_edge("tools", "chatbot")
+    # Después del chatbot (o después de tools), añadir el caso
+    graph_builder.add_edge("chatbot", "append_case")
+    graph_builder.add_edge("append_case", "tools")  # si hay herramientas, se ejecutarán después; pero tools ya tiene edge a chatbot, entonces append_case debe ir después de todo
+    # Mejor: hacer que append_case sea el último nodo
+    # Reorganizar: después de chatbot, si no hay herramientas, ir a append_case; si hay herramientas, después de ellas ir a append_case
+    # Podemos simplificar: añadir append_case como nodo final y conectar tools a append_case, y chatbot a append_case también si no hay tools.
+    # Pero la condición de tools ya maneja eso. Mejor: conectar chatbot a append_case, y tools también a append_case.
+    # Sin embargo, con el conditional, si hay tools, va a tools, luego vuelve a chatbot, y luego podría ir a append_case.
+    # Para evitar complicaciones, podemos hacer que append_case sea el último nodo y conectar tanto chatbot como tools a append_case.
+    # En LangGraph, si un nodo tiene múltiples aristas, se ejecutan en orden de adición? No, se ejecutan secuencialmente según las aristas.
+    # Vamos a simplificar: no usamos aristas condicionales para append_case; en su lugar, después de que el flujo termine en chatbot (sin tools) o después de tools, lo añadimos.
+    # Podemos hacer que tools vaya a append_case, y chatbot vaya a append_case si no hay tools.
+    # O podemos poner append_case como nodo final y usar una arista condicional desde chatbot que decida si ir a tools o a append_case.
+    # Pero ya tenemos una condicional para tools. Entonces, modificamos: la condicional de chatbot va a tools o a END. No podemos añadir otro destino.
+    # La solución más limpia: después del nodo tools, añadimos una arista a append_case. Y también desde chatbot a append_case cuando no hay tools.
+    # Pero la condicional actual va a END. Cambiamos: chatbot -> tools_condition -> tools o END. Modificamos para que tools vaya a append_case y END también vaya a append_case? No, END es final.
+    # Podemos crear un nuevo nodo final y hacer que tanto chatbot (cuando no tools) como tools vayan a ese nodo final.
+    # Para simplificar, voy a añadir una arista desde chatbot a append_case solo cuando no hay tools, y desde tools a append_case.
+    # Para la condicional, la condición va a tools o a END. Cambiamos END por append_case, y luego append_case va a END.
+    # Así, el flujo siempre pasa por append_case antes de terminar.
+
+    # Reemplazar la condición de tools para que vaya a "tools" o a "append_case"
+    # Y luego desde "append_case" ir a END.
+
+    # Reconstruir edges:
+    # START -> clasificador -> validador -> definicion_producto -> chatbot
+    # chatbot -> tools_condition (tools o append_case)
+    # tools -> append_case
+    # append_case -> END
+
+    # Para ello, necesitamos definir una nueva función de condición que retorne "tools" o "append_case"
+    # O modificar tools_condition para que retorne "tools" o "append_case".
+    # Pero tools_condition de LangGraph retorna "tools" o END. Podemos crear nuestra propia condición.
+    # Implementemos una función `my_tools_condition` que retorne "tools" si hay llamadas a herramientas, sino "append_case".
+
+    def my_tools_condition(state: AgentState):
+        messages = state.get("messages", [])
+        if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
+            return "tools"
+        return "append_case"
+
+    # Usamos esta condición en lugar de tools_condition
+    # Pero también necesitamos que tools vaya a append_case.
+    # Entonces edges:
+    graph_builder.add_conditional_edges("chatbot", my_tools_condition)
+    graph_builder.add_edge("tools", "append_case")
+    graph_builder.add_edge("append_case", END)
+
+    # Nota: definimos END como el final del grafo.
+    # Además, debemos registrar END.
+
+    from langgraph.graph import END
+    # Agregar END al grafo (ya está definido en LangGraph).
 
     return graph_builder.compile(checkpointer=checkpointer)
 
