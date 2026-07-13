@@ -1,5 +1,6 @@
 """
 api.py - Servidor FastAPI con trazabilidad única por thread_id.
+El caso (últimas 12 posiciones del thread_id) se añade al input del usuario y al output del asistente mediante el grafo.
 chat_id solo se usa en webhook de Odoo.
 Vendedor asignado desde vendedores.json (solo email).
 Empresas eléctricas actualizadas.
@@ -71,7 +72,6 @@ def taxonomy_error(exc: Exception) -> str:
 # FUNCIONES DE UNIFICACIÓN Y EXTRACCIÓN
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
-    """Extrae y normaliza un número de WhatsApp del mensaje."""
     if not mensaje:
         return None
     match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', mensaje)
@@ -88,7 +88,6 @@ def extraer_whatsapp(mensaje: str) -> str | None:
     return None
 
 def extraer_nombre(mensaje: str) -> str | None:
-    """Extrae el nombre del usuario de un mensaje."""
     patrones = [
         r'(?:soy|me llamo|mi nombre es)\s*([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)',
         r'nombre:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)',
@@ -103,7 +102,6 @@ def extraer_nombre(mensaje: str) -> str | None:
     return None
 
 def extraer_ubicacion(mensaje: str) -> tuple:
-    """Extrae (departamento, municipio) usando fuzzy matching."""
     from ubicacion import buscar_ubicacion
     resultado = buscar_ubicacion(mensaje)
     if resultado:
@@ -111,14 +109,12 @@ def extraer_ubicacion(mensaje: str) -> tuple:
     return None, None
 
 def extraer_consumo(mensaje: str) -> str | None:
-    """Extrae el consumo en kWh si se menciona."""
     match = re.search(r'consumo\s*(?:de)?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:kWh|kw|kwh)', mensaje, re.IGNORECASE)
     if match:
         return f"{match.group(1)} kWh"
     return None
 
 def extraer_empresa_electrica(mensaje: str) -> str | None:
-    """Extrae la empresa eléctrica de la lista completa."""
     empresas = [
         "EEGSA", "DEOCSA", "DEORSA",
         "EEM Zacapa", "EEM Gualán", "EEM San Pedro Pinula", "EEM Jalapa",
@@ -134,7 +130,6 @@ def extraer_empresa_electrica(mensaje: str) -> str | None:
     return None
 
 def extraer_definicion_necesidad(mensaje: str) -> str | None:
-    """Extrae la necesidad específica (resumida en 35 palabras)."""
     match = re.search(r'(?:necesito|quiero|deseo|estoy interesado en|busco)\s*(.+?)(?:[\.!?]|$)', mensaje, re.IGNORECASE)
     if match:
         texto = match.group(1).strip()
@@ -143,18 +138,15 @@ def extraer_definicion_necesidad(mensaje: str) -> str | None:
     return None
 
 def obtener_caso(thread_id: str) -> str:
-    """Retorna las últimas 12 posiciones del thread_id (sin guiones)."""
     return thread_id.replace('-', '')[-12:] if thread_id else "000000000000"
 
 def obtener_run_name(thread_id: str) -> str:
-    """El run_name es el caso (últimas 12 posiciones)."""
     return obtener_caso(thread_id)
 
 # =============================================================================
 # FUNCIÓN PARA ASIGNAR VENDEDOR DESDE JSON
 # =============================================================================
 def asignar_vendedor(productos: list) -> str:
-    """Asigna un vendedor (email) basado en los productos seleccionados."""
     try:
         with open("vendedores.json", "r", encoding="utf-8") as f:
             vendedores = json.load(f)
@@ -170,7 +162,6 @@ def asignar_vendedor(productos: list) -> str:
 # FUNCIÓN PARA SANEAR DATABASE_URL
 # =============================================================================
 def sanear_db_url(db_url: str) -> str:
-    """Elimina parámetros no soportados por psycopg3."""
     try:
         parsed = urlparse(db_url)
         query = parse_qs(parsed.query)
@@ -215,7 +206,7 @@ async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict, f
         return False
 
 # =============================================================================
-# FUNCIONES DE BUFFER EN REDIS (SESIONES E HISTORIAL)
+# FUNCIONES DE BUFFER EN REDIS
 # =============================================================================
 REDIS_TTL = int(os.getenv("REDIS_TTL", 604800))  # 7 días
 HISTORIAL_LIMITE = 64
@@ -373,11 +364,9 @@ async def generar_resumen_con_llm(historial: list, contexto: dict) -> str:
 # LÓGICA PARA FRONTEND (NO USA chat_id)
 # =============================================================================
 async def process_chat_frontend(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
-    """Endpoint /chat y /api/chat/stream: no usa chat_id, solo fingerprint y thread_id."""
     fingerprint = chat_request.metadata.get("fingerprint") or http_request.headers.get("X-Fingerprint")
     thread_id_from_request = chat_request.thread_id
 
-    # 1. Extraer número de WhatsApp
     whatsapp_norm = None
     whatsapp_raw = extraer_whatsapp(chat_request.message)
     if whatsapp_raw:
@@ -385,7 +374,6 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
         if whatsapp_norm and whatsapp_norm != "Pendiente":
             logger.info(f"WhatsApp detectado: {whatsapp_norm}")
 
-    # 2. Determinar chat_id (NO se usa chat_id de la request)
     chat_id = None
     origen = "pantalla"
     thread_id_final = None
@@ -414,7 +402,6 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
         chat_id = thread_id_final
         logger.info(f"Nuevo thread forzado (sin fingerprint): {thread_id_final}")
 
-    # Si hay número de WhatsApp, usarlo como chat_id pero mantener thread_id
     if whatsapp_norm:
         sesion_por_numero = await obtener_sesion_redis(redis_client, whatsapp_norm) if redis_client else None
         if sesion_por_numero:
@@ -435,7 +422,6 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
                     await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
                 logger.info(f"Chat_id actualizado a número: {chat_id}")
 
-    # 3. Asegurar sesión en Redis
     sesion_redis = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
     if not sesion_redis:
         data_inicial = {
@@ -659,7 +645,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     if not run_name:
         run_name = caso
     config["run_name"] = run_name
-    config["metadata"]["caso"] = caso
+    config["metadata"]["caso"] = caso   # <-- El grafo usará esto para añadir el caso al output
 
     sesion_redis = None
     historial = []
@@ -671,6 +657,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         else:
             logger.warning(f"No hay sesión en Redis para chat_id {chat_id}")
 
+    # Extraer metadatos del mensaje y actualizar sesión
     nombre = extraer_nombre(mensaje)
     if nombre and (not sesion_redis or not sesion_redis.get("nombre") or sesion_redis.get("nombre") == "Pendiente"):
         if sesion_redis:
@@ -719,7 +706,10 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
         logger.info(f"Vendedor asignado: {vendedor_email}")
 
+    # Añadir caso al mensaje del usuario (para historial)
     mensaje_con_caso = f"{mensaje} [Caso No. {caso}]"
+
+    # Construir mensajes del historial (ya tienen caso) + nuevo mensaje con caso
     messages = []
     for item in historial:
         messages.append(HumanMessage(content=item["input"]))
@@ -732,24 +722,27 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     }
 
     async with locks[thread_id]:
+        # Ejecutar el grafo (el nodo append_case añadirá el caso al output)
         resultado = await graph.ainvoke(estado_inicial, config=config)
         ctx = resultado.get("contexto_tecnico", {})
         logger.info(f"Contexto final: {ctx}")
 
+        # El último mensaje de la lista ya debería tener el caso
         respuesta_final = ""
         for msg in reversed(resultado.get("messages", [])):
             if isinstance(msg, AIMessage):
                 respuesta_final = msg.content
                 break
 
-        if respuesta_final:
-            respuesta_final_con_caso = f"{respuesta_final} [Caso No. {caso}]"
-        else:
-            respuesta_final_con_caso = f"No se pudo generar respuesta. [Caso No. {caso}]"
+        # Si por alguna razón no tiene el caso, lo añadimos (fallback)
+        if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
+            respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
-        if redis_client and respuesta_final_con_caso:
-            await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final_con_caso)
+        # Guardar historial en Redis (input y output con caso)
+        if redis_client and respuesta_final:
+            await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
 
+        # Actualizar sesión con el contexto del grafo y metadatos
         if redis_client:
             if not sesion_redis:
                 sesion_redis = {}
@@ -801,13 +794,15 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                 await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
                 logger.info(f"Resumen guardado en PostgreSQL para chat_id {chat_id}")
 
-        if respuesta_final_con_caso:
-            tokens = respuesta_final_con_caso.split()
+        # Enviar respuesta en SSE (ya tiene el caso)
+        if respuesta_final:
+            tokens = respuesta_final.split()
             for i, token in enumerate(tokens):
                 yield f"data: {json.dumps({'token': token + (' ' if i < len(tokens)-1 else '')})}\n\n"
         else:
             yield f"data: {json.dumps({'token': 'No se pudo generar respuesta.'})}\n\n"
 
+        # Enviar contexto técnico con todos los campos (incluyendo caso)
         ctx_para_envio = ctx.copy()
         ctx_para_envio.update({
             "chat_id": chat_id,
