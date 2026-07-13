@@ -206,36 +206,32 @@ async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict, f
         return False
 
 # =============================================================================
-# FUNCIONES DE BUFFER EN REDIS
+# FUNCIONES DE BUFFER EN REDIS (CORREGIDAS)
 # =============================================================================
 REDIS_TTL = int(os.getenv("REDIS_TTL", 604800))  # 7 días
 HISTORIAL_LIMITE = 64
 
-def sanear_datos_redis(datos: dict) -> dict:
-    for key, value in list(datos.items()):
-        if value is None:
-            if key in ["thread_id", "whatsapp", "nombre", "vendedor", "departamento", "municipio", "topologia", "fase_actual", "ultimo_mensaje", "tipo_producto", "origen", "fingerprint"]:
-                datos[key] = ""
-            elif key in ["contexto_tecnico", "pasos_completados", "productos_interes"]:
-                datos[key] = [] if key == "pasos_completados" else {}
-            else:
-                datos[key] = ""
-        elif isinstance(value, dict):
-            datos[key] = sanear_datos_redis(value)
-        elif isinstance(value, list):
-            datos[key] = [sanear_datos_redis(v) if isinstance(v, dict) else v for v in value]
-    return datos
+def serializar_para_redis(valor):
+    """Convierte cualquier valor a un tipo aceptable por Redis (str, int, float)."""
+    if isinstance(valor, (dict, list)):
+        return json.dumps(valor, ensure_ascii=False)
+    elif isinstance(valor, bool):
+        return str(valor).lower()
+    elif valor is None:
+        return ""
+    else:
+        return str(valor)
 
 async def guardar_sesion_redis(redis_client: Optional[redis.Redis], chat_id: str, data: dict):
     if not redis_client:
         return
     try:
         key = f"session:{chat_id}"
-        data_clean = sanear_datos_redis(data.copy())
-        for field in ["contexto_tecnico", "pasos_completados"]:
-            if field in data_clean and isinstance(data_clean[field], (dict, list)):
-                data_clean[field] = json.dumps(data_clean[field])
-        await redis_client.hset(key, mapping=data_clean)
+        # Serializar todos los valores a strings JSON si son dict o list
+        data_serialized = {}
+        for k, v in data.items():
+            data_serialized[k] = serializar_para_redis(v)
+        await redis_client.hset(key, mapping=data_serialized)
         await redis_client.expire(key, REDIS_TTL)
         logger.info(f"Sesión guardada para chat_id {chat_id}")
     except Exception as e:
@@ -249,12 +245,13 @@ async def obtener_sesion_redis(redis_client: Optional[redis.Redis], chat_id: str
         data = await redis_client.hgetall(key)
         if not data:
             return None
-        for field in ["contexto_tecnico", "pasos_completados"]:
+        # Intentar deserializar campos que podrían ser JSON
+        for field in ["contexto_tecnico", "pasos_completados", "productos_interes"]:
             if field in data and isinstance(data[field], str):
                 try:
                     data[field] = json.loads(data[field])
                 except:
-                    data[field] = {} if field == "contexto_tecnico" else []
+                    pass
         return data
     except Exception as e:
         logger.error(f"Error obteniendo sesión: {e}")
@@ -267,7 +264,7 @@ async def eliminar_sesion_redis(redis_client: Optional[redis.Redis], chat_id: st
         except Exception as e:
             logger.error(f"Error eliminando sesión: {e}")
 
-# --- Funciones para el historial ---
+# --- Funciones para el historial (ya estaban bien) ---
 async def guardar_historial_redis(redis_client: Optional[redis.Redis], chat_id: str, input_msg: str, output_msg: str):
     if not redis_client:
         return
@@ -645,7 +642,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     if not run_name:
         run_name = caso
     config["run_name"] = run_name
-    config["metadata"]["caso"] = caso   # <-- El grafo usará esto para añadir el caso al output
+    config["metadata"]["caso"] = caso
 
     sesion_redis = None
     historial = []
@@ -722,27 +719,22 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     }
 
     async with locks[thread_id]:
-        # Ejecutar el grafo (el nodo append_case añadirá el caso al output)
         resultado = await graph.ainvoke(estado_inicial, config=config)
         ctx = resultado.get("contexto_tecnico", {})
         logger.info(f"Contexto final: {ctx}")
 
-        # El último mensaje de la lista ya debería tener el caso
         respuesta_final = ""
         for msg in reversed(resultado.get("messages", [])):
             if isinstance(msg, AIMessage):
                 respuesta_final = msg.content
                 break
 
-        # Si por alguna razón no tiene el caso, lo añadimos (fallback)
         if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
             respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
-        # Guardar historial en Redis (input y output con caso)
         if redis_client and respuesta_final:
             await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
 
-        # Actualizar sesión con el contexto del grafo y metadatos
         if redis_client:
             if not sesion_redis:
                 sesion_redis = {}
@@ -794,7 +786,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                 await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
                 logger.info(f"Resumen guardado en PostgreSQL para chat_id {chat_id}")
 
-        # Enviar respuesta en SSE (ya tiene el caso)
         if respuesta_final:
             tokens = respuesta_final.split()
             for i, token in enumerate(tokens):
@@ -802,7 +793,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         else:
             yield f"data: {json.dumps({'token': 'No se pudo generar respuesta.'})}\n\n"
 
-        # Enviar contexto técnico con todos los campos (incluyendo caso)
         ctx_para_envio = ctx.copy()
         ctx_para_envio.update({
             "chat_id": chat_id,
