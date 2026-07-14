@@ -36,7 +36,7 @@ from ontology import obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 
 logger = logging.getLogger(__name__)
-# FORCE_REBUILD_2026-07-14
+# FORCE_REBUILD_2026-07-14 15:40
 # ---------------------------------------------------------------------------
 # Esquemas adicionales
 # ---------------------------------------------------------------------------
