@@ -21,7 +21,7 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import psutil
 import asyncpg
 import redis.asyncio as redis
-from fastapi import FastAPI, HTTPException, Depends, Security, Request
+from fastapi import FastAPI, HTTPException, Depends, Security, Request, APIRouter
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
 from contextlib import asynccontextmanager, AsyncExitStack
@@ -603,13 +603,17 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     logger.info("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.04",
-              lifespan=lifespan, dependencies=[Depends(validar_api_key)])
+# =============================================================================
+# CREACIÓN DE LA APLICACIÓN FASTAPI Y ROUTERS
+# =============================================================================
 
-# ---------------------------------------------------------------------------
-# ENDPOINT DE DEPURACIÓN PARA LISTAR RUTAS – NUEVO
-# ---------------------------------------------------------------------------
-@app.get("/debug/routes")
+# Se crea la aplicación SIN dependencia global de autenticación
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.04", lifespan=lifespan)
+
+# Router para rutas públicas (no requieren autenticación)
+public_router = APIRouter()
+
+@public_router.get("/debug/routes")
 async def list_routes():
     """
     Endpoint de depuración que devuelve todas las rutas registradas en la API.
@@ -618,8 +622,64 @@ async def list_routes():
     routes = [{"path": route.path, "methods": list(route.methods)} for route in app.routes]
     return {"routes": routes}
 
+@public_router.post("/ack/{trace_id}")
+async def acknowledge_dispatch(trace_id: str):
+    return {"status": "ACK received", "trace_id": trace_id}
+
+# Router para rutas protegidas (requieren autenticación)
+protected_router = APIRouter(dependencies=[Depends(validar_api_key)])
+
+@protected_router.post("/chat")
+async def chat_endpoint_original(request: ChatRequest, http_request: Request):
+    return await process_chat_frontend(request, http_request)
+
+@protected_router.post("/api/chat/stream")
+async def chat_endpoint_stream(request: ChatRequest, http_request: Request):
+    return await process_chat_frontend(request, http_request)
+
+@protected_router.post("/webhook/whatsapp")
+async def webhook_whatsapp(payload: dict):
+    return await process_webhook_whatsapp(payload)
+
+@protected_router.get("/studio/graph")
+async def get_graph_schema():
+    """
+    Devuelve el esquema del grafo en formato JSON para que LangSmith Studio
+    pueda visualizarlo y depurarlo sin necesidad de Agent Server.
+    """
+    global graph
+    if graph is None:
+        raise HTTPException(status_code=503, detail="Grafo no inicializado aún")
+    try:
+        graph_dict = graph.get_graph().to_dict()
+        return graph_dict
+    except AttributeError:
+        # Fallback: construir manualmente (poco probable en versiones modernas)
+        raise HTTPException(status_code=500, detail="No se pudo serializar el grafo")
+
+@protected_router.post("/stt")
+async def speech_to_text(request: AudioRequest):
+    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar Whisper")
+
+@protected_router.post("/tts")
+async def text_to_speech(request: TTSRequest):
+    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar TTS")
+
+@protected_router.post("/vision/analyze")
+async def analizar_factura(request: ImageRequest):
+    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar visión")
+
+@protected_router.post("/products")
+async def consultar_productos(topologia: str = "on-grid"):
+    raise HTTPException(status_code=501, detail="No implementado – pendiente exponer catálogo")
+
+# Incluir los routers en la aplicación
+app.include_router(public_router)
+app.include_router(protected_router)
+
 # ---------------------------------------------------------------------------
-# Middleware de telemetría
+# Middleware de telemetría (se mantiene igual, pero se coloca DESPUÉS de incluir los routers
+# para que las rutas de los routers también pasen por el middleware)
 # ---------------------------------------------------------------------------
 @app.middleware("http")
 async def telemetry_middleware(request: Request, call_next):
@@ -648,27 +708,9 @@ async def telemetry_middleware(request: Request, call_next):
         )
         raise
 
-@app.post("/ack/{trace_id}")
-async def acknowledge_dispatch(trace_id: str):
-    return {"status": "ACK received", "trace_id": trace_id}
-
-# =============================================================================
-# ENDPOINTS
-# =============================================================================
-@app.post("/chat")
-async def chat_endpoint_original(request: ChatRequest, http_request: Request):
-    return await process_chat_frontend(request, http_request)
-
-@app.post("/api/chat/stream")
-async def chat_endpoint_stream(request: ChatRequest, http_request: Request):
-    return await process_chat_frontend(request, http_request)
-
-@app.post("/webhook/whatsapp")
-async def webhook_whatsapp(payload: dict):
-    return await process_webhook_whatsapp(payload)
-
 # ---------------------------------------------------------------------------
 # Función de generación de tokens (con historial completo y extracción de metadatos)
+# (Se mantiene igual, no se mueve a router porque es una función auxiliar)
 # ---------------------------------------------------------------------------
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido", fingerprint: str | None = None) -> AsyncGenerator[str, None]:
@@ -858,41 +900,3 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             "resumen": sesion_redis.get("resumen", "") if sesion_redis else ""
         })
         yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
-
-# ---------------------------------------------------------------------------
-# ENDPOINT PARA LANGGRAPH STUDIO (External Graph) – NUEVO
-# ---------------------------------------------------------------------------
-@app.get("/studio/graph", dependencies=[Depends(validar_api_key)])
-async def get_graph_schema():
-    """
-    Devuelve el esquema del grafo en formato JSON para que LangSmith Studio
-    pueda visualizarlo y depurarlo sin necesidad de Agent Server.
-    """
-    global graph
-    if graph is None:
-        raise HTTPException(status_code=503, detail="Grafo no inicializado aún")
-    try:
-        graph_dict = graph.get_graph().to_dict()
-        return graph_dict
-    except AttributeError:
-        # Fallback: construir manualmente (poco probable en versiones modernas)
-        raise HTTPException(status_code=500, detail="No se pudo serializar el grafo")
-
-# ---------------------------------------------------------------------------
-# Endpoints auxiliares (no implementados)
-# ---------------------------------------------------------------------------
-@app.post("/stt")
-async def speech_to_text(request: AudioRequest):
-    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar Whisper")
-
-@app.post("/tts")
-async def text_to_speech(request: TTSRequest):
-    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar TTS")
-
-@app.post("/vision/analyze")
-async def analizar_factura(request: ImageRequest):
-    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar visión")
-
-@app.post("/products")
-async def consultar_productos(topologia: str = "on-grid"):
-    raise HTTPException(status_code=501, detail="No implementado – pendiente exponer catálogo")
