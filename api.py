@@ -607,6 +607,18 @@ app = FastAPI(title="JARVI 2.0 API Central", version="2.0.04",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # ---------------------------------------------------------------------------
+# ENDPOINT DE DEPURACIÓN PARA LISTAR RUTAS – NUEVO
+# ---------------------------------------------------------------------------
+@app.get("/debug/routes")
+async def list_routes():
+    """
+    Endpoint de depuración que devuelve todas las rutas registradas en la API.
+    Útil para verificar que los endpoints se están cargando correctamente.
+    """
+    routes = [{"path": route.path, "methods": list(route.methods)} for route in app.routes]
+    return {"routes": routes}
+
+# ---------------------------------------------------------------------------
 # Middleware de telemetría
 # ---------------------------------------------------------------------------
 @app.middleware("http")
