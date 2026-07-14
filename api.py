@@ -651,18 +651,20 @@ async def get_graph_schema():
     if graph is None:
         raise HTTPException(status_code=503, detail="Grafo no inicializado aún")
     try:
-        # Intentar obtener la representación del grafo
         graph_obj = graph.get_graph()
         if hasattr(graph_obj, "to_dict"):
             graph_dict = graph_obj.to_dict()
         elif hasattr(graph_obj, "to_json"):
-            import json
-            graph_dict = json.loads(graph_obj.to_json())
+            result = graph_obj.to_json()
+            if isinstance(result, str):
+                graph_dict = json.loads(result)
+            else:
+                # Ya es un dict/list
+                graph_dict = result
         else:
             raise HTTPException(status_code=500, detail="El grafo no soporta serialización")
         return graph_dict
     except Exception as e:
-        # Si todo falla, mostrar el error real para depuración
         raise HTTPException(status_code=500, detail=f"No se pudo serializar el grafo: {str(e)}")
 
 @protected_router.post("/stt")
