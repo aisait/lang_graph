@@ -2,16 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Dependencias del sistema (mínimas)
+# Dependencias del sistema
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements.txt (si es necesario, pero usaremos versiones fijas)
+# Copiar requirements.txt (opcional, pero lo mantenemos por si se necesita)
 COPY requirements.txt .
 
-# Instalación de todas las dependencias en un solo paso (versiones fijas y compatibles)
-# Esto evita conflictos y reduce el tiempo de resolución
+# Instalación de todas las dependencias en un solo paso
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
         fastapi==0.115.0 \
@@ -41,10 +40,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
         langgraph-checkpoint-postgres==1.0.4 \
         langchain-core==0.2.43 \
         redis==5.0.0 \
-        "langgraph-cli[inmem]>=0.4.31" \
+        langgraph-cli[inmem]>=0.4.31 \
         "langsmith<0.2.0"
 
-# Copiar el código fuente
+# Copiar el resto del código fuente
 COPY . .
 
 # Puerto
