@@ -18,10 +18,11 @@ Flask>=2.2.0                    # Para servicio de depuración (cliente-debug)
 # ---------------------------------------------------------------------
 langchain>=0.2.6,<0.3.0         # Framework base para agentes
 langgraph>=0.2.56,<0.3.0        # Orquestación de grafos de estados
-langchain-openai>=0.1.9         # Integración con modelos OpenAI
+langgraph==0.2.61
+langchain-openai==0.1.25        # Integración con modelos OpenAI
 openai>=1.50.0                  # Cliente oficial de OpenAI (STT, TTS, Vision)
 langchain-community>=0.2.6      # Utilidades comunitarias (herramientas, etc.)
-langgraph-cli[inmem]
+langgraph-cli[inmem]==0.1.18
 
 # ---------------------------------------------------------------------
 # Persistencia y Base de Datos (ISO 25010: Fiabilidad, Mantenibilidad)
@@ -54,7 +55,7 @@ rapidfuzz>=3.0.0                # Fuzzy matching eficiente
 # ---------------------------------------------------------------------
 langgraph-checkpoint>=1.0.0      # Persistencia de estados del grafo
 langgraph-checkpoint-postgres>=3.0.0 # Adaptador para PostgreSQL
-langchain-core>=0.2.0            # Núcleo de LangChain (dependencia base)
+langchain-core==0.2.38            # Núcleo de LangChain (dependencia base)
 
 # =============================================================================
 # Nota: langgraph-api y langgraph-cli NO se incluyen porque son específicos
