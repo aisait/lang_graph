@@ -2,24 +2,26 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Dependencias del sistema necesarias para psycopg y otras compilaciones
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Copiar requirements.txt primero para aprovechar caché de Docker
 COPY requirements.txt .
+# Instalar dependencias del proyecto (incluye langchain, fastapi, etc.)
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir \
-        langchain-core==0.2.38 \
-        langchain-openai==0.1.24 \
-        langgraph==0.2.56 \
-        langgraph-cli[inmem]==0.1.18 \
-        langgraph-runtime-inmem==0.1.18 \
-        langgraph-api==0.1.18 \
-        langgraph-checkpoint==1.0.0
+    pip install --no-cache-dir -r requirements.txt
 
+# Instalar LangGraph CLI y sus dependencias (versiones compatibles comprobadas)
+RUN pip install --no-cache-dir \
+    langgraph-cli[inmem]>=0.4.31
+
+# Copiar el resto del código fuente (incluye studio_graph.py, langgraph.json, etc.)
 COPY . .
 
+# Puerto de escucha (lo asigna Railway automáticamente)
 ENV PORT=8080
 EXPOSE 8080
 
+# Comando de inicio: modo desarrollo con recarga automática
 CMD ["sh", "-c", "langgraph dev --host 0.0.0.0 --port ${PORT:-8080} --no-browser"]
