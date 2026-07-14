@@ -848,6 +848,25 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
 
 # ---------------------------------------------------------------------------
+# ENDPOINT PARA LANGGRAPH STUDIO (External Graph) – NUEVO
+# ---------------------------------------------------------------------------
+@app.get("/studio/graph", dependencies=[Depends(validar_api_key)])
+async def get_graph_schema():
+    """
+    Devuelve el esquema del grafo en formato JSON para que LangSmith Studio
+    pueda visualizarlo y depurarlo sin necesidad de Agent Server.
+    """
+    global graph
+    if graph is None:
+        raise HTTPException(status_code=503, detail="Grafo no inicializado aún")
+    try:
+        graph_dict = graph.get_graph().to_dict()
+        return graph_dict
+    except AttributeError:
+        # Fallback: construir manualmente (poco probable en versiones modernas)
+        raise HTTPException(status_code=500, detail="No se pudo serializar el grafo")
+
+# ---------------------------------------------------------------------------
 # Endpoints auxiliares (no implementados)
 # ---------------------------------------------------------------------------
 @app.post("/stt")
