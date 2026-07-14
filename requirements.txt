@@ -3,12 +3,15 @@
 # Dependencias del servidor FastAPI, el grafo LangGraph y los módulos de
 # persistencia, telemetría y servicios externos.
 # Cumple con ISO/IEC 25010 (Fiabilidad, Eficiencia) e ISO/IEC 29119 (Pruebas).
+#
+# TODAS LAS VERSIONES HAN SIDO FIJADAS PARA GARANTIZAR COMPATIBILIDAD
+# CON LANGGRAPH 0.2.61 Y LANGCORE 0.2.43.
 # =============================================================================
 
 # ---------------------------------------------------------------------
 # Frameworks Web (ISO 25010: Adecuación funcional, Usabilidad)
 # ---------------------------------------------------------------------
-fastapi>=0.115.0                # Compatible con starlette>=0.38.6 (evita conflicto)
+fastapi>=0.115.0                # Compatible con starlette>=0.38.6
 uvicorn[standard]>=0.30.1       # Servidor ASGI de alto rendimiento
 python-multipart>=0.0.9         # Soporte para formularios multipart
 Flask>=2.2.0                    # Para servicio de depuración (cliente-debug)
@@ -16,21 +19,20 @@ Flask>=2.2.0                    # Para servicio de depuración (cliente-debug)
 # ---------------------------------------------------------------------
 # Core Agéntico (ISO 25010: Eficiencia de desempeño, Fiabilidad)
 # ---------------------------------------------------------------------
-langchain>=0.2.6,<0.3.0         # Framework base para agentes
-langgraph>=0.2.56,<0.3.0        # Orquestación de grafos de estados
-langgraph==0.2.61
-langchain-openai==0.1.25        # Integración con modelos OpenAI
-openai>=1.50.0                  # Cliente oficial de OpenAI (STT, TTS, Vision)
-langchain-community>=0.2.6      # Utilidades comunitarias (herramientas, etc.)
-langgraph-cli[inmem]==0.1.18
+langchain==0.2.17               # Framework base (compatible con core 0.2.43)
+langgraph==0.2.61               # Orquestación de grafos de estados
+langchain-openai==0.1.25        # Integración con OpenAI (compatible con core 0.2.43)
+openai>=1.50.0                  # Cliente oficial de OpenAI
+langchain-community==0.2.19     # Utilidades comunitarias (compatible con core 0.2.43)
+langgraph-cli[inmem]==0.1.18    # CLI para Agent Server (versión estable)
 
 # ---------------------------------------------------------------------
 # Persistencia y Base de Datos (ISO 25010: Fiabilidad, Mantenibilidad)
 # ---------------------------------------------------------------------
-psycopg2-binary>=2.9.9          # Driver síncrono para PostgreSQL (SQLAlchemy)
+psycopg2-binary>=2.9.9          # Driver síncrono para PostgreSQL
 psycopg[binary]>=3.1.0          # Driver asíncrono para LangGraph (v3)
 sqlalchemy>=2.0.31              # ORM para auditoría y tablas auxiliares
-asyncpg>=0.29.0                 # Driver asíncrono nativo para operaciones rápidas
+asyncpg>=0.29.0                 # Driver asíncrono nativo
 
 # ---------------------------------------------------------------------
 # Utilidades y Servicios Externos (ISO 25010: Seguridad, Compatibilidad)
@@ -38,14 +40,14 @@ asyncpg>=0.29.0                 # Driver asíncrono nativo para operaciones ráp
 requests>=2.32.3                # Cliente HTTP para webhooks y APIs externas
 python-dotenv>=1.0.1            # Carga de variables de entorno
 pydantic>=2.7.4                 # Validación de datos (esquemas de entrada/salida)
-httpx>=0.27.2                   # Cliente HTTP asíncrono (para pruebas internas)
+httpx>=0.27.2                   # Cliente HTTP asíncrono
 psutil>=5.9.8                   # Monitoreo de recursos (CPU, memoria)
 google-auth>=2.30.0             # Autenticación OAuth2 para Gmail API
 google-auth-oauthlib>=1.2.0     # Flujos OAuth2 para Gmail
-google-api-python-client>=2.198.0 # Cliente para Gmail API (envío de correos)
+google-api-python-client>=2.198.0 # Cliente para Gmail API
 
 # ---------------------------------------------------------------------
-# Normalización de texto y fuzzy matching (NUEVO)
+# Normalización de texto y fuzzy matching
 # ---------------------------------------------------------------------
 symspellpy>=6.7.0               # Corrección ortográfica rápida
 rapidfuzz>=3.0.0                # Fuzzy matching eficiente
@@ -53,12 +55,11 @@ rapidfuzz>=3.0.0                # Fuzzy matching eficiente
 # ---------------------------------------------------------------------
 # Checkpointing de LangGraph (ISO 25010: Fiabilidad, Recuperación)
 # ---------------------------------------------------------------------
-langgraph-checkpoint>=1.0.0      # Persistencia de estados del grafo
-langgraph-checkpoint-postgres>=3.0.0 # Adaptador para PostgreSQL
-langchain-core==0.2.43            # Núcleo de LangChain (compatible con langgraph 0.2.61: >=0.2.43,<0.4.0)
+langgraph-checkpoint==1.0.4     # Persistencia de estados del grafo (compatible con langgraph 0.2.61)
+langgraph-checkpoint-postgres==1.0.4 # Adaptador para PostgreSQL (compatible con langgraph 0.2.61)
+langchain-core==0.2.43          # Núcleo de LangChain (compatible con langgraph 0.2.61)
 
-# =============================================================================
-# Nota: langgraph-api y langgraph-cli NO se incluyen porque son específicos
-# del visualizador y del servicio cliente-debug, no del backend.
-# =============================================================================
+# ---------------------------------------------------------------------
+# Cache y otros
+# ---------------------------------------------------------------------
 redis>=5.0.0
