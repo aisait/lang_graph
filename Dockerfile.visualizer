@@ -7,11 +7,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements.txt (opcional, se mantiene por si se necesita)
+# Copiar requirements.txt (se mantiene para referencia, pero no se usa en la instalación)
 COPY requirements.txt .
 
-# Instalación de todas las dependencias en un solo paso
-# CONJUNTO DE VERSIONES COMPATIBLE PARA LANGGRAPH 0.2.x
+# Instalación en un solo paso con TODAS las versiones compatibles
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
         fastapi==0.115.0 \
@@ -37,14 +36,14 @@ RUN pip install --no-cache-dir --upgrade pip && \
         google-api-python-client==2.198.0 \
         symspellpy==6.7.0 \
         rapidfuzz==3.0.0 \
-        langgraph-checkpoint==1.0.4 \
-        langgraph-checkpoint-postgres==1.0.4 \
+        langgraph-checkpoint==2.0.5 \
+        langgraph-checkpoint-postgres==2.0.5 \
         langchain-core==0.2.43 \
         redis==5.0.0 \
         langgraph-cli[inmem]==0.1.18 \
         "langsmith<0.2.0"
 
-# Copiar el resto del código fuente
+# Copiar el código fuente
 COPY . .
 
 # Puerto
