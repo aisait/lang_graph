@@ -2,26 +2,54 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Dependencias del sistema necesarias para psycopg y otras compilaciones
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Dependencias del sistema (mínimas)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements.txt primero para aprovechar caché de Docker
+# Copiar requirements.txt (si es necesario, pero usaremos versiones fijas)
 COPY requirements.txt .
-# Instalar dependencias del proyecto (incluye langchain, fastapi, etc.)
+
+# Instalación de todas las dependencias en un solo paso (versiones fijas y compatibles)
+# Esto evita conflictos y reduce el tiempo de resolución
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir \
+        fastapi==0.115.0 \
+        uvicorn[standard]==0.30.1 \
+        python-multipart==0.0.9 \
+        Flask==2.2.0 \
+        langchain==0.2.17 \
+        langgraph==0.2.61 \
+        langchain-openai==0.1.25 \
+        openai==1.50.0 \
+        langchain-community==0.2.19 \
+        psycopg2-binary==2.9.9 \
+        psycopg[binary]==3.1.0 \
+        sqlalchemy==2.0.31 \
+        asyncpg==0.29.0 \
+        requests==2.32.3 \
+        python-dotenv==1.0.1 \
+        pydantic==2.7.4 \
+        httpx==0.27.2 \
+        psutil==5.9.8 \
+        google-auth==2.30.0 \
+        google-auth-oauthlib==1.2.0 \
+        google-api-python-client==2.198.0 \
+        symspellpy==6.7.0 \
+        rapidfuzz==3.0.0 \
+        langgraph-checkpoint==1.0.4 \
+        langgraph-checkpoint-postgres==1.0.4 \
+        langchain-core==0.2.43 \
+        redis==5.0.0 \
+        langgraph-cli[inmem]>=0.4.31 \
+        langsmith<0.2.0
 
-# Instalar LangGraph CLI y sus dependencias (versiones compatibles comprobadas)
-RUN pip install --no-cache-dir \
-    langgraph-cli[inmem]>=0.4.31
-
-# Copiar el resto del código fuente (incluye studio_graph.py, langgraph.json, etc.)
+# Copiar el código fuente
 COPY . .
 
-# Puerto de escucha (lo asigna Railway automáticamente)
+# Puerto
 ENV PORT=8080
 EXPOSE 8080
 
-# Comando de inicio: modo desarrollo con recarga automática
+# Comando de inicio
 CMD ["sh", "-c", "langgraph dev --host 0.0.0.0 --port ${PORT:-8080} --no-browser"]
