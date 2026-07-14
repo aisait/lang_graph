@@ -2,39 +2,18 @@
 # DOCUMENTACIÓN DE AUDITORÍA ISO/IEC 25010
 # Componente: Jarvi Studio Visualizer
 # ==============================================================================
-FROM python:3.11-slim
 
-LABEL maintainer="AISA Solar - Equipo de Ingeniería"
-LABEL description="Servidor dedicado para LangGraph Studio Visualizer."
-LABEL service="visualizer"
-LABEL compliance="ISO/IEC-25010-Ready"
+FROM python:3.11-slim
 
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
-ENV PATH="/usr/local/bin:${PATH}"
-
-# Variables dummy
-ENV IS_BACKEND="False"
-ENV DATABASE_URL="sqlite:///:memory:"
-ENV OPENAI_API_KEY="sk-dummy-key-for-visualizer-only"
-ENV LANGGRAPH_ALLOWED_ORIGINS="*"
-
-ARG REFRESH_DATE=2026-07-07
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-
-# Instalación con google-auth explícito
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir google-auth google-auth-oauthlib && \
-    pip install --no-cache-dir --force-reinstall "langgraph-cli[inmem]" && \
-    which langgraph
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir "langgraph-cli[inmem]" \
+    && pip install --no-cache-dir uvicorn
 
 COPY . .
 
