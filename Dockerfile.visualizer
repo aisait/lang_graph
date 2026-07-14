@@ -7,29 +7,59 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements.txt (se mantiene para referencia, pero no se usa en la instalación)
-COPY requirements.txt .
+# =============================================================================
+# INSTALACIÓN AISLADA DE DEPENDENCIAS PARA EL VISUALIZER
+# NO USA requirements.txt PARA EVITAR CONFLICTOS CON OTROS SERVICIOS
+# =============================================================================
 
-# Instalación en un solo paso con TODAS las versiones compatibles
-# Capa 1: dependencias base
+# Capa 1: Dependencias base (FastAPI, etc.)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+        fastapi==0.115.0 \
+        uvicorn[standard]==0.30.1 \
+        python-multipart==0.0.9 \
+        Flask==2.2.0
+
+# Capa 2: LangChain y dependencias de IA (versiones compatibles con langgraph 0.2.56)
 RUN pip install --no-cache-dir \
-    langchain-core==0.2.43 \
-    langchain==0.2.17 \
-    langchain-openai==0.1.25 \
-    langchain-community==0.2.19 \
-    "langsmith<0.2.0"
+        langchain==0.2.17 \
+        langchain-core==0.2.43 \
+        langchain-openai==0.1.25 \
+        langchain-community==0.2.19 \
+        openai==1.50.0 \
+        "langsmith<0.2.0"
 
-# Capa 2: langgraph y checkpoint
+# Capa 3: LangGraph y sus componentes (versiones COMPATIBLES y PROBADAS)
 RUN pip install --no-cache-dir \
-    langgraph==0.2.56 \
-    langgraph-checkpoint==2.0.5 \
-    langgraph-checkpoint-postgres==2.0.5
+        langgraph==0.2.56 \
+        langgraph-checkpoint==2.0.7 \
+        langgraph-checkpoint-postgres==2.0.7
 
-# Capa 3: CLI
+# Capa 4: CLI del Agent Server
 RUN pip install --no-cache-dir \
-    langgraph-cli[inmem]==0.1.18
+        langgraph-cli[inmem]==0.1.18
 
-# Copiar el código fuente
+# =============================================================================
+# OTRAS DEPENDENCIAS (psycopg, redis, etc.)
+# =============================================================================
+RUN pip install --no-cache-dir \
+        psycopg2-binary==2.9.9 \
+        psycopg[binary]==3.1.0 \
+        sqlalchemy==2.0.31 \
+        asyncpg==0.29.0 \
+        requests==2.32.3 \
+        python-dotenv==1.0.1 \
+        pydantic==2.7.4 \
+        httpx==0.27.2 \
+        psutil==5.9.8 \
+        google-auth==2.30.0 \
+        google-auth-oauthlib==1.2.0 \
+        google-api-python-client==2.198.0 \
+        symspellpy==6.7.0 \
+        rapidfuzz==3.0.0 \
+        redis==5.0.0
+
+# Copiar el código fuente (studio_graph.py, langgraph.json, etc.)
 COPY . .
 
 # Puerto
