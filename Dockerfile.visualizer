@@ -19,4 +19,5 @@ COPY . .
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "python -m langgraph_api.cli --host 0.0.0.0 --port ${PORT:-8080}"]
+
+CMD ["sh", "-c", "langgraph dev --host 0.0.0.0 --port ${PORT:-8080}"]
