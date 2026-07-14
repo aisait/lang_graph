@@ -21,6 +21,7 @@ langgraph>=0.2.56,<0.3.0        # Orquestación de grafos de estados
 langchain-openai>=0.1.9         # Integración con modelos OpenAI
 openai>=1.50.0                  # Cliente oficial de OpenAI (STT, TTS, Vision)
 langchain-community>=0.2.6      # Utilidades comunitarias (herramientas, etc.)
+langgraph-cli[inmem]
 
 # ---------------------------------------------------------------------
 # Persistencia y Base de Datos (ISO 25010: Fiabilidad, Mantenibilidad)
