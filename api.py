@@ -651,11 +651,19 @@ async def get_graph_schema():
     if graph is None:
         raise HTTPException(status_code=503, detail="Grafo no inicializado aún")
     try:
-        graph_dict = graph.get_graph().to_dict()
+        # Intentar obtener la representación del grafo
+        graph_obj = graph.get_graph()
+        if hasattr(graph_obj, "to_dict"):
+            graph_dict = graph_obj.to_dict()
+        elif hasattr(graph_obj, "to_json"):
+            import json
+            graph_dict = json.loads(graph_obj.to_json())
+        else:
+            raise HTTPException(status_code=500, detail="El grafo no soporta serialización")
         return graph_dict
-    except AttributeError:
-        # Fallback: construir manualmente (poco probable en versiones modernas)
-        raise HTTPException(status_code=500, detail="No se pudo serializar el grafo")
+    except Exception as e:
+        # Si todo falla, mostrar el error real para depuración
+        raise HTTPException(status_code=500, detail=f"No se pudo serializar el grafo: {str(e)}")
 
 @protected_router.post("/stt")
 async def speech_to_text(request: AudioRequest):
