@@ -2,11 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Dependencias del sistema (mínimas)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Instalación de dependencias con versiones compatibles
+# Se fuerza la versión del CLI que incluye el comando dev
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
         "langgraph-cli[inmem]>=0.4.31" \
@@ -20,10 +22,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
         langgraph-checkpoint-postgres==2.0.7 \
         openai>=1.50.0
 
+# Copiar el código fuente (studio_graph.py, langgraph.json, .env)
 COPY . .
 
 ENV PORT=8080
 EXPOSE 8080
 
-# COMANDO CORRECTO: langgraph dev (no requiere Docker)
+# Comando CORRECTO: langgraph dev (NO requiere Docker)
 CMD ["sh", "-c", "langgraph dev --host 0.0.0.0 --port ${PORT:-8080} --no-browser"]
