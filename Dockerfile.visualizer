@@ -2,15 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Dependencias del sistema
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
-
-# =============================================================================
-# INSTALACIÓN AISLADA DE DEPENDENCIAS PARA EL VISUALIZER
-# NO UTILIZA requirements.txt PARA EVITAR CONFLICTOS
-# =============================================================================
 
 # Capa 1: Frameworks web
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -20,7 +14,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
         python-multipart==0.0.9 \
         Flask==2.2.0
 
-# Capa 2: LangChain y dependencias de IA (compatibles con langgraph 0.2.56)
+# Capa 2: LangChain
 RUN pip install --no-cache-dir \
         langchain==0.2.17 \
         langchain-core==0.2.43 \
@@ -29,17 +23,17 @@ RUN pip install --no-cache-dir \
         openai==1.50.0 \
         "langsmith<0.2.0"
 
-# Capa 3: LangGraph y sus componentes (versiones COMPATIBLES y PROBADAS)
+# Capa 3: LangGraph (versiones compatibles)
 RUN pip install --no-cache-dir \
         langgraph==0.2.56 \
         langgraph-checkpoint==2.0.7 \
         langgraph-checkpoint-postgres==2.0.7
 
-# Capa 4: CLI del Agent Server (versión estable con comando 'up')
+# Capa 4: CLI
 RUN pip install --no-cache-dir \
         langgraph-cli[inmem]==0.1.18
 
-# Capa 5: Otras dependencias (psycopg corregido)
+# Capa 5: Otras dependencias
 RUN pip install --no-cache-dir \
         psycopg2-binary==2.9.9 \
         "psycopg[binary]>=3.1.4" \
@@ -57,12 +51,10 @@ RUN pip install --no-cache-dir \
         rapidfuzz==3.0.0 \
         redis==5.0.0
 
-# Copiar el código fuente (studio_graph.py, langgraph.json, etc.)
 COPY . .
 
-# Puerto de escucha
 ENV PORT=8080
 EXPOSE 8080
 
-# Comando de inicio: usar 'up' en lugar de 'dev' (compatible con versión 0.1.18)
-CMD ["sh", "-c", "langgraph up --host 0.0.0.0 --port ${PORT:-8080}"]
+# COMANDO CORREGIDO: sin --host
+CMD ["sh", "-c", "langgraph up --port ${PORT:-8080}"]
