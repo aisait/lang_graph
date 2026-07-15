@@ -2,16 +2,17 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Dependencias del sistema (mínimas)
+# Dependencias del sistema
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
-# INSTALACIÓN DE DEPENDENCIAS PARA EL VISUALIZER (AISLADO)
+# INSTALACIÓN AISLADA DE DEPENDENCIAS PARA EL VISUALIZER
+# NO UTILIZA requirements.txt PARA EVITAR CONFLICTOS
 # =============================================================================
 
-# 1. Dependencias base (FastAPI, Uvicorn)
+# Capa 1: Frameworks web
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
         fastapi==0.115.0 \
@@ -19,7 +20,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
         python-multipart==0.0.9 \
         Flask==2.2.0
 
-# 2. LangChain y dependencias de IA (versiones compatibles con langgraph 0.2.56)
+# Capa 2: LangChain y dependencias de IA (compatibles con langgraph 0.2.56)
 RUN pip install --no-cache-dir \
         langchain==0.2.17 \
         langchain-core==0.2.43 \
@@ -28,17 +29,17 @@ RUN pip install --no-cache-dir \
         openai==1.50.0 \
         "langsmith<0.2.0"
 
-# 3. LangGraph y sus componentes (versiones COMPATIBLES y PROBADAS)
+# Capa 3: LangGraph y sus componentes (versiones COMPATIBLES y PROBADAS)
 RUN pip install --no-cache-dir \
         langgraph==0.2.56 \
         langgraph-checkpoint==2.0.7 \
         langgraph-checkpoint-postgres==2.0.7
 
-# 4. CLI del Agent Server
+# Capa 4: CLI del Agent Server (versión estable con comando 'up')
 RUN pip install --no-cache-dir \
         langgraph-cli[inmem]==0.1.18
 
-# 5. Otras dependencias (solo las necesarias, con versiones compatibles)
+# Capa 5: Otras dependencias (psycopg corregido)
 RUN pip install --no-cache-dir \
         psycopg2-binary==2.9.9 \
         "psycopg[binary]>=3.1.4" \
@@ -59,9 +60,9 @@ RUN pip install --no-cache-dir \
 # Copiar el código fuente (studio_graph.py, langgraph.json, etc.)
 COPY . .
 
-# Puerto
+# Puerto de escucha
 ENV PORT=8080
 EXPOSE 8080
 
-# Comando de inicio
-CMD ["sh", "-c", "langgraph dev --host 0.0.0.0 --port ${PORT:-8080} --no-browser"]
+# Comando de inicio: usar 'up' en lugar de 'dev' (compatible con versión 0.1.18)
+CMD ["sh", "-c", "langgraph up --host 0.0.0.0 --port ${PORT:-8080}"]
