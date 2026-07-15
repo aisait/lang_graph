@@ -2,7 +2,6 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Dependencias del sistema (mínimas)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
@@ -21,11 +20,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
         langgraph-checkpoint-postgres==2.0.7 \
         openai>=1.50.0
 
-# Copiar el código fuente (debe incluir studio_graph.py y langgraph.json)
 COPY . .
 
 ENV PORT=8080
 EXPOSE 8080
 
-# Comando oficial según documentación
+# COMANDO CORRECTO: langgraph dev (no requiere Docker)
 CMD ["sh", "-c", "langgraph dev --host 0.0.0.0 --port ${PORT:-8080} --no-browser"]
