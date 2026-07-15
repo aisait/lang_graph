@@ -2,17 +2,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Dependencias del sistema
+# Dependencias del sistema (mínimas)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
-# INSTALACIÓN AISLADA DE DEPENDENCIAS PARA EL VISUALIZER
-# NO USA requirements.txt PARA EVITAR CONFLICTOS CON OTROS SERVICIOS
+# INSTALACIÓN DE DEPENDENCIAS PARA EL VISUALIZER (AISLADO)
 # =============================================================================
 
-# Capa 1: Dependencias base (FastAPI, etc.)
+# 1. Dependencias base (FastAPI, Uvicorn)
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
         fastapi==0.115.0 \
@@ -20,7 +19,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
         python-multipart==0.0.9 \
         Flask==2.2.0
 
-# Capa 2: LangChain y dependencias de IA (versiones compatibles con langgraph 0.2.56)
+# 2. LangChain y dependencias de IA (versiones compatibles con langgraph 0.2.56)
 RUN pip install --no-cache-dir \
         langchain==0.2.17 \
         langchain-core==0.2.43 \
@@ -29,22 +28,20 @@ RUN pip install --no-cache-dir \
         openai==1.50.0 \
         "langsmith<0.2.0"
 
-# Capa 3: LangGraph y sus componentes (versiones COMPATIBLES y PROBADAS)
+# 3. LangGraph y sus componentes (versiones COMPATIBLES y PROBADAS)
 RUN pip install --no-cache-dir \
         langgraph==0.2.56 \
         langgraph-checkpoint==2.0.7 \
         langgraph-checkpoint-postgres==2.0.7
 
-# Capa 4: CLI del Agent Server
+# 4. CLI del Agent Server
 RUN pip install --no-cache-dir \
         langgraph-cli[inmem]==0.1.18
 
-# =============================================================================
-# OTRAS DEPENDENCIAS (psycopg, redis, etc.)
-# =============================================================================
+# 5. Otras dependencias (solo las necesarias, con versiones compatibles)
 RUN pip install --no-cache-dir \
         psycopg2-binary==2.9.9 \
-        psycopg[binary]==3.1.0 \
+        "psycopg[binary]>=3.1.4" \
         sqlalchemy==2.0.31 \
         asyncpg==0.29.0 \
         requests==2.32.3 \
