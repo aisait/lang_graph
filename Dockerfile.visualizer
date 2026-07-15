@@ -2,50 +2,22 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Dependencias del sistema
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Instalación de dependencias Python con versiones fijas
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-        # CLI específico que incluye 'dev'
-        langgraph-cli[inmem]==0.4.31 \
-        langgraph-api==0.4.31 \
-        langgraph-runtime-inmem==0.4.31 \
-        langchain-core==0.2.43 \
-        langchain==0.2.17 \
-        langgraph==0.2.56 \
-        langchain-openai==0.1.25 \
-        langchain-community==0.2.19 \
-        "langsmith<0.2.0" \
-        langgraph-checkpoint==2.0.7 \
-        langgraph-checkpoint-postgres==2.0.7 \
-        openai>=1.50.0 \
-        psycopg2-binary==2.9.9 \
-        "psycopg[binary]>=3.1.4" \
-        sqlalchemy==2.0.31 \
-        asyncpg==0.29.0 \
-        requests==2.32.3 \
-        python-dotenv==1.0.1 \
-        pydantic==2.7.4 \
-        httpx==0.27.2 \
-        psutil==5.9.8 \
-        google-auth==2.30.0 \
-        google-auth-oauthlib==1.2.0 \
-        google-api-python-client==2.198.0 \
-        symspellpy==6.7.0 \
-        rapidfuzz==3.0.0 \
-        redis==5.0.0
+# Copiar el archivo de dependencias específico del visualizer
+COPY requirements-visualizer.txt .
 
-# Copiar el código fuente
+# Instalar dependencias (sin usar el requirements.txt del backend)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-visualizer.txt
+
+# Copiar el código fuente (studio_graph.py, langgraph.json, etc.)
 COPY . .
 
-# Variable de entorno
 ENV PORT=8080
 EXPOSE 8080
 
-# Comando de inicio: se usa el módulo directamente para evitar conflictos de PATH
-# y se verifica la versión del CLI antes de arrancar
-CMD ["sh", "-c", "python -c \"import langgraph_cli; print('CLI version:', langgraph_cli.__version__)\" && python -m langgraph_cli dev --host 0.0.0.0 --port ${PORT:-8080} --no-browser"]
+# Comando correcto: langgraph dev (NO usa Docker)
+CMD ["sh", "-c", "langgraph dev --host 0.0.0.0 --port ${PORT:-8080} --no-browser"]
