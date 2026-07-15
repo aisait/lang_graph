@@ -1,43 +1,30 @@
-# =============================================================================
-# Dockerfile.visualizer
-# Propósito: Servicio para LangGraph Studio (Agent Server) en Railway.
-# Ejecuta el grafo JARVI 2.0 con MemorySaver para depuración visual.
-# Estándares: ISO/IEC 25010 (Fiabilidad, Mantenibilidad), ISO/IEC 29119 (Pruebas)
-# =============================================================================
-
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# ---------------------------------------------------------------------------
-# Dependencias del sistema (mínimas, solo necesarias para compilar psycopg)
-# ---------------------------------------------------------------------------
+# Dependencias del sistema
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# ---------------------------------------------------------------------------
-# Instalación de dependencias Python con versiones fijas y compatibles
-# ---------------------------------------------------------------------------
+# Instalación de dependencias Python con versiones fijas
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
-        # CLI de LangGraph con el comando 'dev' (requiere >=0.4.31)
-        "langgraph-cli[inmem]>=0.4.31" \
-        # LangChain y componentes (versiones que funcionan con langgraph 0.2.56)
+        # CLI específico que incluye 'dev'
+        langgraph-cli[inmem]==0.4.31 \
+        langgraph-api==0.4.31 \
+        langgraph-runtime-inmem==0.4.31 \
         langchain-core==0.2.43 \
         langchain==0.2.17 \
         langgraph==0.2.56 \
         langchain-openai==0.1.25 \
         langchain-community==0.2.19 \
         "langsmith<0.2.0" \
-        # Checkpointing (compatible con langgraph 0.2.56)
         langgraph-checkpoint==2.0.7 \
         langgraph-checkpoint-postgres==2.0.7 \
-        # OpenAI y utilidades
         openai>=1.50.0 \
-        # Otras dependencias que pueda necesitar tu grafo
         psycopg2-binary==2.9.9 \
-        psycopg[binary]>=3.1.4 \
+        "psycopg[binary]>=3.1.4" \
         sqlalchemy==2.0.31 \
         asyncpg==0.29.0 \
         requests==2.32.3 \
@@ -52,21 +39,13 @@ RUN pip install --no-cache-dir --upgrade pip && \
         rapidfuzz==3.0.0 \
         redis==5.0.0
 
-# ---------------------------------------------------------------------------
-# Copia del código fuente (incluye studio_graph.py, langgraph.json, .env)
-# ---------------------------------------------------------------------------
+# Copiar el código fuente
 COPY . .
 
-# ---------------------------------------------------------------------------
-# Variables de entorno y puerto
-# ---------------------------------------------------------------------------
+# Variable de entorno
 ENV PORT=8080
 EXPOSE 8080
 
-# ---------------------------------------------------------------------------
-# Comando de inicio: langgraph dev (NO requiere Docker)
-# --host 0.0.0.0   : escucha en todas las interfaces
-# --port           : puerto interno (lo asigna Railway)
-# --no-browser     : evita abrir el navegador (útil en entornos headless)
-# ---------------------------------------------------------------------------
-CMD ["sh", "-c", "langgraph dev --host 0.0.0.0 --port ${PORT:-8080} --no-browser"]
+# Comando de inicio: se usa el módulo directamente para evitar conflictos de PATH
+# y se verifica la versión del CLI antes de arrancar
+CMD ["sh", "-c", "python -c \"import langgraph_cli; print('CLI version:', langgraph_cli.__version__)\" && python -m langgraph_cli dev --host 0.0.0.0 --port ${PORT:-8080} --no-browser"]
