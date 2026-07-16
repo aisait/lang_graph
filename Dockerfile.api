@@ -1,59 +1,33 @@
 # Dockerfile.api
-# Propósito: Imagen de contenedor para el servidor central de lógica de negocio JARVI 2.0 (FastAPI).
-# Estándares aplicados: ISO/IEC/IEEE 12207 (Ciclo de vida), ISO/IEC 26514 (Documentación),
-# ISO/IEC 25010 (Calidad), ISO/IEC 29119 (Pruebas de caja negra).
-
-# ----------------------------------------------------------------------
-# Capa base: Python 3.11 slim, optimizada para producción
-# ----------------------------------------------------------------------
 FROM python:3.11-slim
 
-# ----------------------------------------------------------------------
-# Metadatos de la imagen (ISO/IEC 26514 - Documentación de software)
-# ----------------------------------------------------------------------
 LABEL maintainer="AISA Solar - Equipo de Ingeniería"
-LABEL description="Servidor API centralizado de JARVI 2.0. Contiene el grafo de agente, \
-conexiones a Odoo, OpenAI y base de datos de auditoría."
+LABEL description="Servidor API centralizado de JARVI 2.0"
 LABEL version="2.0.02"
 
-# ----------------------------------------------------------------------
-# Directorio de trabajo dentro del contenedor
-# ----------------------------------------------------------------------
 WORKDIR /app
 
-# ----------------------------------------------------------------------
-# Instalación de dependencias del sistema operativo
-#   - gcc: requerido para compilar extensiones nativas (psycopg, etc.)
-#   - libpq-dev: cabeceras de PostgreSQL para psycopg2 y psycopg3
-# ----------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# ----------------------------------------------------------------------
-# Copia e instalación de dependencias Python
-# Se copia solo requirements.txt primero para aprovechar la caché de Docker.
-# Las dependencias se instalan sin caché y SIN --upgrade para evitar conflictos.
-# ----------------------------------------------------------------------
+# Copiar e instalar TODAS las dependencias en un solo paso
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ----------------------------------------------------------------------
-# Copia del resto del código fuente de la API
-# Se excluyen archivos innecesarios mediante .dockerignore (si existe).
-# ----------------------------------------------------------------------
+# Si necesitas versiones específicas de algunos paquetes, hazlo SIN --upgrade
+# y asegúrate de incluir langfuse aquí también.
+RUN pip install --no-cache-dir \
+    psutil \
+    google-auth \
+    google-api-python-client \
+    langgraph==0.2.56 \
+    langgraph-checkpoint==2.0.7 \
+    langgraph-checkpoint-postgres==2.0.7 \
+    langchain-core==0.2.43 \
+    langfuse>=2.0.0
+
 COPY . .
 
-# ----------------------------------------------------------------------
-# Exposición del puerto de escucha (configurable mediante variable PORT)
-# La API utilizará el puerto 8000 por defecto.
-# ----------------------------------------------------------------------
 EXPOSE 8000
 
-# ----------------------------------------------------------------------
-# Comando de arranque
-#   - uvicorn: servidor ASGI de alto rendimiento
-#   - api:app  : módulo 'api.py' y objeto 'app' (FastAPI)
-#   - --workers 1 : un solo worker para consolidar memoria del modelo y evitar OOM en Railway
-#   - --timeout-keep-alive 120 : tiempo máximo para mantener conexiones vivas
-# ----------------------------------------------------------------------
 CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --timeout-keep-alive 120"]
