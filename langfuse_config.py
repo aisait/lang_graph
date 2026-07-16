@@ -22,8 +22,15 @@ import os
 import logging
 from typing import Optional
 
-from langfuse import Langfuse
-from langfuse.callback import CallbackHandler
+# Intentar importar Langfuse; si falla, se desactiva la funcionalidad
+try:
+    from langfuse import Langfuse
+    from langfuse.callback import CallbackHandler
+    _LANGFUSE_AVAILABLE = True
+except ImportError:
+    _LANGFUSE_AVAILABLE = False
+    Langfuse = None
+    CallbackHandler = None
 
 logger = logging.getLogger(__name__)
 
@@ -46,18 +53,25 @@ class LangfuseConfig:
         if self._initialized:
             return
         self._initialized = True
+
+        if not _LANGFUSE_AVAILABLE:
+            logger.warning("El módulo langfuse no está instalado. La trazabilidad LLM estará desactivada.")
+            self._client = None
+            self._is_enabled = False
+            return
+
         self._public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
         self._secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         self._host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         self._environment = os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "production")
 
-        # Validación de credenciales (ISO/IEC 27001)
         if not self._public_key or not self._secret_key:
             logger.warning(
                 "Langfuse no configurado correctamente: faltan LANGFUSE_PUBLIC_KEY o LANGFUSE_SECRET_KEY. "
                 "La trazabilidad LLM estará desactivada."
             )
             self._client = None
+            self._is_enabled = False
         else:
             try:
                 self._client = Langfuse(
@@ -65,6 +79,7 @@ class LangfuseConfig:
                     secret_key=self._secret_key,
                     host=self._host
                 )
+                self._is_enabled = True
                 logger.info(
                     f"Langfuse cliente inicializado correctamente. "
                     f"Host: {self._host}, Environment: {self._environment}"
@@ -72,6 +87,7 @@ class LangfuseConfig:
             except Exception as e:
                 logger.error(f"Error al inicializar Langfuse: {e}")
                 self._client = None
+                self._is_enabled = False
 
     @property
     def client(self):
@@ -81,7 +97,7 @@ class LangfuseConfig:
     @property
     def is_enabled(self) -> bool:
         """Indica si Langfuse está correctamente configurado y activo."""
-        return self._client is not None
+        return self._is_enabled
 
     @property
     def environment(self) -> str:
@@ -103,13 +119,11 @@ class LangfuseConfig:
             2. Llamar sin user_id y sin session_id → retorna CallbackHandler sin metadatos
             3. Llamar cuando Langfuse está desactivado → retorna None
         """
-        if not self.is_enabled:
+        if not self.is_enabled or not _LANGFUSE_AVAILABLE:
             logger.debug("Langfuse desactivado: no se crea CallbackHandler")
             return None
 
-        # Asegurar que metadata no sea None
         safe_metadata = metadata or {}
-        # Añadir entorno por defecto si no está presente
         if "environment" not in safe_metadata:
             safe_metadata["environment"] = self._environment
 
@@ -122,6 +136,7 @@ class LangfuseConfig:
 
 # Instancia global (Singleton)
 langfuse_config = LangfuseConfig()
+
 
 # Función de conveniencia para obtener el handler
 def get_langfuse_handler(
