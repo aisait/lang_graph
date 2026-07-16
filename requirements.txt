@@ -60,4 +60,8 @@ rapidfuzz>=3.0.0                # Fuzzy matching eficiente
 # ---------------------------------------------------------------------
 redis>=5.0.0
 langchain-core==0.2.43          # Núcleo de LangChain (compatible con langgraph 0.2.56)
-langsmith<0.2.0                 # (Opcional, para compatibilidad con evaluaciones futuras)
+# langsmith<0.2.0               # (Opcional: se mantiene solo para compatibilidad con evaluaciones futuras)
+
+# ---------------------------------------------------------------------
+# NOTA: langgraph-cli NO se incluye en el backend, solo se usa en el visualizer.
+# ---------------------------------------------------------------------
