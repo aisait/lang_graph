@@ -3,9 +3,6 @@
 # Dependencias del servidor FastAPI, el grafo LangGraph y los módulos de
 # persistencia, telemetría y servicios externos.
 # Cumple con ISO/IEC 25010 (Fiabilidad, Eficiencia) e ISO/IEC 29119 (Pruebas).
-#
-# TODAS LAS VERSIONES HAN SIDO FIJADAS PARA GARANTIZAR COMPATIBILIDAD
-# CON LANGGRAPH 0.2.61 Y LANGCORE 0.2.43.
 # =============================================================================
 
 # ---------------------------------------------------------------------
@@ -20,17 +17,23 @@ Flask>=2.2.0                    # Para servicio de depuración (cliente-debug)
 # Core Agéntico (ISO 25010: Eficiencia de desempeño, Fiabilidad)
 # ---------------------------------------------------------------------
 langchain==0.2.17               # Framework base (compatible con core 0.2.43)
-langgraph==0.2.61               # Orquestación de grafos de estados
+langgraph==0.2.56               # Orquestación de grafos de estados (compatible con checkpoint 2.0.7)
 langchain-openai==0.1.25        # Integración con OpenAI (compatible con core 0.2.43)
 openai>=1.50.0                  # Cliente oficial de OpenAI
 langchain-community==0.2.19     # Utilidades comunitarias (compatible con core 0.2.43)
-langgraph-cli[inmem]==0.1.18    # CLI para Agent Server (versión estable)
+
+# ---------------------------------------------------------------------
+# OBSERVABILIDAD Y TRAZABILIDAD (ISO/IEC 25010, DORA)
+# ---------------------------------------------------------------------
+langfuse>=2.0.0                 # Observabilidad nativa para LLM y agentes
+langgraph-checkpoint==2.0.7     # Persistencia de estados (compatible con langgraph 0.2.56)
+langgraph-checkpoint-postgres==2.0.7 # Adaptador para PostgreSQL
 
 # ---------------------------------------------------------------------
 # Persistencia y Base de Datos (ISO 25010: Fiabilidad, Mantenibilidad)
 # ---------------------------------------------------------------------
 psycopg2-binary>=2.9.9          # Driver síncrono para PostgreSQL
-psycopg[binary]>=3.1.0          # Driver asíncrono para LangGraph (v3)
+psycopg[binary]>=3.1.4          # Driver asíncrono para LangGraph (v3)
 sqlalchemy>=2.0.31              # ORM para auditoría y tablas auxiliares
 asyncpg>=0.29.0                 # Driver asíncrono nativo
 
@@ -53,13 +56,8 @@ symspellpy>=6.7.0               # Corrección ortográfica rápida
 rapidfuzz>=3.0.0                # Fuzzy matching eficiente
 
 # ---------------------------------------------------------------------
-# Checkpointing de LangGraph (ISO 25010: Fiabilidad, Recuperación)
-# ---------------------------------------------------------------------
-langgraph-checkpoint==1.0.4     # Persistencia de estados del grafo (compatible con langgraph 0.2.61)
-langgraph-checkpoint-postgres==1.0.4 # Adaptador para PostgreSQL (compatible con langgraph 0.2.61)
-langchain-core==0.2.43          # Núcleo de LangChain (compatible con langgraph 0.2.61)
-
-# ---------------------------------------------------------------------
 # Cache y otros
 # ---------------------------------------------------------------------
 redis>=5.0.0
+langchain-core==0.2.43          # Núcleo de LangChain (compatible con langgraph 0.2.56)
+langsmith<0.2.0                 # (Opcional, para compatibilidad con evaluaciones futuras)
