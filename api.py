@@ -5,7 +5,7 @@ y chat_id de Odoo para webhooks.
 OBSERVABILIDAD (ISO/IEC 25010, DORA):
 - Se integra Langfuse como sistema de trazabilidad LLM mediante CallbackHandler.
 - Se mantiene CTFOM (telemetry.py) para métricas de infraestructura y auditoría de negocio.
-- Se elimina dependencia de LangSmith (sustituido por Langfuse).
+- La integración es resistente: si langfuse no está disponible, el sistema sigue funcionando.
 
 ESTÁNDARES APLICADOS:
 - ISO/IEC 25010:2011 (Calidad del producto) – Adecuación funcional, Fiabilidad, Mantenibilidad
@@ -44,9 +44,8 @@ from pydantic import BaseModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
-# Observabilidad: Langfuse (reemplaza a LangSmith)
-from langfuse.callback import CallbackHandler
-from langfuse import get_client
+# Observabilidad: Langfuse (reemplaza a LangSmith) - con importación segura
+from langfuse_config import get_langfuse_handler, get_langfuse_client, langfuse_config
 
 # Módulos internos
 from schemas import ChatRequest, AudioRequest, ImageRequest
@@ -104,13 +103,7 @@ def taxonomy_error(exc: Exception) -> str:
 # FUNCIONES DE EXTRACCIÓN DE DATOS
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
-    """
-    Extrae número de WhatsApp de un mensaje de texto.
-    Prueba de caja negra (ISO/IEC 29119):
-        1. Mensaje con número completo (+50212345678) → retorna número normalizado
-        2. Mensaje sin número → retorna None
-        3. Mensaje con número local (12345678) → retorna +50212345678
-    """
+    """Extrae número de WhatsApp de un mensaje de texto."""
     if not mensaje:
         return None
     match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', mensaje)
@@ -142,7 +135,6 @@ def extraer_nombre(mensaje: str) -> str | None:
     return None
 
 def extraer_ubicacion(mensaje: str) -> tuple:
-    """Extrae ubicación (departamento, municipio) de un mensaje."""
     from ubicacion import buscar_ubicacion
     resultado = buscar_ubicacion(mensaje)
     if resultado:
@@ -150,14 +142,12 @@ def extraer_ubicacion(mensaje: str) -> tuple:
     return None, None
 
 def extraer_consumo(mensaje: str) -> str | None:
-    """Extrae consumo eléctrico en kWh de un mensaje."""
     match = re.search(r'consumo\s*(?:de)?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:kWh|kw|kwh)', mensaje, re.IGNORECASE)
     if match:
         return f"{match.group(1)} kWh"
     return None
 
 def extraer_empresa_electrica(mensaje: str) -> str | None:
-    """Extrae nombre de empresa eléctrica de un mensaje."""
     empresas = [
         "EEGSA", "DEOCSA", "DEORSA",
         "EEM Zacapa", "EEM Gualán", "EEM San Pedro Pinula", "EEM Jalapa",
@@ -173,7 +163,6 @@ def extraer_empresa_electrica(mensaje: str) -> str | None:
     return None
 
 def extraer_definicion_necesidad(mensaje: str) -> str | None:
-    """Extrae la definición de necesidad del cliente."""
     match = re.search(r'(?:necesito|quiero|deseo|estoy interesado en|busco)\s*(.+?)(?:[\.!?]|$)', mensaje, re.IGNORECASE)
     if match:
         texto = match.group(1).strip()
@@ -182,20 +171,14 @@ def extraer_definicion_necesidad(mensaje: str) -> str | None:
     return None
 
 def obtener_caso(thread_id: str) -> str:
-    """
-    Genera identificador de caso a partir del thread_id.
-    Prueba de caja negra:
-        - thread_id = "abc-123-def-456" → retorna "123-def-456" (últimos 12 caracteres sin guiones)
-    """
     return thread_id.replace('-', '')[-12:] if thread_id else "000000000000"
 
 def obtener_run_name(thread_id: str) -> str:
-    """Alias para obtener_caso."""
     return obtener_caso(thread_id)
 
 def normalizar_whatsapp_e164(telefono: str) -> str:
     """
-    Normaliza un número de teléfono al formato E.164 requerido por Meta WhatsApp API y Langfuse.
+    Normaliza un número de teléfono al formato E.164 (requerido por Meta WhatsApp API y Langfuse).
     Prueba de caja negra:
         1. "+502 1234-5678" → "+50212345678"
         2. "12345678" → "+50212345678" (asume Guatemala)
@@ -212,51 +195,10 @@ def normalizar_whatsapp_e164(telefono: str) -> str:
     return limpio
 
 # =============================================================================
-# FUNCIONES DE LANGfuse (OBSERVABILIDAD NATIVA)
-# =============================================================================
-def get_langfuse_handler(thread_id: str, chat_id: str, whatsapp: str = "", 
-                         fingerprint: str = None, caso: str = "", origen: str = "desconocido") -> CallbackHandler:
-    """
-    Crea un CallbackHandler de Langfuse con metadatos de negocio.
-    
-    ISO/IEC 25010: La trazabilidad permite mantener la calidad del producto.
-    DORA: El registro de user_id permite correlacionar incidentes con clientes.
-    
-    Prueba de caja negra (ISO/IEC 29119):
-        1. Llamar con whatsapp válido → user_id en formato E.164
-        2. Llamar sin whatsapp → user_id = chat_id
-        3. Verificar que metadata contiene chat_id, fingerprint, caso, origen
-    """
-    # Normalizar al formato E.164 (requerido por Meta API y Langfuse)
-    user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
-    
-    metadata = {
-        "chat_id": chat_id,
-        "fingerprint": fingerprint,
-        "caso": caso,
-        "origen": origen,
-        "environment": os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "production")
-    }
-    # Filtrar valores None
-    metadata = {k: v for k, v in metadata.items() if v is not None}
-    
-    return CallbackHandler(
-        user_id=user_id,
-        session_id=thread_id,
-        metadata=metadata
-    )
-
-# =============================================================================
 # FUNCIONES DE POSTGRESQL
 # =============================================================================
-async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict, 
+async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
                                    fingerprint: Optional[str] = None, origen: str = "desconocido") -> bool:
-    """
-    Guarda el resumen de la conversación en PostgreSQL para auditoría.
-    Prueba de caja negra (ISO/IEC 29119):
-        1. Guardar resumen → verificar que aparece en la tabla resumenes
-        2. Error de conexión → retorna False y loguea error
-    """
     try:
         db_url = get_db_url()
         conn = await asyncpg.connect(db_url)
@@ -281,7 +223,7 @@ async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
         return False
 
 # =============================================================================
-# FUNCIONES DE REDIS (Buffer de sesión)
+# FUNCIONES DE REDIS
 # =============================================================================
 REDIS_TTL = int(os.getenv("REDIS_TTL", 604800))
 HISTORIAL_LIMITE = 64
@@ -334,7 +276,6 @@ async def eliminar_sesion_redis(redis_client: Optional[redis.Redis], chat_id: st
         except Exception as e:
             logger.error(f"Error eliminando sesión: {e}")
 
-# --- Funciones de historial ---
 async def guardar_historial_redis(redis_client: Optional[redis.Redis], chat_id: str, input_msg: str, output_msg: str):
     if not redis_client:
         return
@@ -375,7 +316,6 @@ async def eliminar_historial_redis(redis_client: Optional[redis.Redis], chat_id:
         except Exception as e:
             logger.error(f"Error eliminando historial: {e}")
 
-# --- Funciones de mapeo fingerprint y chat_id ---
 async def guardar_fingerprint_redis(redis_client: Optional[redis.Redis], fingerprint: str, chat_id: str):
     if not redis_client:
         return
@@ -407,7 +347,7 @@ async def guardar_whatsapp_redis(redis_client: Optional[redis.Redis], whatsapp: 
         logger.error(f"Error guardando mapeo whatsapp: {e}")
 
 # =============================================================================
-# FUNCIÓN DE ASIGNACIÓN DE VENDEDOR
+# ASIGNACIÓN DE VENDEDOR
 # =============================================================================
 def asignar_vendedor(productos: list) -> str:
     try:
@@ -422,7 +362,7 @@ def asignar_vendedor(productos: list) -> str:
     return vendedores.get("default", "default@aisa.com.gt")
 
 # =============================================================================
-# FUNCIONES DE SANEAMIENTO DE DATABASE_URL
+# FUNCIONES DE SANEAMIENTO DE URL
 # =============================================================================
 def sanear_db_url(db_url: str) -> str:
     try:
@@ -442,7 +382,7 @@ def get_db_url() -> str:
     return sanear_db_url(raw)
 
 # =============================================================================
-# FUNCIÓN PARA GENERAR RESUMEN CON LLM
+# GENERACIÓN DE RESUMEN CON LLM
 # =============================================================================
 async def generar_resumen_con_llm(historial: list, contexto: dict) -> str:
     from langchain_openai import ChatOpenAI
@@ -464,20 +404,211 @@ async def generar_resumen_con_llm(historial: list, contexto: dict) -> str:
     return response.content
 
 # =============================================================================
-# LÓGICA DE PROCESAMIENTO DE CHAT (FRONTEND)
+# PROCESAMIENTO DE CHAT FRONTEND
 # =============================================================================
 async def process_chat_frontend(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
-    # ... (el código existente se mantiene sin cambios en su lógica)
-    # Solo se añade la instrumentación Langfuse en generar_tokens
-    # (Ver función generar_tokens para la integración de Langfuse)
-    pass
+    fingerprint = chat_request.metadata.get("fingerprint") or http_request.headers.get("X-Fingerprint")
+    thread_id_from_request = chat_request.thread_id
+    whatsapp_norm = None
+    whatsapp_raw = extraer_whatsapp(chat_request.message)
+    if whatsapp_raw:
+        _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
+        if whatsapp_norm and whatsapp_norm != "Pendiente":
+            logger.info(f"WhatsApp detectado: {whatsapp_norm}")
+
+    chat_id = None
+    origen = "pantalla"
+    thread_id_final = None
+
+    if fingerprint:
+        chat_id_por_fingerprint = await obtener_chat_id_por_fingerprint(redis_client, fingerprint) if redis_client else None
+        if chat_id_por_fingerprint:
+            chat_id = chat_id_por_fingerprint
+            sesion = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
+            if sesion:
+                thread_id_final = sesion.get("thread_id")
+                if not thread_id_final:
+                    thread_id_final = str(uuid.uuid4())
+                    sesion["thread_id"] = thread_id_final
+                    await guardar_sesion_redis(redis_client, chat_id, sesion)
+                logger.info(f"Sesión recuperada por fingerprint: {chat_id} con thread {thread_id_final}")
+            else:
+                thread_id_final = str(uuid.uuid4())
+                chat_id = fingerprint
+                await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
+                logger.info(f"Nueva sesión creada para fingerprint: {chat_id} con thread {thread_id_final}")
+        else:
+            thread_id_final = str(uuid.uuid4())
+            chat_id = fingerprint
+            await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
+            logger.info(f"Nuevo thread creado para fingerprint: {chat_id} con thread {thread_id_final}")
+    else:
+        thread_id_final = thread_id_from_request if thread_id_from_request else str(uuid.uuid4())
+        chat_id = thread_id_final
+        sesion = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
+        if not sesion:
+            data_inicial = {
+                "thread_id": thread_id_final,
+                "chat_id": chat_id,
+                "fingerprint": "",
+                "origen": origen,
+                "whatsapp": "",
+                "nombre": "Pendiente",
+                "vendedor": "",
+                "departamento": "",
+                "municipio": "",
+                "topologia": "",
+                "tipo_producto": "",
+                "productos_interes": [],
+                "contexto_tecnico": {},
+                "pasos_completados": [],
+                "fase_actual": "inicio",
+                "ultimo_mensaje": chat_request.message,
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            }
+            if redis_client:
+                await guardar_sesion_redis(redis_client, chat_id, data_inicial)
+            logger.info(f"Nuevo thread forzado (sin fingerprint): {thread_id_final}")
+        else:
+            logger.info(f"Sesión recuperada por thread_id: {chat_id} con thread {thread_id_final}")
+
+    if whatsapp_norm and chat_id != whatsapp_norm:
+        sesion_antigua = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
+        if sesion_antigua:
+            sesion_antigua["chat_id"] = whatsapp_norm
+            sesion_antigua["whatsapp"] = whatsapp_norm
+            await guardar_sesion_redis(redis_client, whatsapp_norm, sesion_antigua)
+            await eliminar_sesion_redis(redis_client, chat_id)
+            if fingerprint:
+                await guardar_fingerprint_redis(redis_client, fingerprint, whatsapp_norm)
+            chat_id = whatsapp_norm
+            logger.info(f"Chat_id actualizado a número: {chat_id}")
+
+    sesion_redis = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
+    if not sesion_redis:
+        data_inicial = {
+            "thread_id": thread_id_final,
+            "chat_id": chat_id,
+            "fingerprint": fingerprint or "",
+            "origen": origen,
+            "whatsapp": whatsapp_norm or "",
+            "nombre": "Pendiente",
+            "vendedor": "",
+            "departamento": "",
+            "municipio": "",
+            "topologia": "",
+            "tipo_producto": "",
+            "productos_interes": [],
+            "contexto_tecnico": {},
+            "pasos_completados": [],
+            "fase_actual": "inicio",
+            "ultimo_mensaje": chat_request.message,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        }
+        if redis_client:
+            await guardar_sesion_redis(redis_client, chat_id, data_inicial)
+            if fingerprint:
+                await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
+            if whatsapp_norm:
+                await guardar_whatsapp_redis(redis_client, whatsapp_norm, chat_id)
+
+    run_name = obtener_run_name(thread_id_final)
+
+    return StreamingResponse(
+        generar_tokens(thread_id_final, chat_request.message, chat_id, run_name, whatsapp_norm, origen, fingerprint),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Chat-ID": chat_id,
+            "X-Thread-ID": thread_id_final,
+            "X-Run-Name": run_name,
+            "X-Origen": origen,
+            "Access-Control-Allow-Origin": "*"
+        }
+    )
 
 # =============================================================================
-# LÓGICA DE WEBHOOK DE WHATSAPP
+# PROCESAMIENTO DE WEBHOOK WHATSAPP
 # =============================================================================
 async def process_webhook_whatsapp(payload: dict) -> dict:
-    # ... (código existente)
-    pass
+    whatsapp = payload.get("number")
+    mensaje = payload.get("text")
+    datos_cliente = payload.get("datos_cliente", {})
+    chat_id_from_odoo = payload.get("chat_id")
+
+    if not whatsapp or not mensaje:
+        raise HTTPException(400, "Faltan campos obligatorios: number y text")
+
+    _, whatsapp_norm = normalizar_contacto("", whatsapp, "")
+    if not whatsapp_norm or whatsapp_norm == "Pendiente":
+        raise HTTPException(400, "Número de WhatsApp inválido")
+
+    if not chat_id_from_odoo:
+        raise HTTPException(400, "chat_id de Odoo es obligatorio")
+    chat_id = chat_id_from_odoo
+
+    sesion_redis = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
+    if sesion_redis:
+        thread_id = sesion_redis.get("thread_id")
+        if not thread_id:
+            thread_id = str(uuid.uuid4())
+            sesion_redis["thread_id"] = thread_id
+            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
+        run_name = obtener_run_name(thread_id)
+        if datos_cliente:
+            for key in ["nombre", "vendedor", "departamento", "municipio", "topologia", "tipo_producto", "definicion_necesidad", "consumo_actual", "empresa_electrica"]:
+                if key in datos_cliente and datos_cliente[key]:
+                    sesion_redis[key] = datos_cliente[key]
+            sesion_redis["contexto_tecnico"] = datos_cliente
+            pasos = []
+            for p in ["nombre", "whatsapp", "departamento", "municipio", "topologia", "tipo_producto"]:
+                if sesion_redis.get(p):
+                    pasos.append(p)
+            sesion_redis["pasos_completados"] = pasos
+            sesion_redis["fase_actual"] = "webhook"
+            if redis_client:
+                await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
+    else:
+        thread_id = str(uuid.uuid4())
+        run_name = obtener_run_name(thread_id)
+        data_inicial = {
+            "thread_id": thread_id,
+            "chat_id": chat_id,
+            "fingerprint": "",
+            "origen": "odoo",
+            "whatsapp": whatsapp_norm,
+            "nombre": datos_cliente.get("nombre", "Pendiente"),
+            "vendedor": datos_cliente.get("vendedor", ""),
+            "departamento": datos_cliente.get("departamento", ""),
+            "municipio": datos_cliente.get("municipio", ""),
+            "topologia": datos_cliente.get("topologia", ""),
+            "tipo_producto": datos_cliente.get("tipo_producto", ""),
+            "productos_interes": [],
+            "contexto_tecnico": datos_cliente,
+            "pasos_completados": ["nombre", "whatsapp", "departamento", "municipio", "topologia", "tipo_producto"] if all(k in datos_cliente for k in ["nombre","whatsapp","departamento","municipio","topologia","tipo_producto"]) else [],
+            "fase_actual": "webhook",
+            "ultimo_mensaje": mensaje,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        }
+        if redis_client:
+            await guardar_sesion_redis(redis_client, chat_id, data_inicial)
+            await guardar_whatsapp_redis(redis_client, whatsapp_norm, chat_id)
+
+    response_generator = generar_tokens(thread_id, mensaje, chat_id, run_name, origen="odoo")
+    respuesta_final = ""
+    async for chunk in response_generator:
+        if chunk.startswith("data: "):
+            try:
+                data = json.loads(chunk[6:])
+                if "token" in data:
+                    respuesta_final += data["token"]
+                elif "contexto_tecnico" in data:
+                    break
+            except:
+                pass
+    return {"status": "Mensaje procesado", "chat_id": chat_id, "response": respuesta_final}
 
 # =============================================================================
 # CICLO DE VIDA DE LA APLICACIÓN
@@ -519,21 +650,17 @@ async def list_routes():
     return {"routes": routes}
 
 # =============================================================================
-# ENDPOINT DE ACKNOWLEDGE (para telemetría)
+# ENDPOINT DE ACKNOWLEDGE
 # =============================================================================
 @app.post("/ack/{trace_id}")
 async def acknowledge_dispatch(trace_id: str):
     return {"status": "ACK received", "trace_id": trace_id}
 
 # =============================================================================
-# ENDPOINT DE LANGGRAPH STUDIO (External Graph)
+# ENDPOINT DE LANGGRAPH STUDIO (External Graph - compatibilidad)
 # =============================================================================
 @app.get("/studio/graph", dependencies=[Depends(validar_api_key)])
 async def get_graph_schema():
-    """
-    Devuelve el esquema del grafo para LangSmith Studio (compatibilidad).
-    NOTA: Para observabilidad completa, se recomienda usar Langfuse.
-    """
     global graph
     if graph is None:
         raise HTTPException(status_code=503, detail="Grafo no inicializado aún")
@@ -603,21 +730,22 @@ async def registrar_feedback(feedback: dict):
     Registra feedback del usuario en Langfuse (scores).
     ISO/IEC 25010: La retroalimentación del usuario es un indicador de calidad percibida.
     DORA: El feedback registrado permite mejorar la resiliencia operacional.
-    
+
     Prueba de caja negra (ISO/IEC 29119):
         1. Enviar feedback válido → score registrado en Langfuse
         2. Enviar feedback sin trace_id → error 422 (validación)
         3. Enviar feedback con value fuera de rango → error 400
     """
-    from langfuse import get_client
-    
     if "trace_id" not in feedback:
         raise HTTPException(status_code=422, detail="trace_id es requerido")
     if "value" not in feedback:
         raise HTTPException(status_code=422, detail="value es requerido")
-    
+
     try:
-        langfuse = get_client()
+        langfuse = get_langfuse_client()
+        if langfuse is None:
+            raise HTTPException(status_code=503, detail="Langfuse no está disponible")
+
         langfuse.score(
             trace_id=feedback["trace_id"],
             name=feedback.get("name", "satisfaccion"),
@@ -634,17 +762,17 @@ async def registrar_feedback(feedback: dict):
 # FUNCIÓN DE GENERACIÓN DE TOKENS (CON INTEGRACIÓN LANGfuse)
 # =============================================================================
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
-                         nuevo_whatsapp: str | None = None, origen: str = "desconocido", 
+                         nuevo_whatsapp: str | None = None, origen: str = "desconocido",
                          fingerprint: str | None = None) -> AsyncGenerator[str, None]:
     """
     Genera tokens de respuesta del agente con trazabilidad Langfuse integrada.
-    
+
     OBSERVABILIDAD (ISO/IEC 25010, DORA):
     - Cada ejecución del grafo se registra en Langfuse como una traza.
     - user_id = número de WhatsApp en formato E.164 (requerido por Meta API).
     - session_id = thread_id para agrupar conversaciones multi-turno.
     - Metadatos: chat_id, fingerprint, caso, origen, vendedor.
-    
+
     Prueba de caja negra (ISO/IEC 29119):
         1. Ejecutar conversación → traza aparece en Langfuse con user_id y metadatos
         2. Ejecutar conversación con error → error se captura en Langfuse
@@ -656,14 +784,25 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         run_name = caso
 
     # =========================================================================
-    # INSTRUMENTACIÓN CON LANGfuse
+    # INSTRUMENTACIÓN CON LANGfuse (con protección)
     # =========================================================================
     whatsapp = nuevo_whatsapp or ""
-    langfuse_handler = get_langfuse_handler(thread_id, chat_id, whatsapp, fingerprint, caso, origen)
-    
+    user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
+
+    langfuse_handler = get_langfuse_handler(
+        user_id=user_id,
+        session_id=thread_id,
+        metadata={
+            "chat_id": chat_id,
+            "fingerprint": fingerprint,
+            "caso": caso,
+            "origen": origen,
+            "environment": os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "production")
+        }
+    )
+
     config = {
         "configurable": {"thread_id": thread_id},
-        "callbacks": [langfuse_handler],  # <-- INYECCIÓN DE LANGfuse
         "run_name": f"caso_{caso}",
         "metadata": {
             "trace_id": trace_id,
@@ -671,10 +810,16 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             "origen": origen,
             "caso": caso,
             "fingerprint": fingerprint,
-            "whatsapp": normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
+            "whatsapp": user_id
         }
     }
-    logger.info(f"Iniciando ejecución Langfuse para caso {caso} con user_id {config['metadata']['whatsapp']}")
+
+    # Solo añadir callbacks si Langfuse está habilitado
+    if langfuse_handler:
+        config["callbacks"] = [langfuse_handler]
+        logger.info(f"Iniciando ejecución Langfuse para caso {caso} con user_id {user_id}")
+    else:
+        logger.debug(f"Langfuse no disponible – ejecutando sin trazabilidad LLM para caso {caso}")
 
     # =========================================================================
     # RECUPERACIÓN DE SESIÓN E HISTORIAL
@@ -757,7 +902,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     }
 
     # =========================================================================
-    # EJECUCIÓN DEL GRAFO (CON LANGfuse INYECTADO)
+    # EJECUCIÓN DEL GRAFO (CON LANGfuse SI ESTÁ DISPONIBLE)
     # =========================================================================
     async with locks[thread_id]:
         resultado = await graph.ainvoke(estado_inicial, config=config)
@@ -782,24 +927,24 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         if redis_client:
             if not sesion_redis:
                 sesion_redis = {}
-            for key in ["nombre", "whatsapp", "vendedor", "departamento", "municipio", 
-                        "topologia", "tipo_producto", "definicion_necesidad", 
+            for key in ["nombre", "whatsapp", "vendedor", "departamento", "municipio",
+                        "topologia", "tipo_producto", "definicion_necesidad",
                         "consumo_actual", "empresa_electrica"]:
                 if ctx.get(key) and not sesion_redis.get(key):
                     sesion_redis[key] = ctx.get(key)
-            
+
             if ctx.get("productos_interes"):
                 sesion_redis["productos_interes"] = ctx.get("productos_interes")
                 if not sesion_redis.get("vendedor"):
                     vendedor_email = asignar_vendedor(ctx["productos_interes"])
                     sesion_redis["vendedor"] = vendedor_email
-            
+
             if ctx.get("resumen"):
                 sesion_redis["resumen"] = ctx.get("resumen")
             elif historial:
                 resumen = await generar_resumen_con_llm(historial, ctx)
                 sesion_redis["resumen"] = resumen
-            
+
             sesion_redis["contexto_tecnico"] = ctx
             sesion_redis["thread_id"] = thread_id
             sesion_redis["chat_id"] = chat_id
