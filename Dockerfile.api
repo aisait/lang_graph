@@ -1,8 +1,8 @@
-# Dockerfile.api
 FROM python:3.11-slim
 
 LABEL maintainer="AISA Solar - Equipo de Ingeniería"
-LABEL description="Servidor API centralizado de JARVI 2.0"
+LABEL description="Servidor API centralizado de JARVI 2.0. Contiene el grafo de agente, \
+conexiones a Odoo, OpenAI y base de datos de auditoría."
 LABEL version="2.0.02"
 
 WORKDIR /app
@@ -10,12 +10,12 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar e instalar TODAS las dependencias en un solo paso
+# Copiar e instalar TODAS las dependencias en UN SOLO PASO
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Si necesitas versiones específicas de algunos paquetes, hazlo SIN --upgrade
-# y asegúrate de incluir langfuse aquí también.
+# Forzar la instalación de langfuse y las versiones correctas de langgraph
+# SIN --upgrade para evitar conflictos
 RUN pip install --no-cache-dir \
     psutil \
     google-auth \
