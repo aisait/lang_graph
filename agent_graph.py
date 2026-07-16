@@ -50,13 +50,22 @@ from ontology import obtener_fragmento_ontologia, cargar_ontologia, obtener_prod
 from telemetry import trace_id_var, span_id_var, parent_span_id_var, schedule_telemetry_event
 from ubicacion import buscar_ubicacion
 
-# Observabilidad: Langfuse (reemplaza a LangSmith)
-from langfuse.decorators import observe
+# Observabilidad: Langfuse (protegido)
+try:
+    from langfuse.decorators import observe
+    _LANGFUSE_AVAILABLE = True
+except ImportError:
+    _LANGFUSE_AVAILABLE = False
+    # Definir un decorador nulo para que no falle
+    def observe(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
 
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# CONFIGURACIÓN DE API KEY (compatible con OPENAI_API_KEY_1, _2, _3)
+# CONFIGURACIÓN DE API KEY
 # =============================================================================
 OPENAI_KEYS = [os.getenv(f"OPENAI_API_KEY_{i}") for i in range(1, 4)]
 OPENAI_KEYS = [k for k in OPENAI_KEYS if k]
@@ -65,7 +74,7 @@ if not DEFAULT_API_KEY:
     raise RuntimeError("No se encontró ninguna API Key de OpenAI.")
 
 # =============================================================================
-# CÓDIGOS DE ÁREA CENTROAMÉRICA
+# CÓDIGOS DE ÁREA
 # =============================================================================
 CODIGOS_AREA = {
     "belice": "+501", "costa rica": "+506", "el salvador": "+503",
@@ -74,14 +83,6 @@ CODIGOS_AREA = {
 }
 
 def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) -> tuple:
-    """
-    Normaliza nombre y número de WhatsApp con código de área del país detectado.
-    Prueba de caja negra (ISO/IEC 29119):
-        1. nombre_raw = "juan perez", whatsapp_raw = "12345678", ubicacion_raw = "Guatemala"
-           → ("Juan Perez", "+502 1234-5678")
-        2. Sin número → ("Usuario", "Pendiente")
-        3. País no detectado → código por defecto +502
-    """
     nombre_str = str(nombre_raw).strip() if nombre_raw else "Usuario"
     nombre_partes = nombre_str.split()
     nombre_normalizado = " ".join([p.capitalize() for p in nombre_partes]) if nombre_partes else "Usuario"
@@ -109,7 +110,7 @@ def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) 
     return nombre_normalizado, whatsapp_formateado
 
 # =============================================================================
-# ESQUEMAS DE DATOS
+# ESQUEMAS
 # =============================================================================
 class ExtractorContacto(BaseModel):
     nombre: Optional[str] = Field(None, description="Nombre de pila y apellidos.")
@@ -135,14 +136,9 @@ class AgentState(TypedDict):
     contexto_tecnico: InferenciaEnergetica
 
 # =============================================================================
-# DECORADOR CTFOM (Telemetría de infraestructura)
+# DECORADOR CTFOM (infraestructura)
 # =============================================================================
 def observe_node(layer: str = "graph", node_name: str = ""):
-    """
-    Decorador para telemetría CTFOM (CPU, memoria, latencia).
-    Se mantiene para métricas de infraestructura.
-    Langfuse se añade mediante @observe separado.
-    """
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -175,10 +171,10 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA DE PERSISTENCIA DE OPORTUNIDADES (CON LANGfuse)
+# HERRAMIENTA (con Langfuse)
 # =============================================================================
 @tool
-@observe(as_type="span")  # <-- LANGfuse: traza la herramienta como un span
+@observe(as_type="span") if _LANGFUSE_AVAILABLE else (lambda x: x)
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
 def procesar_oportunidad_backend(
     nombre_apellidos: str,
@@ -190,18 +186,9 @@ def procesar_oportunidad_backend(
     numero_whatsapp: str,
     resumen_18_palabras: str
 ) -> str:
-    """
-    Envía de forma asíncrona los leads estructurados capturados por la IA
-    hacia los canales del Controller (correo Gmail y webhook de WhatsApp).
-
-    Prueba de caja negra (ISO/IEC 29119):
-        - Verificar que se envíe un correo al Controller y un mensaje de WhatsApp
-          usando los parámetros de entrada.
-        - Verificar que, aunque falle uno de los canales, el otro se ejecute.
-        - La herramienta debe retornar un mensaje de éxito incluyendo el contacto normalizado.
-    """
+    """Envía leads a canales del Controller."""
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
-    
+
     def tarea_background():
         num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
         try:
@@ -251,7 +238,7 @@ def procesar_oportunidad_backend(
             )
         except Exception as e:
             logger.error(f"Fallo en envío de webhook: {e}")
-    
+
     threading.Thread(target=tarea_background).start()
     return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
 
@@ -277,25 +264,17 @@ def extraer_tipo_producto(mensaje: str) -> Optional[str]:
     return None
 
 # =============================================================================
-# CONSTRUCCIÓN DEL GRAFO (CON NOMBRES SEMÁNTICOS)
+# CONSTRUCCIÓN DEL GRAFO
 # =============================================================================
 def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
     llm = ChatOpenAI(openai_api_key=DEFAULT_API_KEY, model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
     extractor_llm = llm.with_structured_output(ExtractorContacto)
 
-    # -------------------- Nodo: Clasificador de Intención Comercial --------------------
     @auditar_fase(nombre_fase="Clasificador de Intención Comercial", criticidad="MEDIA")
     @observe_node(node_name="clasificar_intencion_comercial")
-    @observe()  # <-- LANGfuse: traza este nodo como una observación
+    @observe() if _LANGFUSE_AVAILABLE else (lambda x: x)
     def clasificar_intencion_comercial_node(state: AgentState):
-        """
-        Infiere la intención del cliente (On-Grid/Off-Grid) basado en el mensaje.
-        Prueba de caja negra (ISO/IEC 29119):
-            1. Mensaje con "red" o "atado" → topología On-Grid
-            2. Mensaje con "aislado" o "batería" → topología Off-Grid
-            3. Mensaje sin palabras clave → no establece topología
-        """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
@@ -309,17 +288,10 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["requiere_auditoria_electrica"] = True
         return {"contexto_tecnico": ctx}
 
-    # -------------------- Nodo: Validador de Ubicación del Cliente --------------------
     @auditar_fase(nombre_fase="Validador de Ubicación del Cliente", criticidad="MEDIA")
     @observe_node(node_name="validar_ubicacion_cliente")
-    @observe()  # <-- LANGfuse
+    @observe() if _LANGFUSE_AVAILABLE else (lambda x: x)
     def validar_ubicacion_cliente_node(state: AgentState):
-        """
-        Valida y enriquece la ubicación del cliente usando fuzzy matching.
-        Prueba de caja negra:
-            1. Mensaje con "zona 10 Guatemala" → departamento Guatemala, municipio Guatemala
-            2. Mensaje sin ubicación → no modifica el contexto
-        """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
@@ -337,19 +309,10 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["tarifa_base_gtq"] = 1.45
         return {"contexto_tecnico": ctx}
 
-    # -------------------- Nodo: Selección de Productos --------------------
     @auditar_fase(nombre_fase="Selección de Productos", criticidad="ALTA")
     @observe_node(node_name="seleccionar_productos")
-    @observe()  # <-- LANGfuse
+    @observe() if _LANGFUSE_AVAILABLE else (lambda x: x)
     def seleccionar_productos_node(state: AgentState):
-        """
-        Determina si el cliente busca sistema completo o producto unitario,
-        y selecciona los productos relevantes de la ontología.
-        Prueba de caja negra:
-            1. Mensaje con "sistema" → tipo_producto = "sistema"
-            2. Mensaje con "panel" → tipo_producto = "unitario"
-            3. Sin palabras clave → pregunta al cliente
-        """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if ctx.get("tipo_producto"):
@@ -366,22 +329,13 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
         return {"messages": new_messages, "contexto_tecnico": ctx}
 
-    # -------------------- Nodo: Generación de Respuesta Comercial --------------------
     @auditar_fase(nombre_fase="Generación de Respuesta Comercial", criticidad="ALTA")
     @observe_node(node_name="generar_respuesta_comercial")
-    @observe()  # <-- LANGfuse
+    @observe() if _LANGFUSE_AVAILABLE else (lambda x: x)
     def generar_respuesta_comercial_node(state: AgentState, config: RunnableConfig):
-        """
-        Genera la respuesta final del agente con base en el contexto técnico y la ontología.
-        Prueba de caja negra:
-            1. Cliente con topología y tipo_producto → respuesta incluye productos seleccionados
-            2. Cliente sin datos suficientes → respuesta solicita información
-            3. Error en la llamada a LLM → se captura y registra en Langfuse
-        """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
-        # Extración forzada de nombre y número
         if ultimo_mensaje:
             num_match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', ultimo_mensaje)
             if num_match:
@@ -390,7 +344,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 if num_norm and num_norm != "Pendiente":
                     ctx["whatsapp"] = num_norm
                     logger.info(f"Extraído número de WhatsApp: {num_norm}")
-            name_match = re.search(r'(?:mi\s+nombre\s+es|nombre[:]\s*|me\s+llamo|soy\s+)([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)', 
+            name_match = re.search(r'(?:mi\s+nombre\s+es|nombre[:]\s*|me\s+llamo|soy\s+)([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)',
                                    ultimo_mensaje, re.IGNORECASE)
             if name_match:
                 raw_name = name_match.group(1).strip()
@@ -398,7 +352,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     ctx["nombre"] = raw_name
                     logger.info(f"Extraído nombre: {raw_name}")
 
-        # Extracción con modelo estructurado (respaldo)
         if ultimo_mensaje and (not ctx.get("nombre") or ctx.get("nombre") == "Usuario" or not ctx.get("whatsapp")):
             try:
                 extraccion = extractor_llm.invoke(f"Identifica nombre o teléfono. Mensaje: {ultimo_mensaje}")
@@ -409,20 +362,17 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             except Exception:
                 pass
 
-        # Extracción de vendedor
         if ultimo_mensaje and not ctx.get("vendedor"):
-            vendedor_match = re.search(r'(?:mi\s+vendedor\s+es|vendedor[:]\s*)([A-Za-z0-9\s]+)', 
+            vendedor_match = re.search(r'(?:mi\s+vendedor\s+es|vendedor[:]\s*)([A-Za-z0-9\s]+)',
                                        ultimo_mensaje, re.IGNORECASE)
             if vendedor_match:
                 ctx["vendedor"] = vendedor_match.group(1).strip()
 
-        # Detectar tipo de producto
         if ultimo_mensaje and not ctx.get("tipo_producto"):
             tipo = extraer_tipo_producto(ultimo_mensaje)
             if tipo:
                 ctx["tipo_producto"] = tipo
 
-        # Seleccionar productos
         if ctx.get("topologia") and ctx.get("tipo_producto") and not ctx.get("productos_interes"):
             ctx["productos_interes"] = obtener_productos_relevantes(
                 topologia=ctx["topologia"],
@@ -431,7 +381,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             )
             logger.info(f"Productos seleccionados: {ctx['productos_interes']}")
 
-        # Reglas de recolección de datos
         if ctx.get("requiere_auditoria_electrica"):
             regla_datos = "1. DEBES recopilar sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta."
         else:
@@ -453,7 +402,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if ctx.get("productos_interes"):
             config["metadata"]["productos_tags"] = [p["tag"] for p in ctx["productos_interes"]]
 
-        # System prompt
         prompt_sistema = SystemMessage(
             content=(
                 f"Eres Jarvi, Ingeniero de Preventa de AISA Solar. "
@@ -472,16 +420,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
-    # -------------------- Nodo: Anexar Caso a la Respuesta --------------------
     @observe_node(node_name="anexar_caso_respuesta")
-    @observe()  # <-- LANGfuse
+    @observe() if _LANGFUSE_AVAILABLE else (lambda x: x)
     def anexar_caso_respuesta_node(state: AgentState, config: RunnableConfig):
-        """
-        Añade el número de caso al final de la respuesta.
-        Prueba de caja negra:
-            1. Mensaje sin caso → se añade "[Caso No. {caso}]"
-            2. Mensaje ya con caso → no se duplica
-        """
         messages = state.get("messages", [])
         caso = config.get("metadata", {}).get("caso", "000000000000")
         if messages and isinstance(messages[-1], AIMessage):
@@ -492,7 +433,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": messages}
 
     # =========================================================================
-    # ENSAMBLAJE DEL GRAFO
+    # ENSAMBLAJE
     # =========================================================================
     graph_builder.add_node("clasificar_intencion_comercial", clasificar_intencion_comercial_node)
     graph_builder.add_node("validar_ubicacion_cliente", validar_ubicacion_cliente_node)
@@ -517,9 +458,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     return graph_builder.compile(checkpointer=checkpointer)
 
-# =============================================================================
-# PUNTO DE ENTRADA PARA STUDIO
-# =============================================================================
 if __name__ == "__main__":
     from langgraph.checkpoint.memory import MemorySaver
     checkpointer_studio = MemorySaver()
