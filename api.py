@@ -1,5 +1,5 @@
 """
-main.py - Servidor FastAPI con trazabilidad única por fingerprint para frontend,
+api.py - Servidor FastAPI con trazabilidad única por fingerprint para frontend,
 y chat_id de Odoo para webhooks.
 
 ESTA VERSIÓN INCLUYE LA INICIALIZACIÓN DE LANGfuse DE FORMA DIRECTA,
