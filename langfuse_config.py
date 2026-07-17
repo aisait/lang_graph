@@ -17,30 +17,13 @@ PRUEBAS DE CAJA NEGRA (ISO/IEC 29119):
     3. get_langfuse_handler() con user_id → retorna CallbackHandler con metadatos
     4. get_langfuse_handler() sin user_id → usa fallback
 """
-
 import os
 import logging
 from typing import Optional
 
-# Intentar importar Langfuse; si falla, se desactiva la funcionalidad
-try:
-    from langfuse import Langfuse
-    from langfuse.callback import CallbackHandler
-    _LANGFUSE_AVAILABLE = True
-except ImportError:
-    _LANGFUSE_AVAILABLE = False
-    Langfuse = None
-    CallbackHandler = None
-
 logger = logging.getLogger(__name__)
 
-
 class LangfuseConfig:
-    """
-    Configuración centralizada de Langfuse para JARVI 2.0.
-    Sigue el patrón Singleton para evitar múltiples inicializaciones.
-    """
-
     _instance = None
 
     def __new__(cls):
@@ -53,107 +36,59 @@ class LangfuseConfig:
         if self._initialized:
             return
         self._initialized = True
-
-        if not _LANGFUSE_AVAILABLE:
-            logger.warning("El módulo langfuse no está instalado. La trazabilidad LLM estará desactivada.")
-            self._client = None
-            self._is_enabled = False
-            return
-
         self._public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
         self._secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         self._host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         self._environment = os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "production")
+        self._client = None
+        self._is_enabled = False
+        self._check_availability()
 
-        if not self._public_key or not self._secret_key:
-            logger.warning(
-                "Langfuse no configurado correctamente: faltan LANGFUSE_PUBLIC_KEY o LANGFUSE_SECRET_KEY. "
-                "La trazabilidad LLM estará desactivada."
+    def _check_availability(self):
+        """Verifica la disponibilidad del módulo y las credenciales de forma dinámica."""
+        try:
+            from langfuse import Langfuse
+            from langfuse.callback import CallbackHandler
+            if not self._public_key or not self._secret_key:
+                logger.warning("Langfuse credenciales incompletas. Trazabilidad desactivada.")
+                return
+            self._client = Langfuse(
+                public_key=self._public_key,
+                secret_key=self._secret_key,
+                host=self._host
             )
-            self._client = None
-            self._is_enabled = False
-        else:
-            try:
-                self._client = Langfuse(
-                    public_key=self._public_key,
-                    secret_key=self._secret_key,
-                    host=self._host
-                )
-                self._is_enabled = True
-                logger.info(
-                    f"Langfuse cliente inicializado correctamente. "
-                    f"Host: {self._host}, Environment: {self._environment}"
-                )
-            except Exception as e:
-                logger.error(f"Error al inicializar Langfuse: {e}")
-                self._client = None
-                self._is_enabled = False
+            self._is_enabled = True
+            logger.info(f"Langfuse cliente inicializado correctamente. Host: {self._host}")
+        except ImportError:
+            logger.warning("El módulo langfuse no está disponible. Trazabilidad desactivada.")
+        except Exception as e:
+            logger.error(f"Error al inicializar Langfuse: {e}")
 
     @property
     def client(self):
-        """Retorna el cliente Langfuse (puede ser None si no está configurado)."""
+        # Si el cliente no se inicializó, reintentar (por si el módulo se instaló después)
+        if not self._is_enabled:
+            self._check_availability()
         return self._client
 
     @property
-    def is_enabled(self) -> bool:
-        """Indica si Langfuse está correctamente configurado y activo."""
+    def is_enabled(self):
+        if not self._is_enabled:
+            self._check_availability()
         return self._is_enabled
 
-    @property
-    def environment(self) -> str:
-        """Retorna el entorno actual (production, staging, etc.)."""
-        return self._environment
-
-    def get_handler(
-        self,
-        user_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        metadata: Optional[dict] = None
-    ) -> Optional[CallbackHandler]:
-        """
-        Crea un CallbackHandler de Langfuse con los parámetros proporcionados.
-        Si Langfuse no está habilitado, retorna None.
-
-        Prueba de caja negra (ISO/IEC 29119):
-            1. Llamar con user_id válido → retorna CallbackHandler con user_id
-            2. Llamar sin user_id y sin session_id → retorna CallbackHandler sin metadatos
-            3. Llamar cuando Langfuse está desactivado → retorna None
-        """
-        if not self.is_enabled or not _LANGFUSE_AVAILABLE:
-            logger.debug("Langfuse desactivado: no se crea CallbackHandler")
+    def get_handler(self, user_id=None, session_id=None, metadata=None):
+        if not self.is_enabled:
             return None
-
+        from langfuse.callback import CallbackHandler
         safe_metadata = metadata or {}
-        if "environment" not in safe_metadata:
-            safe_metadata["environment"] = self._environment
-
+        safe_metadata["environment"] = self._environment
         return CallbackHandler(
             user_id=user_id,
             session_id=session_id,
             metadata=safe_metadata
         )
 
-
-# Instancia global (Singleton)
+# Instancia global
 langfuse_config = LangfuseConfig()
-
-
-# Función de conveniencia para obtener el handler
-def get_langfuse_handler(
-    user_id: Optional[str] = None,
-    session_id: Optional[str] = None,
-    metadata: Optional[dict] = None
-) -> Optional[CallbackHandler]:
-    """
-    Función de conveniencia que delega en langfuse_config.get_handler.
-    """
-    return langfuse_config.get_handler(user_id, session_id, metadata)
-
-
-# Función para obtener el cliente Langfuse (útil para scores y consultas)
-def get_langfuse_client():
-    """
-    Retorna el cliente Langfuse.
-    Puede ser None si Langfuse no está configurado.
-    """
     return langfuse_config.client
