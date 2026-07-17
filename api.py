@@ -52,6 +52,7 @@ from schemas import ChatRequest, AudioRequest, ImageRequest
 from agent_graph import create_graph, normalizar_contacto
 from ontology import obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
+from db_client import get_bi_db_url, get_ctfom_db_url
 
 logger = logging.getLogger(__name__)
 
@@ -195,12 +196,17 @@ def normalizar_whatsapp_e164(telefono: str) -> str:
     return limpio
 
 # =============================================================================
-# FUNCIONES DE POSTGRESQL
+# FUNCIONES DE POSTGRESQL (USAN BI_DATABASE_URL para resúmenes)
 # =============================================================================
 async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
                                    fingerprint: Optional[str] = None, origen: str = "desconocido") -> bool:
+    """
+    Guarda el resumen de la conversación en la base de datos de BI (negocio).
+    Prueba de caja negra (ISO/IEC 29119):
+        1. Guardar resumen → verificar que aparece en la tabla resumenes de BI_DATABASE_URL.
+    """
     try:
-        db_url = get_db_url()
+        db_url = get_bi_db_url()  # <-- Usa BI_DATABASE_URL
         conn = await asyncpg.connect(db_url)
         metadata = contexto.copy()
         metadata["origen"] = origen
@@ -216,14 +222,14 @@ async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
             chat_id, resumen, json.dumps(metadata)
         )
         await conn.close()
-        logger.info(f"Resumen guardado en PostgreSQL para chat_id {chat_id}")
+        logger.info(f"Resumen guardado en PostgreSQL (BI) para chat_id {chat_id}")
         return True
     except Exception as e:
         logger.error(f"Error al guardar resumen: {e}")
         return False
 
 # =============================================================================
-# FUNCIONES DE REDIS
+# FUNCIONES DE REDIS (buffer de sesiones)
 # =============================================================================
 REDIS_TTL = int(os.getenv("REDIS_TTL", 604800))
 HISTORIAL_LIMITE = 64
@@ -657,26 +663,6 @@ async def acknowledge_dispatch(trace_id: str):
     return {"status": "ACK received", "trace_id": trace_id}
 
 # =============================================================================
-# ENDPOINT DE LANGGRAPH STUDIO (External Graph - compatibilidad)
-# =============================================================================
-@app.get("/studio/graph", dependencies=[Depends(validar_api_key)])
-async def get_graph_schema():
-    global graph
-    if graph is None:
-        raise HTTPException(status_code=503, detail="Grafo no inicializado aún")
-    try:
-        graph_obj = graph.get_graph()
-        if hasattr(graph_obj, "to_dict"):
-            return graph_obj.to_dict()
-        elif hasattr(graph_obj, "to_json"):
-            result = graph_obj.to_json()
-            return json.loads(result) if isinstance(result, str) else result
-        else:
-            raise HTTPException(status_code=500, detail="El grafo no soporta serialización")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"No se pudo serializar el grafo: {str(e)}")
-
-# =============================================================================
 # MIDDLEWARE DE TELEMETRÍA (CTFOM)
 # =============================================================================
 @app.middleware("http")
@@ -978,7 +964,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                 await eliminar_historial_redis(redis_client, chat_id)
                 sesion_redis["fase_actual"] = "completado"
                 await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-                logger.info(f"Resumen guardado en PostgreSQL para chat_id {chat_id}")
+                logger.info(f"Resumen guardado en PostgreSQL (BI) para chat_id {chat_id}")
 
         # =========================================================================
         # EMISIÓN DE RESPUESTA (STREAMING)
