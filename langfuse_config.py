@@ -2,6 +2,8 @@ import os
 import logging
 from typing import Optional
 
+print("=== [LANGFUSE] Inicializando configuración ===")  # <-- FORZAR VISIBILIDAD
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,6 +20,7 @@ class LangfuseConfig:
         if self._initialized:
             return
         self._initialized = True
+        print("=== [LANGFUSE] Entrando a __init__ ===")  # <-- FORZAR VISIBILIDAD
         self._public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
         self._secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         self._host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
@@ -27,27 +30,22 @@ class LangfuseConfig:
         self._check_availability()
 
     def _check_availability(self):
-        """Verifica la disponibilidad del módulo y las credenciales de forma dinámica."""
-        logger.info("Iniciando verificación de Langfuse...")
+        print("=== [LANGFUSE] Iniciando verificación de disponibilidad ===")  # <-- FORZAR VISIBILIDAD
         try:
             from langfuse import Langfuse
-            logger.info("Módulo langfuse importado correctamente.")
+            print("=== [LANGFUSE] Módulo langfuse importado ===")
             if not self._public_key or not self._secret_key:
-                logger.error("Langfuse credenciales incompletas. Public Key o Secret Key faltantes.")
                 raise ValueError("Faltan credenciales de Langfuse")
-            logger.info(f"Credenciales encontradas. Host: {self._host}")
+            print(f"=== [LANGFUSE] Credenciales OK. Host: {self._host}")
             self._client = Langfuse(
                 public_key=self._public_key,
                 secret_key=self._secret_key,
                 host=self._host
             )
             self._is_enabled = True
-            logger.info(f"Langfuse cliente inicializado correctamente. Host: {self._host}")
-        except ImportError as e:
-            logger.error(f"ImportError al importar langfuse: {e}")
-            raise  # Relanza para que el contenedor falle y veamos el error
+            print(f"=== [LANGFUSE] Cliente inicializado correctamente. Host: {self._host}")
         except Exception as e:
-            logger.error(f"Error al inicializar Langfuse: {e}", exc_info=True)
+            print(f"=== [LANGFUSE] ERROR: {e}")
             raise  # Relanza para que el contenedor falle y veamos el error
 
     @property
@@ -64,7 +62,7 @@ class LangfuseConfig:
 
     def get_handler(self, user_id=None, session_id=None, metadata=None):
         if not self.is_enabled:
-            logger.debug("Langfuse no disponible: no se crea CallbackHandler")
+            print("=== [LANGFUSE] Langfuse no disponible, handler no creado ===")
             return None
         try:
             from langfuse.callback import CallbackHandler
@@ -76,11 +74,8 @@ class LangfuseConfig:
                 session_id=session_id,
                 metadata=safe_metadata
             )
-        except ImportError as e:
-            logger.error(f"No se pudo importar CallbackHandler: {e}")
-            return None
         except Exception as e:
-            logger.error(f"Error al crear CallbackHandler: {e}")
+            print(f"=== [LANGFUSE] Error al crear CallbackHandler: {e}")
             return None
 
 
