@@ -1,7 +1,0 @@
-{
-  "dependencies": ["."],
-  "graphs": {
-    "aisa_chatbot": "./studio_graph.py:jarvi_graph"
-  },
-  "env": ".env"
-}
