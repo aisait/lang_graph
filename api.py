@@ -2,8 +2,7 @@
 api.py - Servidor FastAPI con trazabilidad única por fingerprint para frontend,
 y chat_id de Odoo para webhooks.
 
-ESTA VERSIÓN INCLUYE LA INICIALIZACIÓN DE LANGfuse DE FORMA DIRECTA,
-SIN DEPENDER DE UN MÓDULO EXTERNO, PARA EVITAR PROBLEMAS DE CACHÉ.
+ESTA VERSIÓN INCLUYE LA INICIALIZACIÓN DE LANGfuse DE FORMA DIRECTA.
 """
 
 import os
@@ -26,7 +25,6 @@ from fastapi.security import APIKeyHeader
 from contextlib import asynccontextmanager, AsyncExitStack
 from pydantic import BaseModel
 
-# LangGraph y LangChain
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -38,14 +36,13 @@ try:
 except ImportError:
     LANGFUSE_AVAILABLE = False
 
-# Módulos internos
 from schemas import ChatRequest, AudioRequest, ImageRequest
 from agent_graph import create_graph, normalizar_contacto
 from ontology import obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 from db_client import get_bi_db_url, get_ctfom_db_url
 
-print("=== [MAIN] INICIO DE main.py - CARGA COMPLETA ===")
+print("=== [API] INICIO DE api.py - CARGA COMPLETA ===")
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +105,7 @@ class TTSRequest(BaseModel):
     voice: str | None = None
 
 # =============================================================================
-# SEGURIDAD (ISO/IEC 27001)
+# SEGURIDAD
 # =============================================================================
 API_KEY = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
@@ -132,7 +129,7 @@ def taxonomy_error(exc: Exception) -> str:
     return "SWR-API-UNKNOWN-000"
 
 # =============================================================================
-# FUNCIONES DE EXTRACCIÓN DE DATOS (Se mantienen idénticas)
+# FUNCIONES DE EXTRACCIÓN DE DATOS
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
     if not mensaje:
@@ -246,7 +243,7 @@ async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
         return False
 
 # =============================================================================
-# FUNCIONES DE REDIS (buffer de sesiones)
+# FUNCIONES DE REDIS
 # =============================================================================
 REDIS_TTL = int(os.getenv("REDIS_TTL", 604800))
 HISTORIAL_LIMITE = 64
@@ -782,7 +779,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         }
     )
 
-    print(f"=== [MAIN] Handler de Langfuse creado: {langfuse_handler is not None}")
+    print(f"=== [API] Handler de Langfuse creado: {langfuse_handler is not None}")
 
     config = {
         "configurable": {"thread_id": thread_id},
@@ -799,10 +796,10 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
 
     if langfuse_handler:
         config["callbacks"] = [langfuse_handler]
-        print("=== [MAIN] Handler inyectado en config")
+        print("=== [API] Handler inyectado en config")
         logger.info(f"Iniciando ejecución Langfuse para caso {caso} con user_id {user_id}")
     else:
-        print("=== [MAIN] NO se pudo inyectar handler")
+        print("=== [API] NO se pudo inyectar handler")
         logger.debug(f"Langfuse no disponible – ejecutando sin trazabilidad LLM para caso {caso}")
 
     sesion_redis = None
@@ -983,9 +980,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     if langfuse_enabled:
         try:
             langfuse_client.flush()
-            print("=== [MAIN] Flush de Langfuse ejecutado ===")
+            print("=== [API] Flush de Langfuse ejecutado ===")
         except Exception as e:
-            print(f"=== [MAIN] Error en flush de Langfuse: {e}")
+            print(f"=== [API] Error en flush de Langfuse: {e}")
 
 # =============================================================================
 # ENDPOINTS AUXILIARES
