@@ -7,15 +7,11 @@ LABEL version="2.0.02"
 
 WORKDIR /app
 
-# Dependencias del sistema
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements.txt
+# Copiar requirements.txt y luego instalar todo en UN SOLO PASO
 COPY requirements.txt .
-
-# INSTALACIÓN ÚNICA Y DEFINITIVA (sin --upgrade)
-# Se incluyen TODAS las dependencias en un solo paso para evitar conflictos
 RUN pip install --no-cache-dir \
     -r requirements.txt \
     psutil \
@@ -27,10 +23,8 @@ RUN pip install --no-cache-dir \
     langchain-core==0.2.43 \
     langfuse>=2.0.0
 
-# Copiar el resto del código
 COPY . .
 
 EXPOSE 8000
 
-# Comando de inicio
 CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --timeout-keep-alive 120"]
