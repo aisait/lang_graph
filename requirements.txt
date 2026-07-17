@@ -1,45 +1,31 @@
 # =============================================================================
-# requirements.txt (Backend JARVI 2.0)
-# Dependencias del servidor FastAPI, el grafo LangGraph y los módulos de
-# persistencia, telemetría y servicios externos.
-# Cumple con ISO/IEC 25010 (Fiabilidad, Eficiencia) e ISO/IEC 29119 (Pruebas).
+# requirements.txt (Backend JARVI 2.0 - Optimizado)
 # =============================================================================
 
-# ---------------------------------------------------------------------
-# Frameworks Web (ISO 25010: Adecuación funcional, Usabilidad)
-# ---------------------------------------------------------------------
+# Frameworks Web
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.1
 python-multipart>=0.0.9
-Flask>=2.2.0
 
-# ---------------------------------------------------------------------
-# Core Agéntico (ISO 25010: Eficiencia de desempeño, Fiabilidad)
-# ---------------------------------------------------------------------
+# Core Agéntico
 langchain==0.2.17
-langgraph==0.2.56
-langchain-openai==0.1.25
-openai>=1.50.0
+langchain-core==0.2.43
 langchain-community==0.2.19
+langchain-openai==0.1.25
+langgraph==0.2.56
+openai>=1.50.0
 
-# ---------------------------------------------------------------------
-# OBSERVABILIDAD Y TRAZABILIDAD (ISO/IEC 25010, DORA)
-# ---------------------------------------------------------------------
+# Observabilidad
 langfuse>=2.0.0
 langgraph-checkpoint==2.0.7
 langgraph-checkpoint-postgres==2.0.7
 
-# ---------------------------------------------------------------------
-# Persistencia y Base de Datos (ISO 25010: Fiabilidad, Mantenibilidad)
-# ---------------------------------------------------------------------
-psycopg2-binary>=2.9.9
+# Persistencia (Estandarizado en v3)
 psycopg[binary]>=3.1.4
 sqlalchemy>=2.0.31
 asyncpg>=0.29.0
 
-# ---------------------------------------------------------------------
-# Utilidades y Servicios Externos (ISO 25010: Seguridad, Compatibilidad)
-# ---------------------------------------------------------------------
+# Utilidades y Servicios Externos
 requests>=2.32.3
 python-dotenv>=1.0.1
 pydantic>=2.7.4
@@ -49,14 +35,9 @@ google-auth>=2.30.0
 google-auth-oauthlib>=1.2.0
 google-api-python-client>=2.198.0
 
-# ---------------------------------------------------------------------
 # Normalización de texto y fuzzy matching
-# ---------------------------------------------------------------------
 symspellpy>=6.7.0
 rapidfuzz>=3.0.0
 
-# ---------------------------------------------------------------------
-# Cache y otros
-# ---------------------------------------------------------------------
+# Cache
 redis>=5.0.0
-langchain-core==0.2.43
