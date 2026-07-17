@@ -1,8 +1,14 @@
+"""
+langfuse_cfg.py
+Configuración centralizada de Langfuse para JARVI 2.0.
+Renombrado para forzar reconstrucción de caché en Railway.
+"""
+
 import os
 import logging
 from typing import Optional
 
-print("=== [LANGFUSE] Inicializando configuración ===")  # <-- FORZAR VISIBILIDAD
+print("=== [LANGFUSE] CARGANDO MÓDULO langfuse_cfg.py ===")
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +26,7 @@ class LangfuseConfig:
         if self._initialized:
             return
         self._initialized = True
-        print("=== [LANGFUSE] Entrando a __init__ ===")  # <-- FORZAR VISIBILIDAD
+        print("=== [LANGFUSE] Entrando a __init__ ===")
         self._public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
         self._secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         self._host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
@@ -30,7 +36,7 @@ class LangfuseConfig:
         self._check_availability()
 
     def _check_availability(self):
-        print("=== [LANGFUSE] Iniciando verificación de disponibilidad ===")  # <-- FORZAR VISIBILIDAD
+        print("=== [LANGFUSE] Iniciando verificación de disponibilidad ===")
         try:
             from langfuse import Langfuse
             print("=== [LANGFUSE] Módulo langfuse importado ===")
@@ -46,7 +52,7 @@ class LangfuseConfig:
             print(f"=== [LANGFUSE] Cliente inicializado correctamente. Host: {self._host}")
         except Exception as e:
             print(f"=== [LANGFUSE] ERROR: {e}")
-            raise  # Relanza para que el contenedor falle y veamos el error
+            raise  # Para que el contenedor falle y veamos el error
 
     @property
     def client(self):
