@@ -10,16 +10,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+
+# Paso 1: Instalación completa con --upgrade para forzar resolución de versiones
+RUN pip install --no-cache-dir --upgrade -r requirements.txt
+
+# Paso 2: Instalación específica de paquetes con versiones fijas (sin --upgrade para no desinstalar langfuse)
 RUN pip install --no-cache-dir \
-    -r requirements.txt \
     psutil \
     google-auth \
     google-api-python-client \
     langgraph==0.2.56 \
     langgraph-checkpoint==2.0.7 \
     langgraph-checkpoint-postgres==2.0.7 \
-    langchain-core==0.2.43 \
-    langfuse>=2.0.0
+    langchain-core==0.2.43
+
+# Paso 3: Instalación FORZADA de langfuse (independiente, después de todas las demás)
+RUN pip install --no-cache-dir --upgrade langfuse>=2.0.0
 
 COPY . .
 
