@@ -44,8 +44,8 @@ from pydantic import BaseModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
-# Observabilidad: Langfuse (reemplaza a LangSmith) - con importación segura
-from langfuse_config import get_langfuse_handler, get_langfuse_client, langfuse_config
+# Observabilidad: Langfuse (reemplaza a LangSmith) - importación desde nuevo nombre
+from langfuse_cfg import get_langfuse_handler, get_langfuse_client, langfuse_config
 
 # Módulos internos
 from schemas import ChatRequest, AudioRequest, ImageRequest
@@ -53,6 +53,8 @@ from agent_graph import create_graph, normalizar_contacto
 from ontology import obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 from db_client import get_bi_db_url, get_ctfom_db_url
+
+print("=== [JARVI] INICIO DE API.PY - CARGA COMPLETA ===")
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +208,7 @@ async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
         1. Guardar resumen → verificar que aparece en la tabla resumenes de BI_DATABASE_URL.
     """
     try:
-        db_url = get_bi_db_url()  # <-- Usa BI_DATABASE_URL
+        db_url = get_bi_db_url()
         conn = await asyncpg.connect(db_url)
         metadata = contexto.copy()
         metadata["origen"] = origen
@@ -648,6 +650,13 @@ app = FastAPI(title="JARVI 2.0 API Central", version="2.0.05",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
+# ENDPOINT DE SALUD (para evitar reinicios por health check)
+# =============================================================================
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "jarvi-backend"}
+
+# =============================================================================
 # ENDPOINT DE DEPURACIÓN DE RUTAS
 # =============================================================================
 @app.get("/debug/routes")
@@ -787,6 +796,8 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         }
     )
 
+    print(f"=== [JARVI] Handler de Langfuse creado: {langfuse_handler is not None}")
+
     config = {
         "configurable": {"thread_id": thread_id},
         "run_name": f"caso_{caso}",
@@ -803,8 +814,10 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     # Solo añadir callbacks si Langfuse está habilitado
     if langfuse_handler:
         config["callbacks"] = [langfuse_handler]
+        print("=== [JARVI] Handler inyectado en config")
         logger.info(f"Iniciando ejecución Langfuse para caso {caso} con user_id {user_id}")
     else:
+        print("=== [JARVI] NO se pudo inyectar handler")
         logger.debug(f"Langfuse no disponible – ejecutando sin trazabilidad LLM para caso {caso}")
 
     # =========================================================================
@@ -1002,6 +1015,16 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             "resumen": sesion_redis.get("resumen", "") if sesion_redis else ""
         })
         yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
+
+    # =========================================================================
+    # FLUSH de Langfuse (asegurar envío de trazas)
+    # =========================================================================
+    if langfuse_config.is_enabled:
+        try:
+            langfuse_config.client.flush()
+            print("=== [JARVI] Flush de Langfuse ejecutado ===")
+        except Exception as e:
+            print(f"=== [JARVI] Error en flush de Langfuse: {e}")
 
 # =============================================================================
 # ENDPOINTS AUXILIARES (No implementados)
