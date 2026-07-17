@@ -1,20 +1,29 @@
 # Dockerfile.api
 FROM python:3.11-slim
+
 LABEL maintainer="AISA Solar - Equipo de Ingeniería"
 LABEL description="Servidor API centralizado de JARVI 2.0"
-LABEL version="2.0.07"
+LABEL version="2.0.09"
+
 WORKDIR /app
+
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Copiar e instalar dependencias principales (incluye langfuse en requirements.txt)
 COPY requirements.txt .
-RUN pip install --no-cache-dir \
-    -r requirements.txt \
-    psutil google-auth google-api-python-client \
-    langgraph==0.2.56 \
-    langgraph-checkpoint==2.0.7 \
-    langgraph-checkpoint-postgres==2.0.7 \
-    langchain-core==0.2.43 \
-    langfuse>=2.0.0
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copiar el código fuente
 COPY . .
+
+# Instalación FORZADA y AISLADA de Langfuse (después de copiar el código)
+# Esto garantiza que langfuse esté siempre presente, sin importar la caché
+RUN pip install --no-cache-dir --force-reinstall "langfuse>=2.0.0"
+
+# Forzar la versión correcta de packaging para evitar conflictos
+RUN pip install --no-cache-dir --force-reinstall "packaging==24.2"
+
 EXPOSE 8000
-CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --timeout-keep-alive 120"]
+
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --timeout-keep-alive 120"]
