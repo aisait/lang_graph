@@ -1,8 +1,7 @@
 FROM python:3.11-slim
 
 LABEL maintainer="AISA Solar - Equipo de Ingeniería"
-LABEL description="Servidor API centralizado de JARVI 2.0. Contiene el grafo de agente, \
-conexiones a Odoo, OpenAI y base de datos de auditoría."
+LABEL description="Servidor API centralizado de JARVI 2.0"
 LABEL version="2.0.02"
 
 WORKDIR /app
@@ -10,7 +9,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements.txt y luego instalar todo en UN SOLO PASO
 COPY requirements.txt .
 RUN pip install --no-cache-dir \
     -r requirements.txt \
