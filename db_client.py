@@ -1,5 +1,7 @@
 """
-db_client.py - Cliente de base de datos para threads, audit_events y acumulación de costo.
+db_client.py - Cliente de base de datos para threads (BI) y auditoría (CTFOM).
+Las funciones de negocio (threads, resumenes) usan BI_DATABASE_URL.
+Las funciones de auditoría (audit_events) usan CTFOM_DATABASE_URL.
 """
 import os
 import json
@@ -9,8 +11,14 @@ from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger("jarvi.db")
 
-async def get_db_connection():
-    return await asyncpg.connect(os.getenv("DATABASE_URL"))
+def get_bi_db_url() -> str:
+    return os.getenv("BI_DATABASE_URL")
+
+def get_ctfom_db_url() -> str:
+    return os.getenv("CTFOM_DATABASE_URL")
+
+async def get_db_connection(db_url: str):
+    return await asyncpg.connect(db_url)
 
 async def actualizar_thread(
     thread_id: str,
@@ -21,11 +29,12 @@ async def actualizar_thread(
     vendedor: Optional[str] = None,
     trace_id: Optional[str] = None
 ) -> bool:
+    """Actualiza o inserta un thread en la base de datos de BI."""
     conn = None
     try:
         from agent_graph import normalizar_contacto
         _, whatsapp_norm = normalizar_contacto("", whatsapp, "")
-        conn = await get_db_connection()
+        conn = await get_db_connection(get_bi_db_url())
         metadata = {
             "email": email,
             "productos": productos or [],
@@ -62,7 +71,7 @@ async def actualizar_thread(
                 whatsapp_norm,
                 json.dumps(metadata)
             )
-        logger.info(f"Thread actualizado: {thread_id} - {nombre} ({whatsapp_norm})")
+        logger.info(f"Thread actualizado (BI): {thread_id} - {nombre} ({whatsapp_norm})")
         return True
     except Exception as e:
         logger.error(f"Error al actualizar thread: {e}")
@@ -79,9 +88,10 @@ async def registrar_evento_auditoria(
     payload: Dict[str, Any],
     langsmith_run_id: Optional[str] = None
 ) -> bool:
+    """Registra un evento de auditoría en CTFOM."""
     conn = None
     try:
-        conn = await get_db_connection()
+        conn = await get_db_connection(get_ctfom_db_url())
         await conn.execute(
             """
             INSERT INTO audit_events (
@@ -106,9 +116,10 @@ async def registrar_evento_auditoria(
             await conn.close()
 
 async def acumular_costo_thread(thread_id: str, costo: float) -> bool:
+    """Acumula costo en el thread (BI)."""
     conn = None
     try:
-        conn = await get_db_connection()
+        conn = await get_db_connection(get_bi_db_url())
         await conn.execute(
             """
             UPDATE threads
@@ -133,7 +144,7 @@ async def acumular_costo_thread(thread_id: str, costo: float) -> bool:
 async def obtener_costo_acumulado(thread_id: str) -> float:
     conn = None
     try:
-        conn = await get_db_connection()
+        conn = await get_db_connection(get_bi_db_url())
         row = await conn.fetchrow(
             "SELECT metadata->>'cumulative_cost' as cost FROM threads WHERE thread_id = $1",
             thread_id
