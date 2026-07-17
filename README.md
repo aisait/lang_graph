@@ -1,6 +1,6 @@
 # JARVI 2.0.03 | Agente Cognitivo de Preventa Técnica para AISA Solar
 
-> Arquitectura de agente cognitivo con persistencia de estado serializable, orquestación mediante grafos deterministas, gobernanza forense de eventos auditables, canales de consumo desacoplados y telemetría cognitiva de grado industrial. Diseñado para operar en entornos de misión crítica con separación de contextos de datos, resiliencia operacional y trazabilidad completa.
+> Arquitectura de agente cognitivo con persistencia de estado serializable, orquestación mediante grafos deterministas, gobernanza forense de eventos auditables, canales de consumo desacoplados y telemetría cognitiva de grado industrial. Diseñado para operar en entornos de misión crítica con separación de contextos de datos, resiliencia operacional y trazabilidad completa bajo los estadares ISO.
 
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-backend-green)
