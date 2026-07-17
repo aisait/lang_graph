@@ -1,23 +1,9 @@
 """
-api.py - Servidor FastAPI con trazabilidad única por fingerprint para frontend,
+main.py - Servidor FastAPI con trazabilidad única por fingerprint para frontend,
 y chat_id de Odoo para webhooks.
 
-OBSERVABILIDAD (ISO/IEC 25010, DORA):
-- Se integra Langfuse como sistema de trazabilidad LLM mediante CallbackHandler.
-- Se mantiene CTFOM (telemetry.py) para métricas de infraestructura y auditoría de negocio.
-- La integración es resistente: si langfuse no está disponible, el sistema sigue funcionando.
-
-ESTÁNDARES APLICADOS:
-- ISO/IEC 25010:2011 (Calidad del producto) – Adecuación funcional, Fiabilidad, Mantenibilidad
-- ISO/IEC 29119:2022 (Pruebas) – Pruebas de caja negra documentadas en cada función
-- ISO/IEC 27001:2022 (Seguridad) – Gestión de secretos, trazabilidad de acceso
-- DORA (EU) – Resiliencia operacional, registro de incidentes y trazabilidad
-
-PRUEBAS DE CAJA NEGRA (ISO/IEC 29119):
-    1. Enviar mensaje a /chat → verificar que aparece traza en Langfuse con user_id y metadatos
-    2. Enviar feedback a /feedback → verificar que score aparece en Langfuse
-    3. Simular error en grafo → verificar que error se captura con código y mensaje
-    4. Verificar que variables de entorno LANGFUSE_* están definidas
+ESTA VERSIÓN INCLUYE LA INICIALIZACIÓN DE LANGfuse DE FORMA DIRECTA,
+SIN DEPENDER DE UN MÓDULO EXTERNO, PARA EVITAR PROBLEMAS DE CACHÉ.
 """
 
 import os
@@ -44,8 +30,13 @@ from pydantic import BaseModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
-# Observabilidad: Langfuse (reemplaza a LangSmith) - importación desde nuevo nombre
-from langfuse_cfg import get_langfuse_handler, get_langfuse_client, langfuse_config
+# Observabilidad: Langfuse (inicialización directa aquí)
+try:
+    from langfuse import Langfuse
+    from langfuse.callback import CallbackHandler
+    LANGFUSE_AVAILABLE = True
+except ImportError:
+    LANGFUSE_AVAILABLE = False
 
 # Módulos internos
 from schemas import ChatRequest, AudioRequest, ImageRequest
@@ -54,9 +45,60 @@ from ontology import obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 from db_client import get_bi_db_url, get_ctfom_db_url
 
-print("=== [JARVI] INICIO DE API.PY - CARGA COMPLETA ===")
+print("=== [MAIN] INICIO DE main.py - CARGA COMPLETA ===")
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# INICIALIZACIÓN DE LANGfuse (DIRECTA Y ROBUSTA)
+# =============================================================================
+langfuse_client = None
+langfuse_enabled = False
+
+def init_langfuse():
+    global langfuse_client, langfuse_enabled
+    print("=== [LANGFUSE] Iniciando inicialización directa ===")
+    try:
+        if not LANGFUSE_AVAILABLE:
+            print("=== [LANGFUSE] Módulo no disponible ===")
+            return
+        public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+        secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+        host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        if not public_key or not secret_key:
+            print("=== [LANGFUSE] Credenciales incompletas ===")
+            return
+        print(f"=== [LANGFUSE] Host: {host} ===")
+        langfuse_client = Langfuse(
+            public_key=public_key,
+            secret_key=secret_key,
+            host=host
+        )
+        langfuse_enabled = True
+        print(f"=== [LANGFUSE] Cliente inicializado correctamente. Host: {host} ===")
+    except Exception as e:
+        print(f"=== [LANGFUSE] ERROR: {e} ===")
+        langfuse_enabled = False
+
+init_langfuse()
+
+def get_langfuse_handler(user_id=None, session_id=None, metadata=None):
+    if not langfuse_enabled:
+        return None
+    try:
+        safe_metadata = metadata or {}
+        safe_metadata["environment"] = os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "production")
+        return CallbackHandler(
+            user_id=user_id,
+            session_id=session_id,
+            metadata=safe_metadata
+        )
+    except Exception as e:
+        print(f"=== [LANGFUSE] Error al crear handler: {e} ===")
+        return None
+
+def get_langfuse_client():
+    return langfuse_client
 
 # =============================================================================
 # ESQUEMAS ADICIONALES
@@ -72,13 +114,6 @@ API_KEY = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 
 async def validar_api_key(auth: str | None = Security(api_key_header)):
-    """
-    Valida la API Key para todos los endpoints protegidos.
-    Prueba de caja negra (ISO/IEC 29119):
-        1. Enviar petición sin header Authorization → 403 Forbidden
-        2. Enviar petición con header inválido → 403 Forbidden
-        3. Enviar petición con header válido → pasa
-    """
     if not auth or auth != f"Bearer {API_KEY}":
         raise HTTPException(status_code=403, detail="Acceso no autorizado")
     return auth
@@ -89,24 +124,17 @@ async def validar_api_key(auth: str | None = Security(api_key_header)):
 locks = defaultdict(asyncio.Lock)
 
 # =============================================================================
-# TAXONOMÍA DE ERRORES (ISO/IEC 25010 - Mantenibilidad)
+# TAXONOMÍA DE ERRORES
 # =============================================================================
 def taxonomy_error(exc: Exception) -> str:
-    """
-    Clasifica excepciones para auditoría y telemetría.
-    Prueba de caja negra:
-        1. HTTPException → retorna código específico
-        2. Otras excepciones → retorna código genérico
-    """
     if isinstance(exc, HTTPException):
         return f"SWR-API-MED-{exc.status_code}"
     return "SWR-API-UNKNOWN-000"
 
 # =============================================================================
-# FUNCIONES DE EXTRACCIÓN DE DATOS
+# FUNCIONES DE EXTRACCIÓN DE DATOS (Se mantienen idénticas)
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
-    """Extrae número de WhatsApp de un mensaje de texto."""
     if not mensaje:
         return None
     match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', mensaje)
@@ -123,7 +151,6 @@ def extraer_whatsapp(mensaje: str) -> str | None:
     return None
 
 def extraer_nombre(mensaje: str) -> str | None:
-    """Extrae nombre de persona de un mensaje de texto."""
     patrones = [
         r'(?:soy|me llamo|mi nombre es)\s*([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)',
         r'nombre:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+)',
@@ -180,13 +207,6 @@ def obtener_run_name(thread_id: str) -> str:
     return obtener_caso(thread_id)
 
 def normalizar_whatsapp_e164(telefono: str) -> str:
-    """
-    Normaliza un número de teléfono al formato E.164 (requerido por Meta WhatsApp API y Langfuse).
-    Prueba de caja negra:
-        1. "+502 1234-5678" → "+50212345678"
-        2. "12345678" → "+50212345678" (asume Guatemala)
-        3. "50212345678" → "+50212345678"
-    """
     if not telefono:
         return ""
     limpio = re.sub(r'[^\d+]', '', telefono)
@@ -198,15 +218,10 @@ def normalizar_whatsapp_e164(telefono: str) -> str:
     return limpio
 
 # =============================================================================
-# FUNCIONES DE POSTGRESQL (USAN BI_DATABASE_URL para resúmenes)
+# FUNCIONES DE POSTGRESQL
 # =============================================================================
 async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
                                    fingerprint: Optional[str] = None, origen: str = "desconocido") -> bool:
-    """
-    Guarda el resumen de la conversación en la base de datos de BI (negocio).
-    Prueba de caja negra (ISO/IEC 29119):
-        1. Guardar resumen → verificar que aparece en la tabla resumenes de BI_DATABASE_URL.
-    """
     try:
         db_url = get_bi_db_url()
         conn = await asyncpg.connect(db_url)
@@ -646,11 +661,11 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     logger.info("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.05",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.06",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
-# ENDPOINT DE SALUD (para evitar reinicios por health check)
+# ENDPOINT DE SALUD
 # =============================================================================
 @app.get("/health")
 async def health_check():
@@ -721,26 +736,14 @@ async def webhook_whatsapp(payload: dict):
 # =============================================================================
 @app.post("/feedback")
 async def registrar_feedback(feedback: dict):
-    """
-    Registra feedback del usuario en Langfuse (scores).
-    ISO/IEC 25010: La retroalimentación del usuario es un indicador de calidad percibida.
-    DORA: El feedback registrado permite mejorar la resiliencia operacional.
-
-    Prueba de caja negra (ISO/IEC 29119):
-        1. Enviar feedback válido → score registrado en Langfuse
-        2. Enviar feedback sin trace_id → error 422 (validación)
-        3. Enviar feedback con value fuera de rango → error 400
-    """
     if "trace_id" not in feedback:
         raise HTTPException(status_code=422, detail="trace_id es requerido")
     if "value" not in feedback:
         raise HTTPException(status_code=422, detail="value es requerido")
-
     try:
         langfuse = get_langfuse_client()
         if langfuse is None:
             raise HTTPException(status_code=503, detail="Langfuse no está disponible")
-
         langfuse.score(
             trace_id=feedback["trace_id"],
             name=feedback.get("name", "satisfaccion"),
@@ -759,28 +762,11 @@ async def registrar_feedback(feedback: dict):
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
                          fingerprint: str | None = None) -> AsyncGenerator[str, None]:
-    """
-    Genera tokens de respuesta del agente con trazabilidad Langfuse integrada.
-
-    OBSERVABILIDAD (ISO/IEC 25010, DORA):
-    - Cada ejecución del grafo se registra en Langfuse como una traza.
-    - user_id = número de WhatsApp en formato E.164 (requerido por Meta API).
-    - session_id = thread_id para agrupar conversaciones multi-turno.
-    - Metadatos: chat_id, fingerprint, caso, origen, vendedor.
-
-    Prueba de caja negra (ISO/IEC 29119):
-        1. Ejecutar conversación → traza aparece en Langfuse con user_id y metadatos
-        2. Ejecutar conversación con error → error se captura en Langfuse
-        3. Ejecutar conversación con múltiples herramientas → cada herramienta es una observation
-    """
     trace_id = trace_id_var.get()
     caso = obtener_caso(thread_id)
     if not run_name:
         run_name = caso
 
-    # =========================================================================
-    # INSTRUMENTACIÓN CON LANGfuse (con protección)
-    # =========================================================================
     whatsapp = nuevo_whatsapp or ""
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
 
@@ -796,7 +782,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         }
     )
 
-    print(f"=== [JARVI] Handler de Langfuse creado: {langfuse_handler is not None}")
+    print(f"=== [MAIN] Handler de Langfuse creado: {langfuse_handler is not None}")
 
     config = {
         "configurable": {"thread_id": thread_id},
@@ -811,18 +797,14 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         }
     }
 
-    # Solo añadir callbacks si Langfuse está habilitado
     if langfuse_handler:
         config["callbacks"] = [langfuse_handler]
-        print("=== [JARVI] Handler inyectado en config")
+        print("=== [MAIN] Handler inyectado en config")
         logger.info(f"Iniciando ejecución Langfuse para caso {caso} con user_id {user_id}")
     else:
-        print("=== [JARVI] NO se pudo inyectar handler")
+        print("=== [MAIN] NO se pudo inyectar handler")
         logger.debug(f"Langfuse no disponible – ejecutando sin trazabilidad LLM para caso {caso}")
 
-    # =========================================================================
-    # RECUPERACIÓN DE SESIÓN E HISTORIAL
-    # =========================================================================
     sesion_redis = None
     historial = []
     if redis_client:
@@ -833,9 +815,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         else:
             logger.warning(f"No hay sesión en Redis para chat_id {chat_id}")
 
-    # =========================================================================
-    # EXTRACCIÓN DE METADATOS DEL MENSAJE
-    # =========================================================================
     nombre = extraer_nombre(mensaje)
     if nombre and (not sesion_redis or not sesion_redis.get("nombre") or sesion_redis.get("nombre") == "Pendiente"):
         if sesion_redis:
@@ -884,9 +863,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
         logger.info(f"Vendedor asignado: {vendedor_email}")
 
-    # =========================================================================
-    # PREPARACIÓN DEL ESTADO DEL GRAFO
-    # =========================================================================
     mensaje_con_caso = f"{mensaje} [Caso No. {caso}]"
 
     messages = []
@@ -900,9 +876,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         "contexto_tecnico": sesion_redis.get("contexto_tecnico", {}) if sesion_redis else {}
     }
 
-    # =========================================================================
-    # EJECUCIÓN DEL GRAFO (CON LANGfuse SI ESTÁ DISPONIBLE)
-    # =========================================================================
     async with locks[thread_id]:
         resultado = await graph.ainvoke(estado_inicial, config=config)
         ctx = resultado.get("contexto_tecnico", {})
@@ -917,9 +890,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
             respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
-        # =========================================================================
-        # PERSISTENCIA EN REDIS Y POSTGRESQL
-        # =========================================================================
         if redis_client and respuesta_final:
             await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
 
@@ -979,9 +949,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                 await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
                 logger.info(f"Resumen guardado en PostgreSQL (BI) para chat_id {chat_id}")
 
-        # =========================================================================
-        # EMISIÓN DE RESPUESTA (STREAMING)
-        # =========================================================================
         if respuesta_final:
             tokens = respuesta_final.split()
             for i, token in enumerate(tokens):
@@ -989,9 +956,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         else:
             yield f"data: {json.dumps({'token': 'No se pudo generar respuesta.'})}\n\n"
 
-        # =========================================================================
-        # CONTEXTO FINAL PARA EL FRONTEND
-        # =========================================================================
         ctx_para_envio = ctx.copy()
         ctx_para_envio.update({
             "chat_id": chat_id,
@@ -1016,31 +980,28 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         })
         yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
 
-    # =========================================================================
-    # FLUSH de Langfuse (asegurar envío de trazas)
-    # =========================================================================
-    if langfuse_config.is_enabled:
+    if langfuse_enabled:
         try:
-            langfuse_config.client.flush()
-            print("=== [JARVI] Flush de Langfuse ejecutado ===")
+            langfuse_client.flush()
+            print("=== [MAIN] Flush de Langfuse ejecutado ===")
         except Exception as e:
-            print(f"=== [JARVI] Error en flush de Langfuse: {e}")
+            print(f"=== [MAIN] Error en flush de Langfuse: {e}")
 
 # =============================================================================
-# ENDPOINTS AUXILIARES (No implementados)
+# ENDPOINTS AUXILIARES
 # =============================================================================
 @app.post("/stt")
 async def speech_to_text(request: AudioRequest):
-    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar Whisper")
+    raise HTTPException(status_code=501, detail="No implementado")
 
 @app.post("/tts")
 async def text_to_speech(request: TTSRequest):
-    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar TTS")
+    raise HTTPException(status_code=501, detail="No implementado")
 
 @app.post("/vision/analyze")
 async def analizar_factura(request: ImageRequest):
-    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar visión")
+    raise HTTPException(status_code=501, detail="No implementado")
 
 @app.post("/products")
 async def consultar_productos(topologia: str = "on-grid"):
-    raise HTTPException(status_code=501, detail="No implementado – pendiente exponer catálogo")
+    raise HTTPException(status_code=501, detail="No implementado")
