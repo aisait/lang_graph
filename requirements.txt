@@ -1,11 +1,12 @@
 # =============================================================================
-# requirements.txt (Backend JARVI 2.0 - Optimizado)
+# requirements.txt (Backend JARVI 2.0 - con soporte para debug)
 # =============================================================================
 
 # Frameworks Web
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.1
 python-multipart>=0.0.9
+Flask>=2.2.0            # <-- RESTAURADO: necesario para debug_app.py
 
 # Core Agéntico
 langchain==0.2.17
