@@ -1,24 +1,41 @@
-# Dockerfile.api
-FROM python:3.11-slim
+# =============================================================================
+# ETAPA 1: Builder (Entorno completo para resolución de dependencias)
+# =============================================================================
+FROM python:3.11 AS builder
 
-LABEL maintainer="AISA Solar - Equipo de Ingeniería"
-LABEL description="Servidor API centralizado de JARVI 2.0"
-LABEL version="2.0.11"
-
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
+# Instalamos herramientas necesarias para compilar/instalar dependencias binarias
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
+# Preparamos entorno para instalar dependencias en una carpeta externa
+WORKDIR /install
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
+# Instalamos todo en /install
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# =============================================================================
+# ETAPA 2: Runtime (Entorno Slim para producción)
+# =============================================================================
+FROM python:3.11-slim
+
+# Instalamos solo las dependencias de sistema necesarias para la ejecución (runtime)
+# libpq5 es necesaria para psycopg[binary]
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copiamos solo los binarios y librerías instalados del builder
+COPY --from=builder /install /usr/local
+
+WORKDIR /app
 COPY . .
 
-# Instalación FORZADA de Langfuse y packaging (compatible)
-RUN pip install --no-cache-dir --force-reinstall "langfuse>=2.0.0"
-RUN pip install --no-cache-dir --force-reinstall "packaging==24.2"
-
+# Eliminamos la necesidad de 'force-reinstall'. Si no funciona aquí, 
+# la librería está corrupta para el entorno slim.
 EXPOSE 8000
 
 CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --timeout-keep-alive 120"]
