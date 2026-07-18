@@ -2,7 +2,8 @@
 api.py - Servidor FastAPI con trazabilidad única por fingerprint para frontend,
 y chat_id de Odoo para webhooks.
 
-ESTA VERSIÓN INCLUYE LA INICIALIZACIÓN DE LANGfuse DE FORMA DIRECTA.
+ESTA VERSIÓN INCLUYE LA INICIALIZACIÓN DIRECTA DE LANGfuse PARA TRAZABILIDAD LLM.
+TODAS LAS FUNCIONES, MÉTODOS Y LÓGICA DE NEGOCIO ORIGINALES SE MANTIENEN INTACTOS.
 """
 
 import os
@@ -28,7 +29,9 @@ from pydantic import BaseModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
-# Observabilidad: Langfuse (inicialización directa aquí)
+# =============================================================================
+# OBSERVABILIDAD: LANGfuse (INICIALIZACIÓN DIRECTA)
+# =============================================================================
 try:
     from langfuse import Langfuse
     from langfuse.callback import CallbackHandler
@@ -105,7 +108,7 @@ class TTSRequest(BaseModel):
     voice: str | None = None
 
 # =============================================================================
-# SEGURIDAD
+# SEGURIDAD (ISO/IEC 27001)
 # =============================================================================
 API_KEY = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
@@ -121,7 +124,7 @@ async def validar_api_key(auth: str | None = Security(api_key_header)):
 locks = defaultdict(asyncio.Lock)
 
 # =============================================================================
-# TAXONOMÍA DE ERRORES
+# TAXONOMÍA DE ERRORES (ISO/IEC 25010 - Mantenibilidad)
 # =============================================================================
 def taxonomy_error(exc: Exception) -> str:
     if isinstance(exc, HTTPException):
@@ -215,7 +218,7 @@ def normalizar_whatsapp_e164(telefono: str) -> str:
     return limpio
 
 # =============================================================================
-# FUNCIONES DE POSTGRESQL
+# FUNCIONES DE POSTGRESQL (USAN BI_DATABASE_URL para resúmenes)
 # =============================================================================
 async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
                                    fingerprint: Optional[str] = None, origen: str = "desconocido") -> bool:
@@ -243,7 +246,7 @@ async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
         return False
 
 # =============================================================================
-# FUNCIONES DE REDIS
+# FUNCIONES DE REDIS (buffer de sesiones)
 # =============================================================================
 REDIS_TTL = int(os.getenv("REDIS_TTL", 604800))
 HISTORIAL_LIMITE = 64
@@ -985,20 +988,20 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             print(f"=== [API] Error en flush de Langfuse: {e}")
 
 # =============================================================================
-# ENDPOINTS AUXILIARES
+# ENDPOINTS AUXILIARES (No implementados)
 # =============================================================================
 @app.post("/stt")
 async def speech_to_text(request: AudioRequest):
-    raise HTTPException(status_code=501, detail="No implementado")
+    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar Whisper")
 
 @app.post("/tts")
 async def text_to_speech(request: TTSRequest):
-    raise HTTPException(status_code=501, detail="No implementado")
+    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar TTS")
 
 @app.post("/vision/analyze")
 async def analizar_factura(request: ImageRequest):
-    raise HTTPException(status_code=501, detail="No implementado")
+    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar visión")
 
 @app.post("/products")
 async def consultar_productos(topologia: str = "on-grid"):
-    raise HTTPException(status_code=501, detail="No implementado")
+    raise HTTPException(status_code=501, detail="No implementado – pendiente exponer catálogo")
