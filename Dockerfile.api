@@ -1,29 +1,24 @@
-# Dockerfile.api - Versión Estable Definitiva
+# Dockerfile.api
 FROM python:3.11-slim
 
 LABEL maintainer="AISA Solar - Equipo de Ingeniería"
 LABEL description="Servidor API centralizado de JARVI 2.0"
-LABEL version="2.0.10"
+LABEL version="2.0.11"
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar e instalar dependencias
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar el código fuente
 COPY . .
 
-# Instalación FORZADA de Langfuse (después de copiar el código para asegurar persistencia)
+# Instalación FORZADA de Langfuse y packaging (compatible)
 RUN pip install --no-cache-dir --force-reinstall "langfuse>=2.0.0"
-
-# Forzar la versión correcta de packaging para evitar conflictos
 RUN pip install --no-cache-dir --force-reinstall "packaging==24.2"
 
 EXPOSE 8000
 
-# Comando de inicio: apunta a api.py
 CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --timeout-keep-alive 120"]
