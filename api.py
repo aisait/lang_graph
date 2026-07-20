@@ -26,9 +26,9 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
 # Importar OpenTelemetry
-from telemetry_otel import init_telemetry, get_tracer
+from telemetry_otel import init_telemetry, get_tracer, force_flush
 from opentelemetry.trace import Status, StatusCode
-from opentelemetry import trace   # <--- CORREGIDO: import añadido
+from opentelemetry import trace
 
 from schemas import ChatRequest, AudioRequest, ImageRequest
 from agent_graph import create_graph, normalizar_contacto
@@ -580,31 +580,31 @@ redis_client = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global graph, redis_client
-    
-    # Inicializar OpenTelemetry (sin instrumentación automática)
+
+    # Inicializar OpenTelemetry
     telemetry_ok = init_telemetry(app)
     if telemetry_ok:
         logger.info("OpenTelemetry inicializado correctamente")
     else:
         logger.warning("OpenTelemetry desactivado (Langfuse no configurado)")
-    
+
     db_url = get_db_url()
     async with AsyncExitStack() as stack:
         checkpointer = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(db_url))
         await checkpointer.setup()
         graph = create_graph(checkpointer)
         logger.info("JARVI 2.0 API inicializada – Grafo listo")
-        
+
         redis_url = os.getenv("REDIS_URL")
         if redis_url:
             redis_client = redis.from_url(redis_url, decode_responses=True)
             logger.info("Conexión a Redis establecida")
         else:
             logger.warning("REDIS_URL no configurada – buffer de sesión deshabilitado")
-        
+
         start_batch_worker()
         yield
-    
+
     if redis_client:
         await redis_client.close()
     logger.info("Apagando API JARVI")
@@ -696,7 +696,7 @@ async def registrar_feedback(feedback: dict):
             span.set_attribute("feedback.value", float(feedback["value"]))
             if feedback.get("comment"):
                 span.set_attribute("feedback.comment", feedback["comment"])
-        
+
         logger.info(f"Feedback registrado para trace_id {feedback['trace_id']}: {feedback['value']}")
         return {"status": "ok", "trace_id": feedback["trace_id"]}
     except Exception as e:
@@ -704,13 +704,28 @@ async def registrar_feedback(feedback: dict):
         raise HTTPException(status_code=500, detail=f"Error al registrar feedback: {str(e)}")
 
 # =============================================================================
-# FUNCIÓN DE GENERACIÓN DE TOKENS (CON SPANS OPENTELEMETRY)
+# ENDPOINT DE PRUEBA OTLP (NUEVO)
+# =============================================================================
+@app.get("/test-otel")
+async def test_otel():
+    """Endpoint para probar la exportación OTLP desde el entorno real."""
+    tracer = get_tracer("test")
+    with tracer.start_as_current_span("test_endpoint") as span:
+        span.set_attribute("test", True)
+        span.set_attribute("timestamp", time.time())
+        span.set_attribute("user.id", "test_user")
+        span.set_attribute("session.id", "test_session")
+    force_flush()
+    return {"status": "ok", "message": "Traza de prueba enviada, revisar Langfuse"}
+
+# =============================================================================
+# FUNCIÓN DE GENERACIÓN DE TOKENS (CON SPANS OPENTELEMETRY Y FLUSH MEJORADO)
 # =============================================================================
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
                          fingerprint: str | None = None) -> AsyncGenerator[str, None]:
     tracer = get_tracer()
-    
+
     trace_id_ctfom = trace_id_var.get()
     caso = obtener_caso(thread_id)
     if not run_name:
@@ -729,7 +744,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         root_span.set_attribute("gen_ai.system", "openai")
         if trace_id_ctfom:
             root_span.set_attribute("ctfom.trace_id", trace_id_ctfom)
-        
+
         config = {
             "configurable": {"thread_id": thread_id},
             "run_name": f"caso_{caso}",
@@ -819,7 +834,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         with tracer.start_as_current_span("langgraph_execution") as graph_span:
             graph_span.set_attribute("thread_id", thread_id)
             graph_span.set_attribute("message_length", len(mensaje))
-            
+
             async with locks[thread_id]:
                 resultado = await graph.ainvoke(estado_inicial, config=config)
                 ctx = resultado.get("contexto_tecnico", {})
@@ -926,10 +941,10 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             "resumen": sesion_redis.get("resumen", "") if sesion_redis else ""
         })
         yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
-    
-    # Flush forzado para exportar spans a Langfuse
-    trace.get_tracer_provider().force_flush()
-    logger.info("Flush de spans completado")
+
+    # Flush mejorado con timeout
+    force_flush()
+    logger.info("Flush de spans completado (con timeout)")
 
 # =============================================================================
 # ENDPOINTS AUXILIARES (sin cambios)
