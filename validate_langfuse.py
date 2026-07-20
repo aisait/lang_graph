@@ -6,7 +6,7 @@ Cumple con ISO/IEC 29119 (pruebas de caja negra).
 Pruebas de caja negra:
 1. Ejecutar el script con credenciales válidas: debe mostrar "✅ Traza de prueba enviada".
 2. Revisar dashboard de Langfuse: debe aparecer una traza con nombre "validation_test".
-3. Si faltan credenciales: debe mostrar "❌ Faltan credenciales de Langfuse".
+3. Si faltan credenciales: debe mostrar "❌ Faltan credenciales de Langfuse V4".
 4. Si el endpoint OTLP es incorrecto: debe lanzar excepción (capturada en el script).
 Prubeas
 """
