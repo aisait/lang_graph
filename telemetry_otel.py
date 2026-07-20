@@ -32,10 +32,7 @@ def init_telemetry(app=None):
     os.environ["OTEL_SERVICE_NAME"] = "jarvi-backend"
 
     # Crear exportador con logging de errores
-    exporter = OTLPSpanExporter(
-        timeout=10,  # timeout en segundos
-        # Se puede añadir un callback para logging de errores
-    )
+    exporter = OTLPSpanExporter(timeout=10)
 
     # Override del método export para capturar errores
     original_export = exporter.export
@@ -50,18 +47,17 @@ def init_telemetry(app=None):
             return result
         except Exception as e:
             logger.error(f"❌ Error en exportación OTLP: {type(e).__name__}: {e}")
-            # No relanzamos para no interrumpir el flujo
             return None
 
     exporter.export = logged_export
 
-    # Configurar TracerProvider con BatchSpanProcessor (lote pequeño para exportación rápida)
+    # Configurar TracerProvider con BatchSpanProcessor
     trace_provider = TracerProvider()
     span_processor = BatchSpanProcessor(
         exporter,
-        max_queue_size=512,           # Tamaño máximo de cola
-        scheduled_delay_millis=1000,  # Exportar cada 1 segundo
-        max_export_batch_size=128,    # Máximo spans por lote
+        max_queue_size=512,
+        scheduled_delay_millis=1000,
+        max_export_batch_size=128,
     )
     trace_provider.add_span_processor(span_processor)
     trace.set_tracer_provider(trace_provider)
@@ -77,7 +73,6 @@ def force_flush():
     """Fuerza la exportación de todos los spans pendientes con timeout."""
     try:
         provider = trace.get_tracer_provider()
-        # Si es un TracerProvider, podemos llamar a force_flush
         if hasattr(provider, 'force_flush'):
             provider.force_flush(timeout_millis=5000)
             logger.info("Flush forzado completado")
