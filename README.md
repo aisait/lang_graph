@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-backend-green)
 ![LangGraph](https://img.shields.io/badge/LangGraph-agent-purple)
 ![Langfuse](https://img.shields.io/badge/Langfuse-observability-orange)
-![ISO](https://img.shields.io/badge/ISO-25010%20%7C%202701%20%7C%2029119-blue)
+![ISO](https://img.shields.io/badge/ISO-25010%20%7C%2027001%20%7C%2029119-blue)
 ![CTFOM](https://img.shields.io/badge/CTFOM-telemetry-orange)
 ---
 
