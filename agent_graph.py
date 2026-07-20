@@ -1,18 +1,6 @@
 """
-agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación OpenTelemetry.
+agent_graph.py - Grafo agéntico con instrumentación OpenTelemetry.
 Cumple con ISO/IEC 27001, DORA, ISO/IEC 25010, ISO/IEC 29119.
-
-Cambios:
-- Eliminación del decorador @observe de Langfuse (obsoleto en v4).
-- Reemplazo por spans manuales con OpenTelemetry (get_tracer).
-- La herramienta procesar_oportunidad_backend ahora también crea un span.
-- Se mantiene la lógica de negocio intacta.
-
-Pruebas de caja negra (ISO/IEC 29119):
-1. Ejecutar nodo de clasificación: debe generar un span con nombre "clasificar_intencion_comercial".
-2. Ejecutar herramienta: debe generar un span "dispatch_lead" con atributos de canal y destino.
-3. Error en nodo: el span debe registrar atributos de error y estado ERROR.
-4. Verificar que los nombres de nodos son semánticos (negocio).
 """
 import os
 import time
@@ -159,7 +147,7 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA (con span OpenTelemetry y CTFOM)
+# HERRAMIENTA (con span OpenTelemetry)
 # =============================================================================
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
@@ -176,16 +164,12 @@ def procesar_oportunidad_backend(
     """Envía leads a canales del Controller."""
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
 
-    # Span OpenTelemetry para el despacho
     with tracer.start_as_current_span("dispatch_lead") as span:
         span.set_attribute("channel", "email+webhook")
         span.set_attribute("whatsapp", whatsapp_norm)
         span.set_attribute("nombre", nombre_norm)
         
         def tarea_background():
-            # Span hijo para el envío real (se crea en el hilo, pero OpenTelemetry no lo propaga automáticamente)
-            # Para simplificar, usamos el span actual, pero en un hilo no se propaga el contexto.
-            # Se podría usar contextvars, pero dejamos que CTFOM lo capture.
             num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
             try:
                 msg = MIMEMultipart()
@@ -268,16 +252,13 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     llm = ChatOpenAI(openai_api_key=DEFAULT_API_KEY, model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
     extractor_llm = llm.with_structured_output(ExtractorContacto)
 
-    # Decorador que añade span OpenTelemetry a cada nodo
     def otel_span_node(node_name: str):
         def decorator(func):
             @functools.wraps(func)
             def wrapper(state, config=None):
                 with tracer.start_as_current_span(node_name) as span:
                     span.set_attribute("node.name", node_name)
-                    # Ejecutar función
                     result = func(state, config) if config is not None else func(state)
-                    # Registrar atributos de salida si es necesario
                     if isinstance(result, dict) and "contexto_tecnico" in result:
                         ctx = result["contexto_tecnico"]
                         if ctx.get("topologia"):
@@ -290,8 +271,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return decorator
 
     @auditar_fase(nombre_fase="Clasificador de Intención Comercial", criticidad="MEDIA")
-    @observe_node(node_name="clasificar_intencion_comercial")  # CTFOM
-    @otel_span_node("clasificar_intencion_comercial")           # OpenTelemetry
+    @observe_node(node_name="clasificar_intencion_comercial")
+    @otel_span_node("clasificar_intencion_comercial")
     def clasificar_intencion_comercial_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
