@@ -27,6 +27,8 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+# Ya está correcto, no se modifica. Si por algún motivo falta, se puede añadir:
+# from opentelemetry.trace import Status, StatusCode
 # Importar OpenTelemetry
 from telemetry_otel import get_tracer
 from opentelemetry.trace import Status, StatusCode
