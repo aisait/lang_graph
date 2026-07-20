@@ -1,12 +1,12 @@
 # =============================================================================
-# requirements.txt (Backend JARVI 2.0 - con soporte para debug)
+# requirements.txt (Backend JARVI 2.0 - Migración a OpenTelemetry + Langfuse v4)
 # =============================================================================
 
 # Frameworks Web
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.1
 python-multipart>=0.0.9
-Flask>=2.2.0            # <-- RESTAURADO: necesario para debug_app.py
+Flask>=2.2.0
 
 # Core Agéntico
 langchain==0.2.17
@@ -16,17 +16,22 @@ langchain-openai==0.1.25
 langgraph==0.2.56
 openai>=1.50.0
 
-# Observabilidad
-langfuse>=2.0.0
-langgraph-checkpoint==2.0.7
-langgraph-checkpoint-postgres==2.0.7
+# Observabilidad (OpenTelemetry + Langfuse v4)
+langfuse>=4.0.0
+opentelemetry-sdk>=1.20.0
+opentelemetry-exporter-otlp>=1.20.0
+opentelemetry-instrumentation-langchain>=0.40.0
+opentelemetry-instrumentation-openai>=0.40.0
+opentelemetry-instrumentation-fastapi>=0.40.0
+opentelemetry-instrumentation-requests>=0.40.0
+opentelemetry-instrumentation-httpx>=0.40.0
 
-# Persistencia (usar solo psycopg v3)
+# Persistencia
 psycopg[binary]>=3.1.4
 sqlalchemy>=2.0.31
 asyncpg>=0.29.0
 
-# Utilidades y Servicios Externos
+# Utilidades
 requests>=2.32.3
 python-dotenv>=1.0.1
 pydantic>=2.7.4
@@ -36,7 +41,7 @@ google-auth>=2.30.0
 google-auth-oauthlib>=1.2.0
 google-api-python-client>=2.198.0
 
-# Normalización de texto y fuzzy matching
+# Normalización
 symspellpy>=6.7.0
 rapidfuzz>=3.0.0
 
