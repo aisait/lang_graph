@@ -1,14 +1,7 @@
 """
 validate_langfuse.py
-Script de validación para verificar la conectividad con Langfuse v4 vía OpenTelemetry.
+Script de validación para Langfuse v4 vía OpenTelemetry.
 Cumple con ISO/IEC 29119 (pruebas de caja negra).
-
-Pruebas de caja negra:
-1. Ejecutar el script con credenciales válidas: debe mostrar "✅ Traza de prueba enviada".
-2. Revisar dashboard de Langfuse: debe aparecer una traza con nombre "validation_test".
-3. Si faltan credenciales: debe mostrar "❌ Faltan credenciales de Langfuse V4".
-4. Si el endpoint OTLP es incorrecto: debe lanzar excepción (capturada en el script).
-Prubeas
 """
 import os
 import base64
@@ -36,7 +29,6 @@ def main():
     trace.set_tracer_provider(trace_provider)
 
     tracer = trace.get_tracer("validation")
-
     with tracer.start_as_current_span("validation_test") as span:
         span.set_attribute("user.id", "test_user")
         span.set_attribute("session.id", "test_session")
