@@ -16,7 +16,7 @@ def main():
     print(f"{'='*60}\n")
 
     # 1. Verificar importación
-    print("[1/4] Verificando importación de langfuse...")
+    print("[1/5] Verificando importación de langfuse...")
     try:
         from langfuse import Langfuse
         from langfuse.callback import CallbackHandler
@@ -26,7 +26,7 @@ def main():
         sys.exit(1)
 
     # 2. Verificar variables de entorno
-    print("\n[2/4] Verificando variables de entorno...")
+    print("\n[2/5] Verificando variables de entorno...")
     required = ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"]
     missing = [v for v in required if not os.getenv(v)]
     if missing:
@@ -35,7 +35,7 @@ def main():
     print("✅ Variables de entorno configuradas")
 
     # 3. Crear traza de prueba
-    print("\n[3/4] Creando traza de prueba...")
+    print("\n[3/5] Creando traza de prueba...")
     try:
         client = Langfuse(
             public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
@@ -52,9 +52,9 @@ def main():
         client.flush()
         print(f"✅ Traza creada con ID: {trace.id}")
         time.sleep(2)
-        
+
         # 4. Verificar en API
-        print("\n[4/4] Verificando en Langfuse...")
+        print("\n[4/5] Verificando en Langfuse...")
         auth = base64.b64encode(f"{os.getenv('LANGFUSE_PUBLIC_KEY')}:{os.getenv('LANGFUSE_SECRET_KEY')}".encode()).decode()
         resp = requests.get(
             f"{os.getenv('LANGFUSE_HOST')}/api/public/traces/{trace.id}",
