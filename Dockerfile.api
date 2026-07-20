@@ -1,35 +1,19 @@
-# ETAPA 1: Builder (Instalación de dependencias)
-FROM python:3.11 AS builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /install
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# =============================================================================
-# ETAPA 2: Runtime (Entorno endurecido)
-# =============================================================================
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libstdc++6 libgcc-s1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar artefactos del builder
-COPY --from=builder /usr/local /usr/local
-
 WORKDIR /app
 
-# Copiar código fuente
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
 COPY . .
 
 # Verificación de dependencias críticas
 RUN python -c "import langfuse, opentelemetry, asyncpg, redis; print('Dependencias OK')"
 
-# Health check (ISO 27001: verificación de componentes críticos)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import langfuse, opentelemetry, asyncpg, redis" || exit 1
 
