@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Verificación de dependencias críticas
-# fresh build
+# fresh build 20JUL2026
 RUN python -c "import langfuse, opentelemetry, asyncpg, redis; print('Dependencias OK')"
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
