@@ -1,18 +1,6 @@
 """
 api.py - Servidor FastAPI con trazabilidad OpenTelemetry + Langfuse v4.
 Cumple con ISO/IEC 27001, DORA, ISO/IEC 25010, ISO/IEC 29119.
-
-Cambios principales:
-- Eliminación de CallbackHandler y dependencias obsoletas.
-- Inicialización de OpenTelemetry en lifespan.
-- Spans manuales en generar_tokens para cada ejecución.
-- Propagación de atributos estándar (user.id, session.id, gen_ai.*).
-- Coexistencia con CTFOM (telemetry.py) para métricas de infraestructura.
-
-Pruebas de caja negra (ISO/IEC 29119):
-1. /health: debe retornar 200 OK incluso si Langfuse no está configurado.
-2. /chat: debe generar spans con atributos de usuario y sesión visibles en Langfuse.
-3. Fallo de OpenTelemetry: el sistema debe seguir funcionando (degradación graceful).
 """
 import os
 import asyncio
@@ -591,7 +579,7 @@ redis_client = None
 async def lifespan(app: FastAPI):
     global graph, redis_client
     
-    # Inicializar OpenTelemetry con la app FastAPI
+    # Inicializar OpenTelemetry (sin instrumentación automática)
     telemetry_ok = init_telemetry(app)
     if telemetry_ok:
         logger.info("OpenTelemetry inicializado correctamente")
@@ -699,7 +687,6 @@ async def registrar_feedback(feedback: dict):
     if "value" not in feedback:
         raise HTTPException(status_code=422, detail="value es requerido")
     try:
-        # Usar OpenTelemetry para crear un span de feedback
         tracer = get_tracer()
         with tracer.start_as_current_span("user_feedback") as span:
             span.set_attribute("trace.id", feedback["trace_id"])
@@ -708,9 +695,6 @@ async def registrar_feedback(feedback: dict):
             if feedback.get("comment"):
                 span.set_attribute("feedback.comment", feedback["comment"])
         
-        # También podemos llamar a la API de Langfuse directamente si queremos scores
-        # Nota: Langfuse v4 permite asignar scores mediante spans con atributos especiales
-        # o usando el cliente SDK. Por simplicidad, usamos solo el span.
         logger.info(f"Feedback registrado para trace_id {feedback['trace_id']}: {feedback['value']}")
         return {"status": "ok", "trace_id": feedback["trace_id"]}
     except Exception as e:
@@ -725,7 +709,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                          fingerprint: str | None = None) -> AsyncGenerator[str, None]:
     tracer = get_tracer()
     
-    # Obtener trace_id de CTFOM para correlación
     trace_id_ctfom = trace_id_var.get()
     caso = obtener_caso(thread_id)
     if not run_name:
@@ -734,9 +717,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     whatsapp = nuevo_whatsapp or ""
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
 
-    # Span principal para toda la ejecución del chat
     with tracer.start_as_current_span("chat_execution") as root_span:
-        # Atributos estándar para Langfuse
         root_span.set_attribute("user.id", user_id)
         root_span.set_attribute("session.id", thread_id)
         root_span.set_attribute("chat.id", chat_id)
@@ -747,7 +728,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         if trace_id_ctfom:
             root_span.set_attribute("ctfom.trace_id", trace_id_ctfom)
         
-        # Configuración para el grafo (ya no usa callbacks)
         config = {
             "configurable": {"thread_id": thread_id},
             "run_name": f"caso_{caso}",
@@ -773,7 +753,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             else:
                 logger.warning(f"No hay sesión en Redis para chat_id {chat_id}")
 
-        # Extracción de datos (igual que antes)
         nombre = extraer_nombre(mensaje)
         if nombre and (not sesion_redis or not sesion_redis.get("nombre") or sesion_redis.get("nombre") == "Pendiente"):
             if sesion_redis:
@@ -835,7 +814,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             "contexto_tecnico": sesion_redis.get("contexto_tecnico", {}) if sesion_redis else {}
         }
 
-        # Span para la ejecución del grafo
         with tracer.start_as_current_span("langgraph_execution") as graph_span:
             graph_span.set_attribute("thread_id", thread_id)
             graph_span.set_attribute("message_length", len(mensaje))
@@ -855,9 +833,8 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                     respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
                 graph_span.set_attribute("response_length", len(respuesta_final))
-                graph_span.set_attribute("success", True)
+                graph_span.set_status(StatusCode.OK)
 
-        # Resto del código (persistencia, etc.) igual que antes
         if redis_client and respuesta_final:
             await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
 
@@ -917,7 +894,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                 await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
                 logger.info(f"Resumen guardado en PostgreSQL (BI) para chat_id {chat_id}")
 
-        # Streaming de la respuesta (igual que antes)
         if respuesta_final:
             tokens = respuesta_final.split()
             for i, token in enumerate(tokens):
@@ -948,8 +924,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             "resumen": sesion_redis.get("resumen", "") if sesion_redis else ""
         })
         yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
-
-    # Nota: no es necesario flush porque OpenTelemetry maneja el envío asíncrono.
 
 # =============================================================================
 # ENDPOINTS AUXILIARES (sin cambios)
