@@ -1,51 +1,24 @@
-# ETAPA 1: Builder (El "Laboratorio")
-FROM python:3.11 AS builder
-
-# Instalamos el toolchain completo para que el build sea determinístico
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /install
-
-# Instalamos Langfuse y dependencias en un prefijo aislado
-RUN pip install --no-cache-dir --prefix=/install \
-    langfuse \
-    pydantic \
-    pydantic-core \
-    httpx
-
-# =============================================================================
-# ETAPA 2: Runtime (El "Entorno Endurecido")
-# =============================================================================
 FROM python:3.11-slim
 
-# Instalamos SOLO las librerías de sistema (Shared Objects) que el binario requiere.
-# Esto es obligatorio. Si el binario necesita libstdc++, no es "bloat", es requerimiento.
+# Dependencias del sistema
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libstdc++6 \
-    libgcc-s1 \
+    libstdc++6 libgcc-s1 build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiamos los artefactos del laboratorio
-COPY --from=builder /install /usr/local
-
-# Copia de seguridad: Validación pre-vuelo (Fail-Fast)
-# Esto asegura que si el SDK está roto, el contenedor no inicia (evita errores en producción)
-COPY <<EOF /app/pre_flight.py
-import sys
-try:
-    import langfuse
-    print("Langfuse cargado correctamente.")
-except Exception as e:
-    print(f"Error crítico: Langfuse no pudo cargar: {e}")
-    sys.exit(1)
-EOF
-
 WORKDIR /app
+
+# Instalar dependencias Python
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir --force-reinstall "langfuse>=2.0.0" "packaging==24.2"
+
+# Verificación inmediata
+RUN python -c "import langfuse; print(f'Langfuse {langfuse.__version__} OK')"
+
 COPY . .
 
-# Ejecutamos la validación antes de lanzar la API
-RUN python /app/pre_flight.py
+# Health check que verifica dependencias críticas
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import langfuse, asyncpg, redis; print('OK')" || exit 1
 
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
