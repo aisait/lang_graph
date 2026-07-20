@@ -704,7 +704,7 @@ async def registrar_feedback(feedback: dict):
         raise HTTPException(status_code=500, detail=f"Error al registrar feedback: {str(e)}")
 
 # =============================================================================
-# ENDPOINT DE PRUEBA OTLP (NUEVO)
+# ENDPOINT DE PRUEBA OTLP
 # =============================================================================
 @app.get("/test-otel")
 async def test_otel():
@@ -719,7 +719,7 @@ async def test_otel():
     return {"status": "ok", "message": "Traza de prueba enviada, revisar Langfuse"}
 
 # =============================================================================
-# FUNCIÓN DE GENERACIÓN DE TOKENS (CON SPANS OPENTELEMETRY Y FLUSH MEJORADO)
+# FUNCIÓN DE GENERACIÓN DE TOKENS (CON SPANS OPENTELEMETRY Y ATRIBUTOS gen_ai)
 # =============================================================================
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
@@ -834,6 +834,11 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         with tracer.start_as_current_span("langgraph_execution") as graph_span:
             graph_span.set_attribute("thread_id", thread_id)
             graph_span.set_attribute("message_length", len(mensaje))
+            # AÑADIR ATRIBUTOS GenAI PARA EVITAR FILTRADO
+            graph_span.set_attribute("gen_ai.system", "openai")
+            graph_span.set_attribute("gen_ai.prompt.0.role", "user")
+            graph_span.set_attribute("gen_ai.prompt.0.content", mensaje)
+            graph_span.set_attribute("gen_ai.operation", "chat")
 
             async with locks[thread_id]:
                 resultado = await graph.ainvoke(estado_inicial, config=config)
@@ -849,7 +854,10 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                 if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
                     respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
+                # AÑADIR ATRIBUTOS DE COMPLETION
                 graph_span.set_attribute("response_length", len(respuesta_final))
+                graph_span.set_attribute("gen_ai.completion.0.role", "assistant")
+                graph_span.set_attribute("gen_ai.completion.0.content", respuesta_final)
                 graph_span.set_status(StatusCode.OK)
 
         if redis_client and respuesta_final:
