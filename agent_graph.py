@@ -27,8 +27,6 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-# Ya está correcto, no se modifica. Si por algún motivo falta, se puede añadir:
-# from opentelemetry.trace import Status, StatusCode
 # Importar OpenTelemetry
 from telemetry_otel import get_tracer
 from opentelemetry.trace import Status, StatusCode
@@ -149,7 +147,7 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA (con span OpenTelemetry)
+# HERRAMIENTA (con span OpenTelemetry y atributos gen_ai)
 # =============================================================================
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
@@ -170,7 +168,10 @@ def procesar_oportunidad_backend(
         span.set_attribute("channel", "email+webhook")
         span.set_attribute("whatsapp", whatsapp_norm)
         span.set_attribute("nombre", nombre_norm)
-        
+        # Añadir atributos gen_ai para evitar filtrado
+        span.set_attribute("gen_ai.system", "openai")
+        span.set_attribute("gen_ai.operation", "dispatch")
+
         def tarea_background():
             num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
             try:
@@ -260,6 +261,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             def wrapper(state, config=None):
                 with tracer.start_as_current_span(node_name) as span:
                     span.set_attribute("node.name", node_name)
+                    # Añadir atributos gen_ai
+                    span.set_attribute("gen_ai.system", "openai")
+                    span.set_attribute("gen_ai.operation", node_name)
                     result = func(state, config) if config is not None else func(state)
                     if isinstance(result, dict) and "contexto_tecnico" in result:
                         ctx = result["contexto_tecnico"]
