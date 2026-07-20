@@ -1,24 +1,19 @@
 """
-agent_graph.py - Grafo agéntico de JARVI 2.0 con 6 pasos y selección de productos.
+agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación OpenTelemetry.
+Cumple con ISO/IEC 27001, DORA, ISO/IEC 25010, ISO/IEC 29119.
 
-OBSERVABILIDAD (ISO/IEC 25010, DORA):
-- Se integra Langfuse mediante decorador @observe para trazabilidad de nodos y herramientas.
-- Se elimina dependencia de LangSmith (sustituido por Langfuse).
-- CTFOM (telemetry.py) se mantiene para métricas de infraestructura.
+Cambios:
+- Eliminación del decorador @observe de Langfuse (obsoleto en v4).
+- Reemplazo por spans manuales con OpenTelemetry (get_tracer).
+- La herramienta procesar_oportunidad_backend ahora también crea un span.
+- Se mantiene la lógica de negocio intacta.
 
-ESTÁNDARES APLICADOS:
-- ISO/IEC 25010:2011 (Calidad del producto) – Fiabilidad, Mantenibilidad
-- ISO/IEC 29119:2022 (Pruebas) – Pruebas de caja negra documentadas
-- ISO/IEC 27001:2022 (Seguridad) – Gestión de secretos, trazabilidad de acceso
-- DORA (EU) – Resiliencia operacional, registro de incidentes
-
-PRUEBAS DE CAJA NEGRA (ISO/IEC 29119):
-    1. Ejecutar nodo de clasificación → traza aparece en Langfuse como observation
-    2. Ejecutar herramienta procesar_oportunidad_backend → observation tipo SPAN
-    3. Error en nodo → error capturado con código y mensaje
-    4. Verificar que los nombres de nodos son semánticos (negocio)
+Pruebas de caja negra (ISO/IEC 29119):
+1. Ejecutar nodo de clasificación: debe generar un span con nombre "clasificar_intencion_comercial".
+2. Ejecutar herramienta: debe generar un span "dispatch_lead" con atributos de canal y destino.
+3. Error en nodo: el span debe registrar atributos de error y estado ERROR.
+4. Verificar que los nombres de nodos son semánticos (negocio).
 """
-
 import os
 import time
 import uuid
@@ -44,28 +39,21 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+# Importar OpenTelemetry
+from telemetry_otel import get_tracer
+from opentelemetry.trace import Status, StatusCode
+
 import config
 from audit import auditar_fase
 from ontology import obtener_fragmento_ontologia, cargar_ontologia, obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, parent_span_id_var, schedule_telemetry_event
 from ubicacion import buscar_ubicacion
 
-# Observabilidad: Langfuse (protegido)
-try:
-    from langfuse.decorators import observe
-    _LANGFUSE_AVAILABLE = True
-except ImportError:
-    _LANGFUSE_AVAILABLE = False
-    # Definir un decorador nulo para que no falle
-    def observe(*args, **kwargs):
-        def decorator(func):
-            return func
-        return decorator
-
 logger = logging.getLogger(__name__)
+tracer = get_tracer("jarvi.graph")
 
 # =============================================================================
-# CONFIGURACIÓN DE API KEY
+# CONFIGURACIÓN DE API KEY (sin cambios)
 # =============================================================================
 OPENAI_KEYS = [os.getenv(f"OPENAI_API_KEY_{i}") for i in range(1, 4)]
 OPENAI_KEYS = [k for k in OPENAI_KEYS if k]
@@ -74,7 +62,7 @@ if not DEFAULT_API_KEY:
     raise RuntimeError("No se encontró ninguna API Key de OpenAI.")
 
 # =============================================================================
-# CÓDIGOS DE ÁREA
+# CÓDIGOS DE ÁREA (sin cambios)
 # =============================================================================
 CODIGOS_AREA = {
     "belice": "+501", "costa rica": "+506", "el salvador": "+503",
@@ -110,7 +98,7 @@ def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) 
     return nombre_normalizado, whatsapp_formateado
 
 # =============================================================================
-# ESQUEMAS
+# ESQUEMAS (sin cambios)
 # =============================================================================
 class ExtractorContacto(BaseModel):
     nombre: Optional[str] = Field(None, description="Nombre de pila y apellidos.")
@@ -136,7 +124,7 @@ class AgentState(TypedDict):
     contexto_tecnico: InferenciaEnergetica
 
 # =============================================================================
-# DECORADOR CTFOM (infraestructura)
+# DECORADOR CTFOM (se mantiene)
 # =============================================================================
 def observe_node(layer: str = "graph", node_name: str = ""):
     def decorator(func):
@@ -171,10 +159,9 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA (con Langfuse)
+# HERRAMIENTA (con span OpenTelemetry y CTFOM)
 # =============================================================================
 @tool
-@observe(as_type="span") if _LANGFUSE_AVAILABLE else (lambda x: x)
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
 def procesar_oportunidad_backend(
     nombre_apellidos: str,
@@ -189,58 +176,68 @@ def procesar_oportunidad_backend(
     """Envía leads a canales del Controller."""
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
 
-    def tarea_background():
-        num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
-        try:
-            msg = MIMEMultipart()
-            msg['To'] = config.CONTROLLER_EMAIL
-            msg['From'] = config.SMTP_USER
-            msg['Subject'] = resumen_18_palabras
-            cuerpo = (
-                f"Oportunidad Validada por Auditoría ISO:\n\n"
-                f"Cliente: {nombre_norm}\nWhatsApp: {whatsapp_norm}\n"
-                f"Ubicación: {departamento_municipio}\nConsumo: {consumo_actual}\n"
-                f"Distribuidora: {empresa_electrica}\nEspecificación: {definicion_necesidad}\n\n"
-                f"Equipos Propuestos:\n{listado_equipos_html}"
-            )
-            msg.attach(MIMEText(cuerpo, 'plain'))
-            creds = Credentials(
-                token=None,
-                refresh_token=os.getenv("GMAIL_REFRESH_TOKEN"),
-                token_uri="https://oauth2.googleapis.com/token",
-                client_id=os.getenv("GMAIL_CLIENT_ID"),
-                client_secret=os.getenv("GMAIL_CLIENT_SECRET")
-            )
-            service = build('gmail', 'v1', credentials=creds)
-            raw = base64.urlsafe_b64encode(msg.as_bytes()).decode('utf-8')
-            service.users().messages().send(userId="me", body={'raw': raw}).execute()
-        except Exception as e:
-            logger.error(f"Fallo en envío de correo: {e}")
+    # Span OpenTelemetry para el despacho
+    with tracer.start_as_current_span("dispatch_lead") as span:
+        span.set_attribute("channel", "email+webhook")
+        span.set_attribute("whatsapp", whatsapp_norm)
+        span.set_attribute("nombre", nombre_norm)
+        
+        def tarea_background():
+            # Span hijo para el envío real (se crea en el hilo, pero OpenTelemetry no lo propaga automáticamente)
+            # Para simplificar, usamos el span actual, pero en un hilo no se propaga el contexto.
+            # Se podría usar contextvars, pero dejamos que CTFOM lo capture.
+            num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
+            try:
+                msg = MIMEMultipart()
+                msg['To'] = config.CONTROLLER_EMAIL
+                msg['From'] = config.SMTP_USER
+                msg['Subject'] = resumen_18_palabras
+                cuerpo = (
+                    f"Oportunidad Validada por Auditoría ISO:\n\n"
+                    f"Cliente: {nombre_norm}\nWhatsApp: {whatsapp_norm}\n"
+                    f"Ubicación: {departamento_municipio}\nConsumo: {consumo_actual}\n"
+                    f"Distribuidora: {empresa_electrica}\nEspecificación: {definicion_necesidad}\n\n"
+                    f"Equipos Propuestos:\n{listado_equipos_html}"
+                )
+                msg.attach(MIMEText(cuerpo, 'plain'))
+                creds = Credentials(
+                    token=None,
+                    refresh_token=os.getenv("GMAIL_REFRESH_TOKEN"),
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=os.getenv("GMAIL_CLIENT_ID"),
+                    client_secret=os.getenv("GMAIL_CLIENT_SECRET")
+                )
+                service = build('gmail', 'v1', credentials=creds)
+                raw = base64.urlsafe_b64encode(msg.as_bytes()).decode('utf-8')
+                service.users().messages().send(userId="me", body={'raw': raw}).execute()
+            except Exception as e:
+                logger.error(f"Fallo en envío de correo: {e}")
 
-        payload_wa = {
-            "instance_id": os.getenv("APICHAT_INSTANCE", ""),
-            "number": num_limpio,
-            "text": (
-                f"🚨 Lead Calificado:\n\n"
-                f"Cliente: {nombre_norm}\nWhatsApp: {whatsapp_norm}\n"
-                f"Ubicación: {departamento_municipio}\nEquipos:\n{listado_equipos_html}"
-            )
-        }
-        try:
-            requests.post(
-                os.getenv("APICHAT_ENDPOINT", ""),
-                json=payload_wa,
-                headers={
-                    "Authorization": f"Bearer {os.getenv('APICHAT_TOKEN', '')}",
-                    "Content-Type": "application/json"
-                },
-                timeout=15
-            )
-        except Exception as e:
-            logger.error(f"Fallo en envío de webhook: {e}")
+            payload_wa = {
+                "instance_id": os.getenv("APICHAT_INSTANCE", ""),
+                "number": num_limpio,
+                "text": (
+                    f"🚨 Lead Calificado:\n\n"
+                    f"Cliente: {nombre_norm}\nWhatsApp: {whatsapp_norm}\n"
+                    f"Ubicación: {departamento_municipio}\nEquipos:\n{listado_equipos_html}"
+                )
+            }
+            try:
+                requests.post(
+                    os.getenv("APICHAT_ENDPOINT", ""),
+                    json=payload_wa,
+                    headers={
+                        "Authorization": f"Bearer {os.getenv('APICHAT_TOKEN', '')}",
+                        "Content-Type": "application/json"
+                    },
+                    timeout=15
+                )
+            except Exception as e:
+                logger.error(f"Fallo en envío de webhook: {e}")
 
-    threading.Thread(target=tarea_background).start()
-    return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
+        threading.Thread(target=tarea_background).start()
+        span.set_status(Status(StatusCode.OK))
+        return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
 
 def extraer_intencion_humana(messages: list) -> str:
     for msg in reversed(messages):
@@ -264,16 +261,37 @@ def extraer_tipo_producto(mensaje: str) -> Optional[str]:
     return None
 
 # =============================================================================
-# CONSTRUCCIÓN DEL GRAFO
+# CONSTRUCCIÓN DEL GRAFO (con spans OpenTelemetry en cada nodo)
 # =============================================================================
 def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
     llm = ChatOpenAI(openai_api_key=DEFAULT_API_KEY, model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
     extractor_llm = llm.with_structured_output(ExtractorContacto)
 
+    # Decorador que añade span OpenTelemetry a cada nodo
+    def otel_span_node(node_name: str):
+        def decorator(func):
+            @functools.wraps(func)
+            def wrapper(state, config=None):
+                with tracer.start_as_current_span(node_name) as span:
+                    span.set_attribute("node.name", node_name)
+                    # Ejecutar función
+                    result = func(state, config) if config is not None else func(state)
+                    # Registrar atributos de salida si es necesario
+                    if isinstance(result, dict) and "contexto_tecnico" in result:
+                        ctx = result["contexto_tecnico"]
+                        if ctx.get("topologia"):
+                            span.set_attribute("topologia", ctx["topologia"])
+                        if ctx.get("tipo_producto"):
+                            span.set_attribute("tipo_producto", ctx["tipo_producto"])
+                    span.set_status(Status(StatusCode.OK))
+                    return result
+            return wrapper
+        return decorator
+
     @auditar_fase(nombre_fase="Clasificador de Intención Comercial", criticidad="MEDIA")
-    @observe_node(node_name="clasificar_intencion_comercial")
-    @observe() if _LANGFUSE_AVAILABLE else (lambda x: x)
+    @observe_node(node_name="clasificar_intencion_comercial")  # CTFOM
+    @otel_span_node("clasificar_intencion_comercial")           # OpenTelemetry
     def clasificar_intencion_comercial_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
@@ -290,7 +308,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     @auditar_fase(nombre_fase="Validador de Ubicación del Cliente", criticidad="MEDIA")
     @observe_node(node_name="validar_ubicacion_cliente")
-    @observe() if _LANGFUSE_AVAILABLE else (lambda x: x)
+    @otel_span_node("validar_ubicacion_cliente")
     def validar_ubicacion_cliente_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
@@ -311,7 +329,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     @auditar_fase(nombre_fase="Selección de Productos", criticidad="ALTA")
     @observe_node(node_name="seleccionar_productos")
-    @observe() if _LANGFUSE_AVAILABLE else (lambda x: x)
+    @otel_span_node("seleccionar_productos")
     def seleccionar_productos_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
@@ -331,7 +349,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     @auditar_fase(nombre_fase="Generación de Respuesta Comercial", criticidad="ALTA")
     @observe_node(node_name="generar_respuesta_comercial")
-    @observe() if _LANGFUSE_AVAILABLE else (lambda x: x)
+    @otel_span_node("generar_respuesta_comercial")
     def generar_respuesta_comercial_node(state: AgentState, config: RunnableConfig):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
@@ -421,7 +439,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
     @observe_node(node_name="anexar_caso_respuesta")
-    @observe() if _LANGFUSE_AVAILABLE else (lambda x: x)
+    @otel_span_node("anexar_caso_respuesta")
     def anexar_caso_respuesta_node(state: AgentState, config: RunnableConfig):
         messages = state.get("messages", [])
         caso = config.get("metadata", {}).get("caso", "000000000000")
