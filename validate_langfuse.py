@@ -8,6 +8,7 @@ Pruebas de caja negra:
 2. Revisar dashboard de Langfuse: debe aparecer una traza con nombre "validation_test".
 3. Si faltan credenciales: debe mostrar "❌ Faltan credenciales de Langfuse".
 4. Si el endpoint OTLP es incorrecto: debe lanzar excepción (capturada en el script).
+Prubeas
 """
 import os
 import base64
