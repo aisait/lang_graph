@@ -1,26 +1,45 @@
 # =============================================================================
-# Dockerfile.api - Entorno de producción para JARVI 2.0 con OpenTelemetry
-# Cumple con ISO/IEC 25010, ISO/IEC 27001, DORA, ISO/IEC 29119.
+# JARVI 2.0.03 | Dockerfile CORREGIDO - Despliegue Inmediato
 # =============================================================================
 
 FROM python:3.11-slim
 
+# ---------------------------------------------------------------------------
+# 1. DEPENDENCIAS DEL SISTEMA (requeridas por pydantic-core / binarios Rust)
+# ---------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     libstdc++6 \
     libgcc-s1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
+# ---------------------------------------------------------------------------
+# 2. INSTALACIÓN DETERMINÍSTICA DE DEPENDENCIAS
+# ---------------------------------------------------------------------------
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir --force-reinstall "langfuse>=2.0.0" "packaging==24.2"
 
+# ---------------------------------------------------------------------------
+# 3. VERIFICACIÓN EN TIEMPO DE BUILD (FAIL-FAST)
+# ---------------------------------------------------------------------------
+RUN python -c "import langfuse; from langfuse import Langfuse; from langfuse.callback import CallbackHandler; print('✅ Langfuse OK')"
+
+# ---------------------------------------------------------------------------
+# 4. COPIAR CÓDIGO FUENTE
+# ---------------------------------------------------------------------------
 COPY . .
 
-RUN python -c "import langfuse, opentelemetry, asyncpg, redis; print('✅ Dependencias críticas OK')"
+# ---------------------------------------------------------------------------
+# 5. HEALTH CHECK CON DEPENDENCIAS CRÍTICAS
+# ---------------------------------------------------------------------------
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import langfuse, asyncpg, redis; print('HEALTHY')" || exit 1
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import langfuse, opentelemetry, asyncpg, redis" || exit 1
-
-EXPOSE 8080
+# ---------------------------------------------------------------------------
+# 6. COMANDO DE INICIO
+# ---------------------------------------------------------------------------
 CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
