@@ -1,6 +1,6 @@
 """
-telemetry_otel.py - Inicialización de OpenTelemetry con exportador OTLP para Langfuse v4.
-Cumple con ISO/IEC 27001, DORA, ISO/IEC 25010.
+telemetry_otel.py - Inicialización de OpenTelemetry para Langfuse v4.
+Cumple con ISO/IEC 27001, DORA, ISO/IEC 25010, ISO/IEC 29119.
 """
 import os
 import base64
@@ -25,25 +25,24 @@ def init_telemetry(app=None):
         logger.warning("Langfuse no configurado - telemetría desactivada")
         return False
 
-    # Configurar autenticación Basic para OTLP
+    # Autenticación Basic para OTLP
     auth = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
     os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = f"{host}/api/public/otel"
     os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {auth}"
     os.environ["OTEL_SERVICE_NAME"] = "jarvi-backend"
 
-    # Crear exportador con logging de errores
+    # Exportador con logging de errores
     exporter = OTLPSpanExporter(timeout=10)
 
-    # Override del método export para capturar errores
+    # Override para capturar errores
     original_export = exporter.export
 
     def logged_export(spans):
         try:
             result = original_export(spans)
-            # Si el resultado es un Future, esperamos a que termine
             if hasattr(result, 'result'):
                 result.result(timeout=15)
-            logger.info(f"Exportación OTLP exitosa: {len(spans)} spans")
+            logger.info(f"✅ Exportación OTLP exitosa: {len(spans)} spans")
             return result
         except Exception as e:
             logger.error(f"❌ Error en exportación OTLP: {type(e).__name__}: {e}")
