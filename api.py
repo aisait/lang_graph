@@ -27,6 +27,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 # Importar OpenTelemetry
 from telemetry_otel import init_telemetry, get_tracer
+from opentelemetry.trace import Status, StatusCode   # <--- CORREGIDO: añadido
 
 from schemas import ChatRequest, AudioRequest, ImageRequest
 from agent_graph import create_graph, normalizar_contacto
@@ -833,7 +834,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                     respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
                 graph_span.set_attribute("response_length", len(respuesta_final))
-                graph_span.set_status(StatusCode.OK)
+                graph_span.set_status(StatusCode.OK)  # <--- AHORA StatusCode ESTÁ DEFINIDO
 
         if redis_client and respuesta_final:
             await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
@@ -924,6 +925,10 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             "resumen": sesion_redis.get("resumen", "") if sesion_redis else ""
         })
         yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
+    
+    # <--- FLUSH FORZADO PARA ASEGURAR QUE LOS SPANS SE EXPORTEN
+    trace.get_tracer_provider().force_flush()
+    logger.info("Flush de spans completado")
 
 # =============================================================================
 # ENDPOINTS AUXILIARES (sin cambios)
