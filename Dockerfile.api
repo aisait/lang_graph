@@ -1,36 +1,26 @@
 # =============================================================================
 # Dockerfile.api - Entorno de producción para JARVI 2.0 con OpenTelemetry
-# Cumple con ISO/IEC 25010 (mantenibilidad), ISO/IEC 27001 (seguridad),
-# DORA (resiliencia) y ISO/IEC 29119 (pruebas).
+# Cumple con ISO/IEC 25010, ISO/IEC 27001, DORA, ISO/IEC 29119.
 # =============================================================================
 
 FROM python:3.11-slim
 
-# Instalación de librerías del sistema (solo las estrictamente necesarias)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libstdc++6 \
     libgcc-s1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Establecer directorio de trabajo
 WORKDIR /app
 
-# Paso 1: Copiar requirements.txt e instalar dependencias (Capa cacheable)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Paso 2: Copiar el resto del código fuente (invalida caché solo cuando cambia)
 COPY . .
 
-# Paso 3: Verificación de dependencias críticas (Fail-Fast)
 RUN python -c "import langfuse, opentelemetry, asyncpg, redis; print('✅ Dependencias críticas OK')"
 
-# Health check: verifica que los módulos críticos estén disponibles
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import langfuse, opentelemetry, asyncpg, redis" || exit 1
 
-# Puerto expuesto
 EXPOSE 8080
-
-# Comando de inicio
 CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
