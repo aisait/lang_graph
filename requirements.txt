@@ -1,5 +1,5 @@
 # =============================================================================
-# requirements.txt (Backend JARVI 2.0 - Migración a OpenTelemetry + Langfuse v4)
+# requirements.txt - JARVI 2.0 con OpenTelemetry y Langfuse v4
 # =============================================================================
 
 # Frameworks Web
@@ -16,15 +16,11 @@ langchain-openai==0.1.25
 langgraph==0.2.56
 openai>=1.50.0
 
-# Observabilidad (OpenTelemetry + Langfuse v4)
+# Observabilidad (Solo paquetes estables)
 langfuse>=4.0.0
 opentelemetry-sdk>=1.20.0
 opentelemetry-exporter-otlp>=1.20.0
-opentelemetry-instrumentation-langchain>=0.40.0
-opentelemetry-instrumentation-openai>=0.40.0
-opentelemetry-instrumentation-fastapi>=0.40.0
-opentelemetry-instrumentation-requests>=0.40.0
-opentelemetry-instrumentation-httpx>=0.40.0
+# NOTA: No se incluyen instrumentaciones automáticas (evitan versiones beta).
 
 # Persistencia
 psycopg[binary]>=3.1.4
