@@ -51,11 +51,12 @@ def init_telemetry(app=None):
     exporter.export = logged_export
 
     # Configurar TracerProvider con BatchSpanProcessor
+    # CORREGIDO: 'schedule_delay_millis' (sin 'd' extra)
     trace_provider = TracerProvider()
     span_processor = BatchSpanProcessor(
         exporter,
         max_queue_size=512,
-        scheduled_delay_millis=1000,
+        schedule_delay_millis=1000,        # <--- CORREGIDO (era 'scheduled_delay_millis')
         max_export_batch_size=128,
     )
     trace_provider.add_span_processor(span_processor)
