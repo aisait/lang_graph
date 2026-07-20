@@ -14,6 +14,7 @@ langchain-core==0.2.43
 langchain-community==0.2.19
 langchain-openai==0.1.25
 langgraph==0.2.56
+langgraph-checkpoint-postgres==2.0.7   # <--- LÍNEA AÑADIDA (era la que faltaba)
 openai>=1.50.0
 
 # Observabilidad (Solo paquetes estables)
