@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 from langfuse import Langfuse
-from langfuse.callback import CallbackHandler
+from langfuse.integrations.langchain import CallbackHandler  # <--- IMPORT CORRECTO
 
 # OpenTelemetry solo para infraestructura (middleware), NO para LLM
 from telemetry_otel import init_telemetry, get_tracer, force_flush as otel_force_flush
@@ -875,8 +875,8 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             productos=[p.get("nombre") for p in ctx.get("productos_interes", [])],
             vendedor=ctx.get("vendedor"),
             trace_id=trace_id_ctfom,
-            cumulative_cost=0.0,  # temporal, luego calcularemos
-            metadata_adicional=ctx   # <--- PASA EL CONTEXTO COMPLETO
+            cumulative_cost=0.0,
+            metadata_adicional=ctx
         )
 
     # 7. Generar streaming de tokens
