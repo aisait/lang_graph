@@ -49,7 +49,7 @@ def init_telemetry(app=None):
     span_processor = BatchSpanProcessor(
         exporter,
         max_queue_size=1024,
-        schedule_delay_millis=5000,        # <--- CORREGIDO (era 'scheduled_delay_millis')
+        schedule_delay_millis=5000,        # <--- CORREGIDO
         max_export_batch_size=512,
         export_timeout_millis=10000,
     )
