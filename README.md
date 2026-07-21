@@ -433,7 +433,7 @@ Todos los derechos reservados © 2025-2026 AISA Solar.
 
 *Documento generado para auditoría técnica y gobernanza de software.*  
 *Última actualización: 21 de julio de 2026.*  
-*Versión Auditada: 2.0.08*
+*Versión Auditada: 2.0.03*
 
 ## 📌 Resumen Ejecutivo para el Comité de Evaluación Técnica
 
