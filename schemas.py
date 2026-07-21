@@ -1,115 +1,48 @@
 """
 schemas.py
-Contratos de datos (Modelos Pydantic) para la API central de JARVI 2.0.
-Define las estructuras de solicitud y respuesta que garantizan la
-interoperabilidad entre los canales (Streamlit, n8n, LangSmith) y el backend.
+═══════════════════════════════════════════════════════════════════════
+Contratos de datos (Pydantic) para la API central.
+Se añaden modelos para la telemetría enriquecida (ISO/IEC 25010 - mantenibilidad).
 
-Estándares aplicados:
-- ISO/IEC/IEEE 12207:2008 (Ciclo de vida del software): los modelos son
-  artefactos de diseño que forman parte de la especificación de la API.
-- ISO/IEC 26514:2021 (Documentación de software): cada modelo y campo
-  incluye descripciones que facilitan su comprensión y uso.
-- ISO/IEC 25010:2011 (Calidad del producto):
-  * Adecuación funcional: los campos reflejan exactamente la información
-    necesaria para el proceso de preventa.
-  * Usabilidad: las descripciones (`description`) sirven como documentación
-    automática en Swagger UI.
-- ISO/IEC 29119:2022 (Pruebas de software - caja negra):
-  Las pruebas sugeridas se incluyen en cada clase.
+Pruebas de caja negra (ISO/IEC 29119):
+    BC‑T05: Validación de schema → verificar que los nuevos modelos rechacen datos inválidos.
 """
-
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional
-
+from typing import Dict, Any, Optional, List
 
 class ChatRequest(BaseModel):
-    """
-    Modelo de solicitud para el endpoint de chat (/chat).
-    Representa un mensaje enviado por cualquier canal (humano o máquina)
-    hacia el agente conversacional.
-
-    Prueba de caja negra (ISO/IEC 29119):
-        1. Enviar un JSON válido con `thread_id` y `message` → 200 OK.
-        2. Omitir `thread_id` → error de validación (422 Unprocessable Entity).
-        3. Omitir `message` → error de validación (422).
-        4. Incluir `metadata` vacío → debe ser aceptado.
-        5. Incluir `metadata` con campos adicionales (ej. `"source": "n8n"`)
-           → debe ser aceptado sin errores.
-    """
-    thread_id: str = Field(
-        ...,
-        description="ID único de sesión del cliente. Permite mantener el "
-                    "estado conversacional y la persistencia en PostgreSQL."
-    )
-    message: str = Field(
-        ...,
-        description="Contenido del mensaje del cliente. Puede ser texto "
-                    "plano, pregunta técnica o descripción de necesidad."
-    )
-    metadata: Optional[Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="Metadatos adicionales inyectados por el canal "
-                    "(fuente, tags, etc.) que se propagan al sistema de "
-                    "trazabilidad (LangSmith, auditoría)."
-    )
-
+    thread_id: str = Field(..., description="ID único de sesión del cliente.")
+    message: str = Field(..., description="Contenido del mensaje del cliente.")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 class ChatResponse(BaseModel):
-    """
-    Modelo de respuesta del endpoint de chat (en modo no streaming).
-    Contiene la respuesta completa del agente y el identificador de
-    ejecución para la auditoría.
+    response: str
+    run_id: str
+    status: str = "success"
 
-    Prueba de caja negra (ISO/IEC 29119):
-        1. Después de una solicitud exitosa, el JSON de respuesta debe
-           contener los campos `response`, `run_id` y `status`.
-        2. `status` debe ser exactamente "success" en condiciones normales.
-        3. `run_id` debe ser un string no vacío.
-        4. `response` debe contener la respuesta textual del agente.
-    """
-    response: str = Field(
-        ...,
-        description="Texto completo de la respuesta del agente."
-    )
-    run_id: str = Field(
-        ...,
-        description="Identificador único de la ejecución del grafo, "
-                    "utilizado para la trazabilidad en LangSmith y "
-                    "la auditoría forense (tabla audit_events)."
-    )
-    status: str = Field(
-        default="success",
-        description="Estado de la operación. En caso de éxito siempre "
-                    "es 'success'."
-    )
+# Nuevos modelos para telemetría enriquecida (ISO 25010 - mantenibilidad)
+class TelemetryContext(BaseModel):
+    """Contexto de telemetría inyectado en CTFOM y Redis."""
+    trace_id: str
+    span_id: str
+    caso: str
+    topologia: Optional[str] = None
+    tipo_producto: Optional[str] = None
+    productos_interes: List[Dict[str, Any]] = Field(default_factory=list)
+    whatsapp: Optional[str] = None
+    origen: str = "desconocido"
+    llm_cost: Optional[float] = None
+    llm_model: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
 
-
-# ---------------------------------------------------------------------------
-# Modelos adicionales para endpoints auxiliares (futuro)
-# ---------------------------------------------------------------------------
 class AudioRequest(BaseModel):
-    """
-    Modelo para la solicitud de transcripción (Speech‑to‑Text).
-    Pendiente de implementación completa en la API.
-    """
-    thread_id: str = Field(..., description="ID de sesión asociado al audio.")
-    # Se espera que el audio se envíe como multipart/form-data; este modelo
-    # es una representación conceptual.
-
+    thread_id: str
 
 class ImageRequest(BaseModel):
-    """
-    Modelo para la solicitud de análisis de factura (visión artificial).
-    Pendiente de implementación completa en la API.
-    """
-    thread_id: str = Field(..., description="ID de sesión asociado a la imagen.")
-    image_base64: str = Field(..., description="Imagen codificada en Base64.")
-
+    thread_id: str
+    image_base64: str
 
 class TTSRequest(BaseModel):
-    """
-    Modelo para la solicitud de síntesis de voz (Text‑to‑Speech).
-    Pendiente de implementación completa en la API.
-    """
-    text: str = Field(..., description="Texto a convertir en voz.")
-    voice: str = Field(default="alloy", description="Voz del modelo TTS.")
+    text: str
+    voice: str = "alloy"
