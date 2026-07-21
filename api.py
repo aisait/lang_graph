@@ -40,8 +40,9 @@ from db_client import get_bi_db_url, get_ctfom_db_url
 from utils.sanitize import sanitize_pii
 from config import settings
 
-logger = logging.getLogger(__name__)
+# Configurar logging básico (también visible en Railway)
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # ESQUEMAS ADICIONALES
@@ -159,7 +160,7 @@ async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
     try:
         db_url = get_bi_db_url()
         if not db_url:
-            logger.error("BI_DATABASE_URL no configurada")
+            print("BI_DATABASE_URL no configurada")
             return False
         conn = await asyncpg.connect(db_url)
         metadata = contexto.copy()
@@ -176,10 +177,10 @@ async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
             chat_id, resumen, json.dumps(metadata)
         )
         await conn.close()
-        logger.info(f"Resumen guardado en PostgreSQL (BI) para chat_id {chat_id}")
+        print(f"Resumen guardado en PostgreSQL (BI) para chat_id {chat_id}")
         return True
     except Exception as e:
-        logger.error(f"Error al guardar resumen: {e}")
+        print(f"Error al guardar resumen: {e}")
         return False
 
 # =============================================================================
@@ -206,9 +207,9 @@ async def guardar_sesion_redis(redis_client: Optional[redis.Redis], chat_id: str
         data_serialized = {k: serializar_para_redis(v) for k, v in data.items()}
         await redis_client.hset(key, mapping=data_serialized)
         await redis_client.expire(key, REDIS_TTL)
-        logger.info(f"Sesión guardada para chat_id {chat_id}")
+        print(f"Sesión guardada para chat_id {chat_id}")
     except Exception as e:
-        logger.error(f"Error guardando sesión: {e}")
+        print(f"Error guardando sesión: {e}")
 
 async def obtener_sesion_redis(redis_client: Optional[redis.Redis], chat_id: str) -> Optional[dict]:
     if not redis_client:
@@ -226,7 +227,7 @@ async def obtener_sesion_redis(redis_client: Optional[redis.Redis], chat_id: str
                     pass
         return data
     except Exception as e:
-        logger.error(f"Error obteniendo sesión: {e}")
+        print(f"Error obteniendo sesión: {e}")
         return None
 
 async def eliminar_sesion_redis(redis_client: Optional[redis.Redis], chat_id: str):
@@ -234,7 +235,7 @@ async def eliminar_sesion_redis(redis_client: Optional[redis.Redis], chat_id: st
         try:
             await redis_client.delete(f"session:{chat_id}")
         except Exception as e:
-            logger.error(f"Error eliminando sesión: {e}")
+            print(f"Error eliminando sesión: {e}")
 
 async def guardar_historial_redis(redis_client: Optional[redis.Redis], chat_id: str, input_msg: str, output_msg: str):
     if not redis_client:
@@ -248,9 +249,9 @@ async def guardar_historial_redis(redis_client: Optional[redis.Redis], chat_id: 
         })
         await redis_client.lpush(key, registro)
         await redis_client.ltrim(key, 0, HISTORIAL_LIMITE - 1)
-        logger.info(f"Historial actualizado para chat_id {chat_id}")
+        print(f"Historial actualizado para chat_id {chat_id}")
     except Exception as e:
-        logger.error(f"Error guardando historial: {e}")
+        print(f"Error guardando historial: {e}")
 
 async def obtener_historial_redis(redis_client: Optional[redis.Redis], chat_id: str) -> list:
     if not redis_client:
@@ -266,7 +267,7 @@ async def obtener_historial_redis(redis_client: Optional[redis.Redis], chat_id: 
                 continue
         return historial
     except Exception as e:
-        logger.error(f"Error obteniendo historial: {e}")
+        print(f"Error obteniendo historial: {e}")
         return []
 
 async def guardar_fingerprint_redis(redis_client: Optional[redis.Redis], fingerprint: str, chat_id: str):
@@ -275,9 +276,9 @@ async def guardar_fingerprint_redis(redis_client: Optional[redis.Redis], fingerp
     try:
         key = f"fingerprint:{fingerprint}"
         await redis_client.set(key, chat_id, ex=REDIS_TTL)
-        logger.info(f"Fingerprint {fingerprint} asociado a chat_id {chat_id}")
+        print(f"Fingerprint {fingerprint} asociado a chat_id {chat_id}")
     except Exception as e:
-        logger.error(f"Error guardando fingerprint: {e}")
+        print(f"Error guardando fingerprint: {e}")
 
 async def obtener_chat_id_por_fingerprint(redis_client: Optional[redis.Redis], fingerprint: str) -> Optional[str]:
     if not redis_client:
@@ -286,7 +287,7 @@ async def obtener_chat_id_por_fingerprint(redis_client: Optional[redis.Redis], f
         key = f"fingerprint:{fingerprint}"
         return await redis_client.get(key)
     except Exception as e:
-        logger.error(f"Error obteniendo chat_id por fingerprint: {e}")
+        print(f"Error obteniendo chat_id por fingerprint: {e}")
         return None
 
 async def guardar_whatsapp_redis(redis_client: Optional[redis.Redis], whatsapp: str, chat_id: str):
@@ -295,9 +296,9 @@ async def guardar_whatsapp_redis(redis_client: Optional[redis.Redis], whatsapp: 
     try:
         key = f"chat_id:{whatsapp}"
         await redis_client.set(key, chat_id, ex=REDIS_TTL)
-        logger.info(f"WhatsApp {whatsapp} asociado a chat_id {chat_id}")
+        print(f"WhatsApp {whatsapp} asociado a chat_id {chat_id}")
     except Exception as e:
-        logger.error(f"Error guardando mapeo whatsapp: {e}")
+        print(f"Error guardando mapeo whatsapp: {e}")
 
 def asignar_vendedor(productos: list) -> str:
     try:
@@ -330,7 +331,7 @@ def get_db_url() -> str:
         return sanear_db_url(raw)
     ctfom_url = os.getenv("CTFOM_DATABASE_URL")
     if ctfom_url:
-        logger.warning("DATABASE_URL no definida. Usando CTFOM_DATABASE_URL para checkpoints de LangGraph.")
+        print("DATABASE_URL no definida. Usando CTFOM_DATABASE_URL para checkpoints de LangGraph.")
         return sanear_db_url(ctfom_url)
     raise RuntimeError("No se encontró DATABASE_URL ni CTFOM_DATABASE_URL.")
 
@@ -354,7 +355,7 @@ async def generar_resumen_con_llm(historial: list, contexto: dict) -> str:
     return response.content
 
 # =============================================================================
-# CICLO DE VIDA DE LA APLICACIÓN CON LOGS DE DEPURACIÓN
+# CICLO DE VIDA DE LA APLICACIÓN CON PRINT DE DEPURACIÓN
 # =============================================================================
 graph = None
 redis_client = None
@@ -364,46 +365,41 @@ langfuse_client = None
 async def lifespan(app: FastAPI):
     global graph, redis_client, langfuse_client
 
-    logger.info("=== INICIO DEL LIFESPAN ===")
+    print("=== INICIO DEL LIFESPAN ===")
 
-    # Inicializar OpenTelemetry (desactivado)
     telemetry_ok = init_telemetry(app)
-    logger.info(f"OpenTelemetry init: {telemetry_ok}")
+    print(f"OpenTelemetry init: {telemetry_ok}")
 
-    # Inicializar cliente Langfuse con logs
     try:
         host = os.getenv("LANGFUSE_HOST", "No definido")
         pk = os.getenv("LANGFUSE_PUBLIC_KEY", "No definido")
         sk = os.getenv("LANGFUSE_SECRET_KEY", "No definido")
-        logger.info(f"Langfuse Host: {host}")
-        logger.info(f"Langfuse Public Key: {pk[:10] if pk != 'No definido' else 'No definido'}...")
+        print(f"Langfuse Host: {host}")
+        print(f"Langfuse Public Key: {pk[:10] if pk != 'No definido' else 'No definido'}...")
         langfuse_client = Langfuse(
             public_key=pk if pk != "No definido" else "",
             secret_key=sk if sk != "No definido" else "",
             host=host if host != "No definido" else "https://cloud.langfuse.com"
         )
-        logger.info("✅ Cliente Langfuse creado exitosamente")
-        # Verificar conectividad (opcional)
-        # langfuse_client.auth_check()
+        print("✅ Cliente Langfuse creado exitosamente")
     except Exception as e:
-        logger.error(f"❌ Error al crear cliente Langfuse: {e}")
+        print(f"❌ Error al crear cliente Langfuse: {e}")
         langfuse_client = None
 
-    # Conectar a base de datos para checkpoints
     db_url = get_db_url()
-    logger.info(f"DB URL (sanitizada): {db_url[:50]}...")
+    print(f"DB URL (sanitizada): {db_url[:50]}...")
     async with AsyncExitStack() as stack:
         checkpointer = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(db_url))
         await checkpointer.setup()
         graph = create_graph(checkpointer)
-        logger.info("JARVI 2.0 API inicializada – Grafo listo")
+        print("JARVI 2.0 API inicializada – Grafo listo")
 
         redis_url = os.getenv("REDIS_URL")
         if redis_url:
             redis_client = redis.from_url(redis_url, decode_responses=True)
-            logger.info("Conexión a Redis establecida")
+            print("Conexión a Redis establecida")
         else:
-            logger.warning("REDIS_URL no configurada – buffer de sesión deshabilitado")
+            print("REDIS_URL no configurada – buffer de sesión deshabilitado")
 
         start_batch_worker()
         yield
@@ -411,10 +407,10 @@ async def lifespan(app: FastAPI):
     if redis_client:
         await redis_client.close()
     if langfuse_client:
-        logger.info("Flushing Langfuse client...")
+        print("Flushing Langfuse client...")
         langfuse_client.flush()
-        logger.info("Langfuse flush completado")
-    logger.info("Apagando API JARVI")
+        print("Langfuse flush completado")
+    print("Apagando API JARVI")
 
 app = FastAPI(title="JARVI 2.0 API Central", version="2.0.06",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
@@ -483,12 +479,12 @@ async def registrar_feedback(feedback: dict):
                 comment=feedback.get("comment")
             )
             langfuse_client.flush()
-            logger.info(f"Feedback registrado para trace_id {feedback['trace_id']}: {feedback['value']}")
+            print(f"Feedback registrado para trace_id {feedback['trace_id']}: {feedback['value']}")
         else:
-            logger.warning("Langfuse no disponible para registrar feedback")
+            print("Langfuse no disponible para registrar feedback")
         return {"status": "ok", "trace_id": feedback["trace_id"]}
     except Exception as e:
-        logger.error(f"Error al registrar feedback: {e}")
+        print(f"Error al registrar feedback: {e}")
         raise HTTPException(status_code=500, detail=f"Error al registrar feedback: {str(e)}")
 
 # =============================================================================
@@ -502,7 +498,7 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
     if whatsapp_raw:
         _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
         if whatsapp_norm and whatsapp_norm != "Pendiente":
-            logger.info(f"WhatsApp detectado: {whatsapp_norm}")
+            print(f"WhatsApp detectado: {whatsapp_norm}")
 
     chat_id = None
     origen = "pantalla"
@@ -519,17 +515,17 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
                     thread_id_final = str(uuid.uuid4())
                     sesion["thread_id"] = thread_id_final
                     await guardar_sesion_redis(redis_client, chat_id, sesion)
-                logger.info(f"Sesión recuperada por fingerprint: {chat_id} con thread {thread_id_final}")
+                print(f"Sesión recuperada por fingerprint: {chat_id} con thread {thread_id_final}")
             else:
                 thread_id_final = str(uuid.uuid4())
                 chat_id = fingerprint
                 await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
-                logger.info(f"Nueva sesión creada para fingerprint: {chat_id} con thread {thread_id_final}")
+                print(f"Nueva sesión creada para fingerprint: {chat_id} con thread {thread_id_final}")
         else:
             thread_id_final = str(uuid.uuid4())
             chat_id = fingerprint
             await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
-            logger.info(f"Nuevo thread creado para fingerprint: {chat_id} con thread {thread_id_final}")
+            print(f"Nuevo thread creado para fingerprint: {chat_id} con thread {thread_id_final}")
     else:
         thread_id_final = thread_id_from_request if thread_id_from_request else str(uuid.uuid4())
         chat_id = thread_id_final
@@ -556,9 +552,9 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
             }
             if redis_client:
                 await guardar_sesion_redis(redis_client, chat_id, data_inicial)
-            logger.info(f"Nuevo thread forzado (sin fingerprint): {thread_id_final}")
+            print(f"Nuevo thread forzado (sin fingerprint): {thread_id_final}")
         else:
-            logger.info(f"Sesión recuperada por thread_id: {chat_id} con thread {thread_id_final}")
+            print(f"Sesión recuperada por thread_id: {chat_id} con thread {thread_id_final}")
 
     if whatsapp_norm and chat_id != whatsapp_norm:
         sesion_antigua = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
@@ -570,7 +566,7 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
             if fingerprint:
                 await guardar_fingerprint_redis(redis_client, fingerprint, whatsapp_norm)
             chat_id = whatsapp_norm
-            logger.info(f"Chat_id actualizado a número: {chat_id}")
+            print(f"Chat_id actualizado a número: {chat_id}")
 
     sesion_redis = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
     if not sesion_redis:
@@ -731,12 +727,12 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                 public=False,
                 bookmarked=False
             )
-            logger.info(f"Traza Langfuse creada: {trace.id} para caso {caso}")
+            print(f"Traza Langfuse creada: {trace.id} para caso {caso}")
         except Exception as e:
-            logger.error(f"❌ Error al crear traza Langfuse: {e}")
+            print(f"❌ Error al crear traza Langfuse: {e}")
             trace = None
     else:
-        logger.warning("Langfuse client no disponible. No se creará traza.")
+        print("Langfuse client no disponible. No se creará traza.")
         trace = None
 
     # 2. Crear CallbackHandler vinculado a esta traza (si existe)
@@ -752,20 +748,20 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         sesion_redis = await obtener_sesion_redis(redis_client, chat_id)
         if sesion_redis:
             historial = await obtener_historial_redis(redis_client, chat_id)
-            logger.info(f"Historial recuperado: {len(historial)} mensajes para chat_id {chat_id}")
+            print(f"Historial recuperado: {len(historial)} mensajes para chat_id {chat_id}")
 
     nombre = extraer_nombre(mensaje)
     if nombre and (not sesion_redis or not sesion_redis.get("nombre") or sesion_redis.get("nombre") == "Pendiente"):
         if sesion_redis:
             sesion_redis["nombre"] = nombre
             await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        logger.info(f"Nombre extraído: {nombre}")
+        print(f"Nombre extraído: {nombre}")
 
     if nuevo_whatsapp:
         if sesion_redis:
             sesion_redis["whatsapp"] = nuevo_whatsapp
             await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        logger.info(f"WhatsApp actualizado: {nuevo_whatsapp}")
+        print(f"WhatsApp actualizado: {nuevo_whatsapp}")
 
     depto, muni = extraer_ubicacion(mensaje)
     if depto and (not sesion_redis or not sesion_redis.get("departamento")):
@@ -773,34 +769,34 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             sesion_redis["departamento"] = depto
             sesion_redis["municipio"] = muni
             await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        logger.info(f"Ubicación extraída: {depto}, {muni}")
+        print(f"Ubicación extraída: {depto}, {muni}")
 
     consumo = extraer_consumo(mensaje)
     if consumo and (not sesion_redis or not sesion_redis.get("consumo_actual")):
         if sesion_redis:
             sesion_redis["consumo_actual"] = consumo
             await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        logger.info(f"Consumo extraído: {consumo}")
+        print(f"Consumo extraído: {consumo}")
 
     empresa = extraer_empresa_electrica(mensaje)
     if empresa and (not sesion_redis or not sesion_redis.get("empresa_electrica")):
         if sesion_redis:
             sesion_redis["empresa_electrica"] = empresa
             await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        logger.info(f"Empresa eléctrica extraída: {empresa}")
+        print(f"Empresa eléctrica extraída: {empresa}")
 
     necesidad = extraer_definicion_necesidad(mensaje)
     if necesidad and (not sesion_redis or not sesion_redis.get("definicion_necesidad")):
         if sesion_redis:
             sesion_redis["definicion_necesidad"] = necesidad
             await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        logger.info(f"Necesidad extraída: {necesidad}")
+        print(f"Necesidad extraída: {necesidad}")
 
     if sesion_redis and sesion_redis.get("productos_interes") and not sesion_redis.get("vendedor"):
         vendedor_email = asignar_vendedor(sesion_redis["productos_interes"])
         sesion_redis["vendedor"] = vendedor_email
         await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        logger.info(f"Vendedor asignado: {vendedor_email}")
+        print(f"Vendedor asignado: {vendedor_email}")
 
     mensaje_con_caso = f"{mensaje} [Caso No. {caso}]"
 
@@ -834,7 +830,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     async with locks[thread_id]:
         resultado = await graph.ainvoke(estado_inicial, config=config)
         ctx = resultado.get("contexto_tecnico", {})
-        logger.info(f"Contexto final: {ctx}")
+        print(f"Contexto final: {ctx}")
 
         respuesta_final = ""
         for msg in reversed(resultado.get("messages", [])):
@@ -856,17 +852,17 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                     "caso": caso
                 }
             )
-            logger.info(f"Traza {trace.id} actualizada con respuesta final")
+            print(f"Traza {trace.id} actualizada con respuesta final")
         except Exception as e:
-            logger.error(f"Error al actualizar traza: {e}")
+            print(f"Error al actualizar traza: {e}")
 
     # 5. Flush del SDK de Langfuse
     if langfuse_client:
         try:
             langfuse_client.flush()
-            logger.info("Flush de Langfuse completado")
+            print("Flush de Langfuse completado")
         except Exception as e:
-            logger.error(f"Error en flush de Langfuse: {e}")
+            print(f"Error en flush de Langfuse: {e}")
 
     # 6. Generar streaming de tokens
     if respuesta_final:
