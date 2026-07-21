@@ -1,6 +1,16 @@
 """
-telemetry_otel.py - Inicialización de OpenTelemetry para Langfuse v4.
-Cumple con ISO/IEC 27001, DORA, ISO/IEC 25010, ISO/IEC 29119.
+telemetry_otel.py
+═══════════════════════════════════════════════════════════════════════
+Inicialización de OpenTelemetry con exportador OTLP a Langfuse.
+Cumple con ISO/IEC 25010 (eficiencia, fiabilidad) y DORA (resiliencia).
+
+Configuración robusta:
+    - BatchSpanProcessor con cola amplia y timeouts para evitar pérdida de spans.
+    - Logging de errores de exportación.
+
+Pruebas de caja negra (ISO/IEC 29119):
+    BC‑T07: Ejecutar nodo → verificar que el span se exporte sin errores.
+    BC‑T10: Health check → verificar que el exportador responde.
 """
 import os
 import base64
@@ -25,18 +35,15 @@ def init_telemetry(app=None):
         logger.warning("Langfuse no configurado - telemetría desactivada")
         return False
 
-    # Autenticación Basic para OTLP
     auth = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
     os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = f"{host}/api/public/otel"
     os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {auth}"
     os.environ["OTEL_SERVICE_NAME"] = "jarvi-backend"
 
-    # Exportador con logging de errores
     exporter = OTLPSpanExporter(timeout=10)
 
-    # Override para capturar errores
+    # Logging de errores de exportación (DORA: registro de incidentes)
     original_export = exporter.export
-
     def logged_export(spans):
         try:
             result = original_export(spans)
@@ -47,17 +54,16 @@ def init_telemetry(app=None):
         except Exception as e:
             logger.error(f"❌ Error en exportación OTLP: {type(e).__name__}: {e}")
             return None
-
     exporter.export = logged_export
 
-    # Configurar TracerProvider con BatchSpanProcessor
-    # CORREGIDO: 'schedule_delay_millis' (sin 'd' extra)
+    # Configuración robusta (ISO 25010 - eficiencia, DORA - resiliencia)
     trace_provider = TracerProvider()
     span_processor = BatchSpanProcessor(
         exporter,
-        max_queue_size=512,
-        schedule_delay_millis=1000,        # <--- CORREGIDO (era 'scheduled_delay_millis')
-        max_export_batch_size=128,
+        max_queue_size=1024,
+        scheduled_delay_millis=5000,
+        max_export_batch_size=512,
+        export_timeout_millis=10000,
     )
     trace_provider.add_span_processor(span_processor)
     trace.set_tracer_provider(trace_provider)
