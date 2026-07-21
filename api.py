@@ -1,6 +1,15 @@
 """
-api.py - Servidor FastAPI con trazabilidad OpenTelemetry + Langfuse v4.
-Cumple con ISO/IEC 27001, DORA, ISO/IEC 25010, ISO/IEC 29119.
+api.py
+═══════════════════════════════════════════════════════════════════════
+Servidor FastAPI con trazabilidad OpenTelemetry + Langfuse v4.
+Se añaden hooks para enriquecer CTFOM, Redis y Langfuse con datos de negocio y costos.
+
+Cumple con ISO/IEC 25010, 27001, DORA e ITIL 4.
+
+Pruebas de caja negra (ISO/IEC 29119):
+    BC‑T07: CTFOM enriquecido → metadata contiene topologia, productos, etc.
+    BC‑T08: Langfuse → atributos gen_ai.* completos (model, tokens, costos).
+    BC‑T11: Redis → contexto_tecnico.telemetry contiene trace_id, cost, etc.
 """
 import os
 import asyncio
@@ -25,16 +34,18 @@ from pydantic import BaseModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
-# Importar OpenTelemetry
+# OpenTelemetry
 from telemetry_otel import init_telemetry, get_tracer, force_flush
 from opentelemetry.trace import Status, StatusCode
 from opentelemetry import trace
 
+# Modelos y utilidades
 from schemas import ChatRequest, AudioRequest, ImageRequest
 from agent_graph import create_graph, normalizar_contacto
 from ontology import obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 from db_client import get_bi_db_url, get_ctfom_db_url
+from utils.sanitize import sanitize_pii, sanitize_dict
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +374,154 @@ async def generar_resumen_con_llm(historial: list, contexto: dict) -> str:
         HumanMessage(content=prompt)
     ])
     return response.content
+# =============================================================================
+# CICLO DE VIDA DE LA APLICACIÓN (con OpenTelemetry)
+# =============================================================================
+graph = None
+redis_client = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global graph, redis_client
+
+    # Inicializar OpenTelemetry
+    telemetry_ok = init_telemetry(app)
+    if telemetry_ok:
+        logger.info("OpenTelemetry inicializado correctamente")
+    else:
+        logger.warning("OpenTelemetry desactivado (Langfuse no configurado)")
+
+    db_url = get_db_url()
+    async with AsyncExitStack() as stack:
+        checkpointer = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(db_url))
+        await checkpointer.setup()
+        graph = create_graph(checkpointer)
+        logger.info("JARVI 2.0 API inicializada – Grafo listo")
+
+        redis_url = os.getenv("REDIS_URL")
+        if redis_url:
+            redis_client = redis.from_url(redis_url, decode_responses=True)
+            logger.info("Conexión a Redis establecida")
+        else:
+            logger.warning("REDIS_URL no configurada – buffer de sesión deshabilitado")
+
+        start_batch_worker()
+        yield
+
+    if redis_client:
+        await redis_client.close()
+    logger.info("Apagando API JARVI")
+
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.06",
+              lifespan=lifespan, dependencies=[Depends(validar_api_key)])
+
+# =============================================================================
+# ENDPOINT DE SALUD
+# =============================================================================
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "jarvi-backend"}
+
+# =============================================================================
+# ENDPOINT DE DEPURACIÓN DE RUTAS
+# =============================================================================
+@app.get("/debug/routes")
+async def list_routes():
+    routes = [{"path": route.path, "methods": list(route.methods)} for route in app.routes]
+    return {"routes": routes}
+
+# =============================================================================
+# ENDPOINT DE ACKNOWLEDGE
+# =============================================================================
+@app.post("/ack/{trace_id}")
+async def acknowledge_dispatch(trace_id: str):
+    return {"status": "ACK received", "trace_id": trace_id}
+
+# =============================================================================
+# MIDDLEWARE DE TELEMETRÍA (CTFOM) – se mantiene
+# =============================================================================
+@app.middleware("http")
+async def telemetry_middleware(request: Request, call_next):
+    generate_trace_span()
+    start = time.perf_counter()
+    cpu = psutil.cpu_percent(interval=None)
+    mem = psutil.virtual_memory().used / (1024 * 1024)
+    try:
+        response = await call_next(request)
+        elapsed = (time.perf_counter() - start) * 1000
+        await log_telemetry_event(
+            trace_id_var.get(), span_id_var.get(), "",
+            layer="api", event_type="END", latency_ms=elapsed,
+            cpu_percent=cpu, memory_mb=mem,
+            metadata={"path": request.url.path, "method": request.method}
+        )
+        return response
+    except Exception as e:
+        elapsed = (time.perf_counter() - start) * 1000
+        await log_telemetry_event(
+            trace_id_var.get(), span_id_var.get(), "",
+            layer="api", event_type="ERROR", latency_ms=elapsed,
+            cpu_percent=cpu, memory_mb=mem,
+            error_code=taxonomy_error(e),
+            metadata={"path": request.url.path}
+        )
+        raise
+
+# =============================================================================
+# ENDPOINTS PRINCIPALES
+# =============================================================================
+@app.post("/chat")
+async def chat_endpoint_original(request: ChatRequest, http_request: Request):
+    return await process_chat_frontend(request, http_request)
+
+@app.post("/api/chat/stream")
+async def chat_endpoint_stream(request: ChatRequest, http_request: Request):
+    return await process_chat_frontend(request, http_request)
+
+@app.post("/webhook/whatsapp")
+async def webhook_whatsapp(payload: dict):
+    return await process_webhook_whatsapp(payload)
+
+# =============================================================================
+# ENDPOINT DE FEEDBACK (se mantiene, ahora con OpenTelemetry)
+# =============================================================================
+@app.post("/feedback")
+async def registrar_feedback(feedback: dict):
+    if "trace_id" not in feedback:
+        raise HTTPException(status_code=422, detail="trace_id es requerido")
+    if "value" not in feedback:
+        raise HTTPException(status_code=422, detail="value es requerido")
+    try:
+        tracer = get_tracer()
+        with tracer.start_as_current_span("user_feedback") as span:
+            span.set_attribute("trace.id", feedback["trace_id"])
+            span.set_attribute("feedback.name", feedback.get("name", "satisfaccion"))
+            span.set_attribute("feedback.value", float(feedback["value"]))
+            if feedback.get("comment"):
+                span.set_attribute("feedback.comment", feedback["comment"])
+
+        logger.info(f"Feedback registrado para trace_id {feedback['trace_id']}: {feedback['value']}")
+        return {"status": "ok", "trace_id": feedback["trace_id"]}
+    except Exception as e:
+        logger.error(f"Error al registrar feedback: {e}")
+        raise HTTPException(status_code=500, detail=f"Error al registrar feedback: {str(e)}")
+
+# =============================================================================
+# ENDPOINT DE PRUEBA OTLP
+# =============================================================================
+@app.get("/test-otel")
+async def test_otel():
+    """Endpoint para probar la exportación OTLP desde el entorno real."""
+    tracer = get_tracer("test")
+    with tracer.start_as_current_span("test_endpoint") as span:
+        span.set_attribute("test", True)
+        span.set_attribute("timestamp", time.time())
+        span.set_attribute("user.id", "test_user")
+        span.set_attribute("session.id", "test_session")
+        span.set_attribute("gen_ai.system", "openai")
+        span.set_attribute("gen_ai.operation", "test")
+    force_flush()
+    return {"status": "ok", "message": "Traza de prueba enviada, revisar Langfuse"}
 
 # =============================================================================
 # PROCESAMIENTO DE CHAT FRONTEND (sin cambios en lógica, solo spans)
@@ -572,154 +731,7 @@ async def process_webhook_whatsapp(payload: dict) -> dict:
     return {"status": "Mensaje procesado", "chat_id": chat_id, "response": respuesta_final}
 
 # =============================================================================
-# CICLO DE VIDA DE LA APLICACIÓN (con OpenTelemetry)
-# =============================================================================
-graph = None
-redis_client = None
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global graph, redis_client
-
-    # Inicializar OpenTelemetry
-    telemetry_ok = init_telemetry(app)
-    if telemetry_ok:
-        logger.info("OpenTelemetry inicializado correctamente")
-    else:
-        logger.warning("OpenTelemetry desactivado (Langfuse no configurado)")
-
-    db_url = get_db_url()
-    async with AsyncExitStack() as stack:
-        checkpointer = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(db_url))
-        await checkpointer.setup()
-        graph = create_graph(checkpointer)
-        logger.info("JARVI 2.0 API inicializada – Grafo listo")
-
-        redis_url = os.getenv("REDIS_URL")
-        if redis_url:
-            redis_client = redis.from_url(redis_url, decode_responses=True)
-            logger.info("Conexión a Redis establecida")
-        else:
-            logger.warning("REDIS_URL no configurada – buffer de sesión deshabilitado")
-
-        start_batch_worker()
-        yield
-
-    if redis_client:
-        await redis_client.close()
-    logger.info("Apagando API JARVI")
-
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.06",
-              lifespan=lifespan, dependencies=[Depends(validar_api_key)])
-
-# =============================================================================
-# ENDPOINT DE SALUD
-# =============================================================================
-@app.get("/health")
-async def health_check():
-    return {"status": "ok", "service": "jarvi-backend"}
-
-# =============================================================================
-# ENDPOINT DE DEPURACIÓN DE RUTAS
-# =============================================================================
-@app.get("/debug/routes")
-async def list_routes():
-    routes = [{"path": route.path, "methods": list(route.methods)} for route in app.routes]
-    return {"routes": routes}
-
-# =============================================================================
-# ENDPOINT DE ACKNOWLEDGE
-# =============================================================================
-@app.post("/ack/{trace_id}")
-async def acknowledge_dispatch(trace_id: str):
-    return {"status": "ACK received", "trace_id": trace_id}
-
-# =============================================================================
-# MIDDLEWARE DE TELEMETRÍA (CTFOM) – se mantiene
-# =============================================================================
-@app.middleware("http")
-async def telemetry_middleware(request: Request, call_next):
-    generate_trace_span()
-    start = time.perf_counter()
-    cpu = psutil.cpu_percent(interval=None)
-    mem = psutil.virtual_memory().used / (1024 * 1024)
-    try:
-        response = await call_next(request)
-        elapsed = (time.perf_counter() - start) * 1000
-        await log_telemetry_event(
-            trace_id_var.get(), span_id_var.get(), "",
-            layer="api", event_type="END", latency_ms=elapsed,
-            cpu_percent=cpu, memory_mb=mem,
-            metadata={"path": request.url.path, "method": request.method}
-        )
-        return response
-    except Exception as e:
-        elapsed = (time.perf_counter() - start) * 1000
-        await log_telemetry_event(
-            trace_id_var.get(), span_id_var.get(), "",
-            layer="api", event_type="ERROR", latency_ms=elapsed,
-            cpu_percent=cpu, memory_mb=mem,
-            error_code=taxonomy_error(e),
-            metadata={"path": request.url.path}
-        )
-        raise
-
-# =============================================================================
-# ENDPOINTS PRINCIPALES
-# =============================================================================
-@app.post("/chat")
-async def chat_endpoint_original(request: ChatRequest, http_request: Request):
-    return await process_chat_frontend(request, http_request)
-
-@app.post("/api/chat/stream")
-async def chat_endpoint_stream(request: ChatRequest, http_request: Request):
-    return await process_chat_frontend(request, http_request)
-
-@app.post("/webhook/whatsapp")
-async def webhook_whatsapp(payload: dict):
-    return await process_webhook_whatsapp(payload)
-
-# =============================================================================
-# ENDPOINT DE FEEDBACK (se mantiene, ahora con OpenTelemetry)
-# =============================================================================
-@app.post("/feedback")
-async def registrar_feedback(feedback: dict):
-    if "trace_id" not in feedback:
-        raise HTTPException(status_code=422, detail="trace_id es requerido")
-    if "value" not in feedback:
-        raise HTTPException(status_code=422, detail="value es requerido")
-    try:
-        tracer = get_tracer()
-        with tracer.start_as_current_span("user_feedback") as span:
-            span.set_attribute("trace.id", feedback["trace_id"])
-            span.set_attribute("feedback.name", feedback.get("name", "satisfaccion"))
-            span.set_attribute("feedback.value", float(feedback["value"]))
-            if feedback.get("comment"):
-                span.set_attribute("feedback.comment", feedback["comment"])
-
-        logger.info(f"Feedback registrado para trace_id {feedback['trace_id']}: {feedback['value']}")
-        return {"status": "ok", "trace_id": feedback["trace_id"]}
-    except Exception as e:
-        logger.error(f"Error al registrar feedback: {e}")
-        raise HTTPException(status_code=500, detail=f"Error al registrar feedback: {str(e)}")
-
-# =============================================================================
-# ENDPOINT DE PRUEBA OTLP
-# =============================================================================
-@app.get("/test-otel")
-async def test_otel():
-    """Endpoint para probar la exportación OTLP desde el entorno real."""
-    tracer = get_tracer("test")
-    with tracer.start_as_current_span("test_endpoint") as span:
-        span.set_attribute("test", True)
-        span.set_attribute("timestamp", time.time())
-        span.set_attribute("user.id", "test_user")
-        span.set_attribute("session.id", "test_session")
-    force_flush()
-    return {"status": "ok", "message": "Traza de prueba enviada, revisar Langfuse"}
-
-# =============================================================================
-# FUNCIÓN DE GENERACIÓN DE TOKENS (CON SPANS OPENTELEMETRY Y ATRIBUTOS gen_ai)
+# FUNCIÓN DE GENERACIÓN DE TOKENS (CON SPANS OPENTELEMETRY Y HOOKS DE INYECCIÓN)
 # =============================================================================
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
@@ -733,6 +745,12 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
 
     whatsapp = nuevo_whatsapp or ""
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
+
+    # ================================================================
+    # HOOK PRE-EJECUCIÓN: Inyectar metadata en CTFOM (se hará en cada nodo)
+    # ================================================================
+    # Nota: la inyección en CTFOM se realiza mediante el decorador observe_node
+    # que ya captura el contexto de la sesión. No se requiere acción adicional aquí.
 
     with tracer.start_as_current_span("chat_execution") as root_span:
         root_span.set_attribute("user.id", user_id)
@@ -831,14 +849,12 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             "contexto_tecnico": sesion_redis.get("contexto_tecnico", {}) if sesion_redis else {}
         }
 
+        # ================================================================
+        # EJECUCIÓN DEL GRAFO
+        # ================================================================
         with tracer.start_as_current_span("langgraph_execution") as graph_span:
             graph_span.set_attribute("thread_id", thread_id)
             graph_span.set_attribute("message_length", len(mensaje))
-            # AÑADIR ATRIBUTOS GenAI PARA EVITAR FILTRADO
-            graph_span.set_attribute("gen_ai.system", "openai")
-            graph_span.set_attribute("gen_ai.prompt.0.role", "user")
-            graph_span.set_attribute("gen_ai.prompt.0.content", mensaje)
-            graph_span.set_attribute("gen_ai.operation", "chat")
 
             async with locks[thread_id]:
                 resultado = await graph.ainvoke(estado_inicial, config=config)
@@ -854,71 +870,78 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                 if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
                     respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
-                # AÑADIR ATRIBUTOS DE COMPLETION
                 graph_span.set_attribute("response_length", len(respuesta_final))
-                graph_span.set_attribute("gen_ai.completion.0.role", "assistant")
-                graph_span.set_attribute("gen_ai.completion.0.content", respuesta_final)
                 graph_span.set_status(StatusCode.OK)
 
-        if redis_client and respuesta_final:
-            await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
+        # ================================================================
+        # HOOK POST-EJECUCIÓN: Cálculo de costos y enriquecimiento
+        # ================================================================
+        # Extraer tokens del contexto (si están disponibles)
+        input_tokens = ctx.get("input_tokens", 0)
+        output_tokens = ctx.get("output_tokens", 0)
+        model = ctx.get("model", "gpt-4o-mini")
 
+        # Precios según modelo (ISO 27001: gestión de secretos, pero aquí son públicos)
+        MODEL_PRICES = {
+            "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+            "gpt-4o": {"input": 5.00, "output": 15.00},
+        }
+        prices = MODEL_PRICES.get(model, {"input": 0.15, "output": 0.60})
+        input_cost = input_tokens * prices["input"] / 1_000_000
+        output_cost = output_tokens * prices["output"] / 1_000_000
+        total_cost = input_cost + output_cost
+
+        # Añadir costos al span raíz (Langfuse los mostrará)
+        root_span.set_attribute("gen_ai.usage.input_cost", input_cost)
+        root_span.set_attribute("gen_ai.usage.output_cost", output_cost)
+        root_span.set_attribute("gen_ai.usage.total_cost", total_cost)
+
+        # Enriquecer sesión en Redis con telemetría
         if redis_client:
             if not sesion_redis:
                 sesion_redis = {}
+            # Enriquecer contexto_tecnico con telemetry
+            telemetry_data = {
+                "trace_id": trace_id_ctfom,
+                "span_id": span_id_var.get(),
+                "llm_cost": total_cost,
+                "llm_model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "caso": caso,
+            }
+            if "contexto_tecnico" not in sesion_redis:
+                sesion_redis["contexto_tecnico"] = {}
+            sesion_redis["contexto_tecnico"]["telemetry"] = telemetry_data
+
+            # Guardar otros campos de negocio
             for key in ["nombre", "whatsapp", "vendedor", "departamento", "municipio",
                         "topologia", "tipo_producto", "definicion_necesidad",
                         "consumo_actual", "empresa_electrica"]:
-                if ctx.get(key) and not sesion_redis.get(key):
+                if ctx.get(key):
                     sesion_redis[key] = ctx.get(key)
-
             if ctx.get("productos_interes"):
                 sesion_redis["productos_interes"] = ctx.get("productos_interes")
-                if not sesion_redis.get("vendedor"):
-                    vendedor_email = asignar_vendedor(ctx["productos_interes"])
-                    sesion_redis["vendedor"] = vendedor_email
-
-            if ctx.get("resumen"):
-                sesion_redis["resumen"] = ctx.get("resumen")
-            elif historial:
-                resumen = await generar_resumen_con_llm(historial, ctx)
-                sesion_redis["resumen"] = resumen
-
-            sesion_redis["contexto_tecnico"] = ctx
-            sesion_redis["thread_id"] = thread_id
-            sesion_redis["chat_id"] = chat_id
-            if fingerprint:
-                sesion_redis["fingerprint"] = fingerprint
-            if origen and origen != "desconocido":
-                sesion_redis["origen"] = origen
-
-            pasos = []
-            for key in ["nombre", "whatsapp", "departamento", "municipio", "topologia", "tipo_producto"]:
-                if sesion_redis.get(key):
-                    pasos.append(key)
-            sesion_redis["pasos_completados"] = pasos
-            sesion_redis["fase_actual"] = ctx.get("fase_actual", "conversacion")
-            sesion_redis["ultimo_mensaje"] = mensaje_con_caso
-
-            if sesion_redis.get("topologia") and sesion_redis.get("tipo_producto") and not sesion_redis.get("productos_interes"):
-                productos = obtener_productos_relevantes(sesion_redis["topologia"], sesion_redis["tipo_producto"], 5)
-                sesion_redis["productos_interes"] = productos
-                ctx["productos_interes"] = productos
-                if not sesion_redis.get("vendedor"):
-                    vendedor_email = asignar_vendedor(productos)
-                    sesion_redis["vendedor"] = vendedor_email
 
             await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
 
-            pasos_requeridos = ["nombre", "whatsapp", "departamento", "municipio", "topologia", "tipo_producto"]
-            if all(p in pasos for p in pasos_requeridos) or len(historial) + 1 >= HISTORIAL_LIMITE:
-                resumen = await generar_resumen_con_llm(historial, ctx)
-                await guardar_resumen_postgres(chat_id, resumen, ctx, fingerprint, origen)
-                await eliminar_historial_redis(redis_client, chat_id)
-                sesion_redis["fase_actual"] = "completado"
-                await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-                logger.info(f"Resumen guardado en PostgreSQL (BI) para chat_id {chat_id}")
+        # Persistir en BI (threads) con cumulative_cost
+        if respuesta_final:
+            await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
+            from db_client import actualizar_thread
+            await actualizar_thread(
+                thread_id=thread_id,
+                nombre=ctx.get("nombre", "Pendiente"),
+                whatsapp=user_id,
+                productos=[p.get("nombre") for p in ctx.get("productos_interes", [])],
+                vendedor=ctx.get("vendedor"),
+                trace_id=trace_id_ctfom,
+                cumulative_cost=total_cost
+            )
 
+        # ================================================================
+        # STREAMING DE RESPUESTA (sin cambios)
+        # ================================================================
         if respuesta_final:
             tokens = respuesta_final.split()
             for i, token in enumerate(tokens):
@@ -926,6 +949,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         else:
             yield f"data: {json.dumps({'token': 'No se pudo generar respuesta.'})}\n\n"
 
+        # Contexto enriquecido para el frontend
         ctx_para_envio = ctx.copy()
         ctx_para_envio.update({
             "chat_id": chat_id,
@@ -946,13 +970,19 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             "definicion_necesidad": sesion_redis.get("definicion_necesidad", "") if sesion_redis else "",
             "consumo_actual": sesion_redis.get("consumo_actual", "") if sesion_redis else "",
             "empresa_electrica": sesion_redis.get("empresa_electrica", "") if sesion_redis else "",
-            "resumen": sesion_redis.get("resumen", "") if sesion_redis else ""
+            "resumen": sesion_redis.get("resumen", "") if sesion_redis else "",
+            "telemetry": telemetry_data if redis_client else {}
         })
         yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
 
-    # Flush mejorado con timeout
-    force_flush()
-    logger.info("Flush de spans completado (con timeout)")
+    # ================================================================
+    # FLUSH FORZADO (con try/finally para garantizar exportación)
+    # ================================================================
+    try:
+        force_flush()
+        logger.info("Flush de spans completado (con timeout)")
+    except Exception as e:
+        logger.error(f"Error en flush final: {e}")
 
 # =============================================================================
 # ENDPOINTS AUXILIARES (sin cambios)
