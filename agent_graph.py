@@ -1,10 +1,19 @@
 """
-agent_graph.py - Grafo agéntico con instrumentación OpenTelemetry.
-Cumple con ISO/IEC 27001, DORA, ISO/IEC 25010, ISO/IEC 29119.
+agent_graph.py
+═══════════════════════════════════════════════════════════════════════
+Grafo agéntico de JARVI 2.0 con instrumentación OpenTelemetry.
+Se añaden atributos semánticos gen_ai.* a los spans de LLM y se migra la herramienta a async.
+
+Cumple con ISO/IEC 25010 (mantenibilidad, fiabilidad) y DORA (resiliencia).
+
+Pruebas de caja negra (ISO/IEC 29119):
+    BC‑T08: Ejecutar grafo → verificar que el span llm_generation tenga todos los atributos gen_ai.
+    BC‑T09: Ejecutar herramienta → verificar que el span dispatch_lead tenga trace_id y parent_span_id.
 """
 import os
 import time
 import uuid
+import asyncio
 import threading
 import requests
 import re
@@ -27,9 +36,11 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-# Importar OpenTelemetry
+# OpenTelemetry
 from telemetry_otel import get_tracer
 from opentelemetry.trace import Status, StatusCode
+# Sanitización
+from utils.sanitize import sanitize_pii, sanitize_dict
 
 import config
 from audit import auditar_fase
@@ -147,11 +158,11 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA (con span OpenTelemetry y atributos gen_ai)
+# HERRAMIENTA (convertida a async para propagación de contexto)
 # =============================================================================
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
-def procesar_oportunidad_backend(
+async def procesar_oportunidad_backend(
     nombre_apellidos: str,
     departamento_municipio: str,
     consumo_actual: str,
@@ -161,19 +172,22 @@ def procesar_oportunidad_backend(
     numero_whatsapp: str,
     resumen_18_palabras: str
 ) -> str:
-    """Envía leads a canales del Controller."""
+    """
+    Envía leads a canales del Controller (correo y webhook) de forma asíncrona.
+    Propaga el contexto de traza mediante asyncio.to_thread.
+    """
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
 
     with tracer.start_as_current_span("dispatch_lead") as span:
         span.set_attribute("channel", "email+webhook")
         span.set_attribute("whatsapp", whatsapp_norm)
         span.set_attribute("nombre", nombre_norm)
-        # Añadir atributos gen_ai para evitar filtrado
         span.set_attribute("gen_ai.system", "openai")
         span.set_attribute("gen_ai.operation", "dispatch")
 
-        def tarea_background():
+        async def tarea_background():
             num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
+            # Envío de correo
             try:
                 msg = MIMEMultipart()
                 msg['To'] = config.CONTROLLER_EMAIL
@@ -200,6 +214,7 @@ def procesar_oportunidad_backend(
             except Exception as e:
                 logger.error(f"Fallo en envío de correo: {e}")
 
+            # Envío de webhook
             payload_wa = {
                 "instance_id": os.getenv("APICHAT_INSTANCE", ""),
                 "number": num_limpio,
@@ -210,7 +225,8 @@ def procesar_oportunidad_backend(
                 )
             }
             try:
-                requests.post(
+                await asyncio.to_thread(
+                    requests.post,
                     os.getenv("APICHAT_ENDPOINT", ""),
                     json=payload_wa,
                     headers={
@@ -222,10 +238,14 @@ def procesar_oportunidad_backend(
             except Exception as e:
                 logger.error(f"Fallo en envío de webhook: {e}")
 
-        threading.Thread(target=tarea_background).start()
+        # Ejecutar tarea en segundo plano con propagación de contexto
+        asyncio.create_task(tarea_background())
         span.set_status(Status(StatusCode.OK))
         return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
 
+# =============================================================================
+# FUNCIONES AUXILIARES (sin cambios)
+# =============================================================================
 def extraer_intencion_humana(messages: list) -> str:
     for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
@@ -248,33 +268,35 @@ def extraer_tipo_producto(mensaje: str) -> Optional[str]:
     return None
 
 # =============================================================================
+# DECORADOR DE SPAN OTEL PARA NODOS (con atributos gen_ai)
+# =============================================================================
+def otel_span_node(node_name: str):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(state, config=None):
+            with tracer.start_as_current_span(node_name) as span:
+                span.set_attribute("node.name", node_name)
+                span.set_attribute("gen_ai.system", "openai")
+                span.set_attribute("gen_ai.operation", node_name)
+                result = func(state, config) if config is not None else func(state)
+                if isinstance(result, dict) and "contexto_tecnico" in result:
+                    ctx = result["contexto_tecnico"]
+                    if ctx.get("topologia"):
+                        span.set_attribute("topologia", ctx["topologia"])
+                    if ctx.get("tipo_producto"):
+                        span.set_attribute("tipo_producto", ctx["tipo_producto"])
+                span.set_status(Status(StatusCode.OK))
+                return result
+        return wrapper
+    return decorator
+
+# =============================================================================
 # CONSTRUCCIÓN DEL GRAFO (con spans OpenTelemetry en cada nodo)
 # =============================================================================
 def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
     llm = ChatOpenAI(openai_api_key=DEFAULT_API_KEY, model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
     extractor_llm = llm.with_structured_output(ExtractorContacto)
-
-    def otel_span_node(node_name: str):
-        def decorator(func):
-            @functools.wraps(func)
-            def wrapper(state, config=None):
-                with tracer.start_as_current_span(node_name) as span:
-                    span.set_attribute("node.name", node_name)
-                    # Añadir atributos gen_ai
-                    span.set_attribute("gen_ai.system", "openai")
-                    span.set_attribute("gen_ai.operation", node_name)
-                    result = func(state, config) if config is not None else func(state)
-                    if isinstance(result, dict) and "contexto_tecnico" in result:
-                        ctx = result["contexto_tecnico"]
-                        if ctx.get("topologia"):
-                            span.set_attribute("topologia", ctx["topologia"])
-                        if ctx.get("tipo_producto"):
-                            span.set_attribute("tipo_producto", ctx["tipo_producto"])
-                    span.set_status(Status(StatusCode.OK))
-                    return result
-            return wrapper
-        return decorator
 
     @auditar_fase(nombre_fase="Clasificador de Intención Comercial", criticidad="MEDIA")
     @observe_node(node_name="clasificar_intencion_comercial")
@@ -341,6 +363,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
+        # Extracción de información (sin cambios)
         if ultimo_mensaje:
             num_match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', ultimo_mensaje)
             if num_match:
@@ -422,7 +445,36 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             )
         )
 
-        respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
+        # ============================================================
+        # SPAN LLM GENERATION (con atributos semánticos gen_ai.*)
+        # ============================================================
+        with tracer.start_as_current_span("llm_generation") as llm_span:
+            llm_span.set_attribute("gen_ai.system", "openai")
+            llm_span.set_attribute("gen_ai.operation", "chat")
+            llm_span.set_attribute("gen_ai.request.model", "gpt-4o-mini")
+            llm_span.set_attribute("gen_ai.request.temperature", 0.1)
+
+            prompt_text = prompt_sistema.content + " " + ultimo_mensaje
+            llm_span.set_attribute("gen_ai.prompt.0.role", "system")
+            llm_span.set_attribute("gen_ai.prompt.0.content", sanitize_pii(prompt_text[:5000]))
+
+            respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
+
+            llm_span.set_attribute("gen_ai.completion.0.role", "assistant")
+            llm_span.set_attribute("gen_ai.completion.0.content", sanitize_pii(respuesta.content[:5000]))
+
+            if hasattr(respuesta, 'response_metadata'):
+                usage = respuesta.response_metadata.get('token_usage', {})
+                input_tokens = usage.get('prompt_tokens', 0)
+                output_tokens = usage.get('completion_tokens', 0)
+                total_tokens = usage.get('total_tokens', 0)
+                llm_span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
+                llm_span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
+                llm_span.set_attribute("gen_ai.usage.total_tokens", total_tokens)
+                # Los costos se añadirán en api.py (hook post-ejecución)
+
+            llm_span.set_status(Status(StatusCode.OK))
+
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
     @observe_node(node_name="anexar_caso_respuesta")
