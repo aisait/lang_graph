@@ -51,7 +51,7 @@ class Settings(BaseSettings):
 
     # Otros
     backend_url: str = "https://jarvi-backend-production.up.railway.app"
-    n8n_webhook_url: str = ""
+    n8n_webhook_url: str = "https://jarvi-backend-n8n-production.up.railway.app"
 
     class Config:
         env_file = ".env"
