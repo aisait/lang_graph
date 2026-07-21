@@ -1,19 +1,24 @@
 # =============================================================================
-# Dockerfile.debug
-# Imagen para el servicio de depuración CLI (Flask + Jinja2).
-# Incluye soporte para procesamiento de imágenes (vision) y audio.
-# Cumple con ISO/IEC 25010 (Fiabilidad) y 29119 (Pruebas).
+# Dockerfile.debug - Cliente de depuración (Flask)
 # =============================================================================
 
 FROM python:3.11-slim
 
+# Dependencias del sistema
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libstdc++6 \
+    libgcc-s1 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Instalar dependencias
+# Instalar dependencias Python (usando el mismo requirements.txt que el backend)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copiar código fuente
+# Copiar todos los archivos necesarios para debug_app
 COPY debug_app.py .
 COPY templates/ ./templates/
 COPY vision.py .
