@@ -35,7 +35,7 @@ async def actualizar_thread(
     productos: Optional[List[str]] = None,
     vendedor: Optional[str] = None,
     trace_id: Optional[str] = None,
-    cumulative_cost: Optional[float] = None  # NUEVO: costo acumulado
+    cumulative_cost: Optional[float] = None
 ) -> bool:
     """
     Actualiza o inserta un thread en BI, acumulando costos de LLM.
@@ -56,7 +56,6 @@ async def actualizar_thread(
         )
         if existing:
             old_meta = existing["metadata"] or {}
-            # Acumular costo
             old_cost = old_meta.get("cumulative_cost", 0.0)
             new_cost = old_cost + (cumulative_cost or 0.0)
             metadata["cumulative_cost"] = new_cost
