@@ -26,7 +26,7 @@ opentelemetry-instrumentation-fastapi==0.41b0
 opentelemetry-instrumentation-sqlalchemy==0.41b0
 
 # Persistencia
-psycopg[binary]==3.1.4
+psycopg[binary]>=3.2.0   # <--- CAMBIADO de 3.1.4 a >=3.2.0
 sqlalchemy==2.0.31
 asyncpg==0.29.0
 
