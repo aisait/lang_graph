@@ -17,7 +17,7 @@ langgraph==0.2.56
 langgraph-checkpoint-postgres==2.0.7
 openai>=1.50.0
 
-# Observabilidad (versiones estables)
+# Observabilidad (versiones estables compatibles con Langfuse 4.14.1)
 langfuse>=4.0.0
 opentelemetry-sdk>=1.20.0,<1.43.0
 opentelemetry-exporter-otlp>=1.20.0,<1.43.0
