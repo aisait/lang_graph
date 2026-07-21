@@ -27,9 +27,8 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langfuse import Langfuse
 from langfuse.callback import CallbackHandler
 
-# OpenTelemetry solo para infraestructura (middleware)
+# OpenTelemetry solo para infraestructura (middleware), NO para LLM
 from telemetry_otel import init_telemetry, get_tracer, force_flush as otel_force_flush
-from opentelemetry.trace import Status, StatusCode
 from opentelemetry import trace
 
 # Modelos y utilidades
@@ -38,10 +37,11 @@ from agent_graph import create_graph, normalizar_contacto
 from ontology import obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 from db_client import get_bi_db_url, get_ctfom_db_url
-from utils.sanitize import sanitize_pii, sanitize_dict
+from utils.sanitize import sanitize_pii
 from config import settings
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 # =============================================================================
 # ESQUEMAS ADICIONALES
@@ -61,21 +61,15 @@ async def validar_api_key(auth: str | None = Security(api_key_header)):
         raise HTTPException(status_code=403, detail="Acceso no autorizado")
     return auth
 
-# =============================================================================
-# CONTROL DE CONCURRENCIA
-# =============================================================================
 locks = defaultdict(asyncio.Lock)
 
-# =============================================================================
-# TAXONOMÍA DE ERRORES
-# =============================================================================
 def taxonomy_error(exc: Exception) -> str:
     if isinstance(exc, HTTPException):
         return f"SWR-API-MED-{exc.status_code}"
     return "SWR-API-UNKNOWN-000"
 
 # =============================================================================
-# FUNCIONES DE EXTRACCIÓN DE DATOS
+# FUNCIONES DE EXTRACCIÓN (sin cambios)
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
     if not mensaje:
@@ -146,9 +140,6 @@ def extraer_definicion_necesidad(mensaje: str) -> str | None:
 def obtener_caso(thread_id: str) -> str:
     return thread_id.replace('-', '')[-12:] if thread_id else "000000000000"
 
-def obtener_run_name(thread_id: str) -> str:
-    return obtener_caso(thread_id)
-
 def normalizar_whatsapp_e164(telefono: str) -> str:
     if not telefono:
         return ""
@@ -161,7 +152,7 @@ def normalizar_whatsapp_e164(telefono: str) -> str:
     return limpio
 
 # =============================================================================
-# FUNCIONES DE POSTGRESQL
+# FUNCIONES DE POSTGRESQL (con reintentos)
 # =============================================================================
 async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
                                    fingerprint: Optional[str] = None, origen: str = "desconocido") -> bool:
@@ -192,7 +183,7 @@ async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
         return False
 
 # =============================================================================
-# FUNCIONES DE REDIS
+# FUNCIONES DE REDIS (sin cambios)
 # =============================================================================
 REDIS_TTL = settings.redis_ttl
 HISTORIAL_LIMITE = 64
@@ -278,13 +269,6 @@ async def obtener_historial_redis(redis_client: Optional[redis.Redis], chat_id: 
         logger.error(f"Error obteniendo historial: {e}")
         return []
 
-async def eliminar_historial_redis(redis_client: Optional[redis.Redis], chat_id: str):
-    if redis_client:
-        try:
-            await redis_client.delete(f"historial:{chat_id}")
-        except Exception as e:
-            logger.error(f"Error eliminando historial: {e}")
-
 async def guardar_fingerprint_redis(redis_client: Optional[redis.Redis], fingerprint: str, chat_id: str):
     if not redis_client:
         return
@@ -315,9 +299,6 @@ async def guardar_whatsapp_redis(redis_client: Optional[redis.Redis], whatsapp: 
     except Exception as e:
         logger.error(f"Error guardando mapeo whatsapp: {e}")
 
-# =============================================================================
-# ASIGNACIÓN DE VENDEDOR
-# =============================================================================
 def asignar_vendedor(productos: list) -> str:
     try:
         with open("vendedores.json", "r", encoding="utf-8") as f:
@@ -330,9 +311,6 @@ def asignar_vendedor(productos: list) -> str:
             return vendedores[tag]
     return vendedores.get("default", "default@aisa.com.gt")
 
-# =============================================================================
-# FUNCIONES DE SANEAMIENTO DE URL Y OBTENCIÓN DE DB_URL
-# =============================================================================
 def sanear_db_url(db_url: str) -> str:
     if not db_url:
         return db_url
@@ -354,14 +332,8 @@ def get_db_url() -> str:
     if ctfom_url:
         logger.warning("DATABASE_URL no definida. Usando CTFOM_DATABASE_URL para checkpoints de LangGraph.")
         return sanear_db_url(ctfom_url)
-    raise RuntimeError(
-        "No se encontró DATABASE_URL ni CTFOM_DATABASE_URL. "
-        "Verifique las variables de entorno en Railway."
-    )
+    raise RuntimeError("No se encontró DATABASE_URL ni CTFOM_DATABASE_URL.")
 
-# =============================================================================
-# GENERACIÓN DE RESUMEN CON LLM
-# =============================================================================
 async def generar_resumen_con_llm(historial: list, contexto: dict) -> str:
     from langchain_openai import ChatOpenAI
     from langchain_core.messages import SystemMessage, HumanMessage
@@ -382,30 +354,44 @@ async def generar_resumen_con_llm(historial: list, contexto: dict) -> str:
     return response.content
 
 # =============================================================================
-# CICLO DE VIDA DE LA APLICACIÓN
+# CICLO DE VIDA DE LA APLICACIÓN CON LOGS DE DEPURACIÓN
 # =============================================================================
 graph = None
 redis_client = None
-langfuse_client = None  # Cliente Langfuse global
+langfuse_client = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global graph, redis_client, langfuse_client
 
+    logger.info("=== INICIO DEL LIFESPAN ===")
+
+    # Inicializar OpenTelemetry (desactivado)
     telemetry_ok = init_telemetry(app)
-    if telemetry_ok:
-        logger.info("OpenTelemetry inicializado correctamente")
-    else:
-        logger.warning("OpenTelemetry desactivado (Langfuse no configurado)")
+    logger.info(f"OpenTelemetry init: {telemetry_ok}")
 
-    # Inicializar cliente Langfuse
-    langfuse_client = Langfuse(
-        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-        host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
-    )
+    # Inicializar cliente Langfuse con logs
+    try:
+        host = os.getenv("LANGFUSE_HOST", "No definido")
+        pk = os.getenv("LANGFUSE_PUBLIC_KEY", "No definido")
+        sk = os.getenv("LANGFUSE_SECRET_KEY", "No definido")
+        logger.info(f"Langfuse Host: {host}")
+        logger.info(f"Langfuse Public Key: {pk[:10] if pk != 'No definido' else 'No definido'}...")
+        langfuse_client = Langfuse(
+            public_key=pk if pk != "No definido" else "",
+            secret_key=sk if sk != "No definido" else "",
+            host=host if host != "No definido" else "https://cloud.langfuse.com"
+        )
+        logger.info("✅ Cliente Langfuse creado exitosamente")
+        # Verificar conectividad (opcional)
+        # langfuse_client.auth_check()
+    except Exception as e:
+        logger.error(f"❌ Error al crear cliente Langfuse: {e}")
+        langfuse_client = None
 
+    # Conectar a base de datos para checkpoints
     db_url = get_db_url()
+    logger.info(f"DB URL (sanitizada): {db_url[:50]}...")
     async with AsyncExitStack() as stack:
         checkpointer = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(db_url))
         await checkpointer.setup()
@@ -425,14 +411,16 @@ async def lifespan(app: FastAPI):
     if redis_client:
         await redis_client.close()
     if langfuse_client:
+        logger.info("Flushing Langfuse client...")
         langfuse_client.flush()
+        logger.info("Langfuse flush completado")
     logger.info("Apagando API JARVI")
 
 app = FastAPI(title="JARVI 2.0 API Central", version="2.0.06",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
-# MIDDLEWARE DE TELEMETRÍA (solo infraestructura CTFOM)
+# MIDDLEWARE DE TELEMETRÍA (solo CTFOM)
 # =============================================================================
 @app.middleware("http")
 async def telemetry_middleware(request: Request, call_next):
@@ -468,17 +456,8 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     return {"status": "ok", "service": "jarvi-backend"}
 
-@app.get("/debug/routes")
-async def list_routes():
-    routes = [{"path": route.path, "methods": list(route.methods)} for route in app.routes]
-    return {"routes": routes}
-
-@app.post("/ack/{trace_id}")
-async def acknowledge_dispatch(trace_id: str):
-    return {"status": "ACK received", "trace_id": trace_id}
-
 @app.post("/chat")
-async def chat_endpoint_original(request: ChatRequest, http_request: Request):
+async def chat_endpoint(request: ChatRequest, http_request: Request):
     return await process_chat_frontend(request, http_request)
 
 @app.post("/api/chat/stream")
@@ -496,7 +475,6 @@ async def registrar_feedback(feedback: dict):
     if "value" not in feedback:
         raise HTTPException(status_code=422, detail="value es requerido")
     try:
-        # Usar el cliente Langfuse para registrar feedback
         if langfuse_client:
             langfuse_client.score(
                 trace_id=feedback["trace_id"],
@@ -513,18 +491,8 @@ async def registrar_feedback(feedback: dict):
         logger.error(f"Error al registrar feedback: {e}")
         raise HTTPException(status_code=500, detail=f"Error al registrar feedback: {str(e)}")
 
-@app.get("/test-otel")
-async def test_otel():
-    # Solo para probar la infraestructura OTLP
-    tracer = get_tracer("test")
-    with tracer.start_as_current_span("test_endpoint") as span:
-        span.set_attribute("test", True)
-        span.set_attribute("timestamp", time.time())
-    otel_force_flush()
-    return {"status": "ok", "message": "Traza de prueba enviada (solo OTLP)"}
-
 # =============================================================================
-# PROCESAMIENTO DE CHAT FRONTEND
+# PROCESAMIENTO DE CHAT FRONTEND (sin cambios)
 # =============================================================================
 async def process_chat_frontend(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
     fingerprint = chat_request.metadata.get("fingerprint") or http_request.headers.get("X-Fingerprint")
@@ -632,7 +600,7 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
             if whatsapp_norm:
                 await guardar_whatsapp_redis(redis_client, whatsapp_norm, chat_id)
 
-    run_name = obtener_run_name(thread_id_final)
+    run_name = obtener_caso(thread_id_final)
 
     return StreamingResponse(
         generar_tokens(thread_id_final, chat_request.message, chat_id, run_name, whatsapp_norm, origen, fingerprint),
@@ -650,7 +618,7 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
     )
 
 # =============================================================================
-# PROCESAMIENTO DE WEBHOOK WHATSAPP
+# PROCESAMIENTO DE WEBHOOK WHATSAPP (sin cambios)
 # =============================================================================
 async def process_webhook_whatsapp(payload: dict) -> dict:
     whatsapp = payload.get("number")
@@ -676,7 +644,7 @@ async def process_webhook_whatsapp(payload: dict) -> dict:
             thread_id = str(uuid.uuid4())
             sesion_redis["thread_id"] = thread_id
             await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        run_name = obtener_run_name(thread_id)
+        run_name = obtener_caso(thread_id)
         if datos_cliente:
             for key in ["nombre", "vendedor", "departamento", "municipio", "topologia", "tipo_producto", "definicion_necesidad", "consumo_actual", "empresa_electrica"]:
                 if key in datos_cliente and datos_cliente[key]:
@@ -692,7 +660,7 @@ async def process_webhook_whatsapp(payload: dict) -> dict:
                 await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
     else:
         thread_id = str(uuid.uuid4())
-        run_name = obtener_run_name(thread_id)
+        run_name = obtener_caso(thread_id)
         data_inicial = {
             "thread_id": thread_id,
             "chat_id": chat_id,
@@ -737,7 +705,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
                          fingerprint: str | None = None) -> AsyncGenerator[str, None]:
     global langfuse_client
-    tracer = get_tracer()  # Para spans de infraestructura (opcional)
     trace_id_ctfom = trace_id_var.get()
     caso = obtener_caso(thread_id)
     if not run_name:
@@ -747,26 +714,36 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
 
     # 1. Crear traza principal con el SDK de Langfuse
-    trace = langfuse_client.trace(
-        name=f"chat_{caso}",
-        user_id=user_id,
-        session_id=thread_id,
-        tags=["production", origen],
-        metadata={
-            "chat_id": chat_id,
-            "origen": origen,
-            "fingerprint": fingerprint or "",
-            "caso": caso,
-            "whatsapp": user_id
-        },
-        public=False,      # booleano correcto
-        bookmarked=False   # booleano correcto
-    )
+    if langfuse_client:
+        try:
+            trace = langfuse_client.trace(
+                name=f"chat_{caso}",
+                user_id=user_id,
+                session_id=thread_id,
+                tags=["production", origen],
+                metadata={
+                    "chat_id": chat_id,
+                    "origen": origen,
+                    "fingerprint": fingerprint or "",
+                    "caso": caso,
+                    "whatsapp": user_id
+                },
+                public=False,
+                bookmarked=False
+            )
+            logger.info(f"Traza Langfuse creada: {trace.id} para caso {caso}")
+        except Exception as e:
+            logger.error(f"❌ Error al crear traza Langfuse: {e}")
+            trace = None
+    else:
+        logger.warning("Langfuse client no disponible. No se creará traza.")
+        trace = None
 
-    # 2. Crear CallbackHandler vinculado a esta traza
-    langfuse_handler = CallbackHandler(trace=trace)
-
-    logger.info(f"Traza Langfuse creada: {trace.id} para caso {caso}")
+    # 2. Crear CallbackHandler vinculado a esta traza (si existe)
+    if trace:
+        langfuse_handler = CallbackHandler(trace=trace)
+    else:
+        langfuse_handler = None
 
     # Preparar sesión y estado (igual que antes)
     sesion_redis = None
@@ -776,8 +753,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         if sesion_redis:
             historial = await obtener_historial_redis(redis_client, chat_id)
             logger.info(f"Historial recuperado: {len(historial)} mensajes para chat_id {chat_id}")
-        else:
-            logger.warning(f"No hay sesión en Redis para chat_id {chat_id}")
 
     nombre = extraer_nombre(mensaje)
     if nombre and (not sesion_redis or not sesion_redis.get("nombre") or sesion_redis.get("nombre") == "Pendiente"):
@@ -843,9 +818,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     config = {
         "configurable": {"thread_id": thread_id},
         "run_name": f"caso_{caso}",
-        "callbacks": [langfuse_handler],
         "metadata": {
-            "trace_id": trace.id,  # Para correlación con CTFOM
             "chat_id": chat_id,
             "origen": origen,
             "caso": caso,
@@ -854,7 +827,10 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         }
     }
 
-    # 3. Ejecutar grafo (las observaciones se asociarán automáticamente a la traza)
+    if langfuse_handler:
+        config["callbacks"] = [langfuse_handler]
+
+    # 3. Ejecutar grafo
     async with locks[thread_id]:
         resultado = await graph.ainvoke(estado_inicial, config=config)
         ctx = resultado.get("contexto_tecnico", {})
@@ -869,21 +845,30 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
             respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
-    # 4. Registrar el output de la respuesta en la traza (opcional)
-    trace.update(
-        output={"response": respuesta_final},
-        metadata={
-            "chat_id": chat_id,
-            "origen": origen,
-            "caso": caso
-        }
-    )
+    # 4. Actualizar traza con la respuesta final
+    if trace:
+        try:
+            trace.update(
+                output={"response": respuesta_final},
+                metadata={
+                    "chat_id": chat_id,
+                    "origen": origen,
+                    "caso": caso
+                }
+            )
+            logger.info(f"Traza {trace.id} actualizada con respuesta final")
+        except Exception as e:
+            logger.error(f"Error al actualizar traza: {e}")
 
-    # 5. Flush del SDK de Langfuse (no de OTEL)
-    langfuse_client.flush()
-    logger.info("Flush de Langfuse completado")
+    # 5. Flush del SDK de Langfuse
+    if langfuse_client:
+        try:
+            langfuse_client.flush()
+            logger.info("Flush de Langfuse completado")
+        except Exception as e:
+            logger.error(f"Error en flush de Langfuse: {e}")
 
-    # 6. Generar streaming de tokens (igual que antes)
+    # 6. Generar streaming de tokens
     if respuesta_final:
         tokens = respuesta_final.split()
         for i, token in enumerate(tokens):
@@ -913,7 +898,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         "consumo_actual": sesion_redis.get("consumo_actual", "") if sesion_redis else "",
         "empresa_electrica": sesion_redis.get("empresa_electrica", "") if sesion_redis else "",
         "resumen": sesion_redis.get("resumen", "") if sesion_redis else "",
-        "langfuse_trace_id": trace.id
+        "langfuse_trace_id": trace.id if trace else None
     })
     yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
 
