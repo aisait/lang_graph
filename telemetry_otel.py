@@ -1,7 +1,6 @@
 """
-telemetry_otel.py
-═══════════════════════════════════════════════════════════════════════
-Inicialización de OpenTelemetry con exportador OTLP a Langfuse.
+telemetry_otel.py - Inicialización de OpenTelemetry para infraestructura.
+La trazabilidad LLM se maneja exclusivamente con el SDK de Langfuse.
 Cumple con ISO/IEC 25010 (eficiencia, fiabilidad) y DORA (resiliencia).
 """
 import os
@@ -25,38 +24,26 @@ def init_telemetry(app=None):
 
     auth = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
     os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = f"{host}/api/public/otel"
-    os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {auth}"
+    # Cabecera crítica para que el worker interprete los datos con el esquema v4
+    os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = (
+        f"Authorization=Basic {auth},"
+        f"x-langfuse-ingestion-version=4"
+    )
     os.environ["OTEL_SERVICE_NAME"] = "jarvi-backend"
 
     exporter = OTLPSpanExporter(timeout=10)
-
-    # Logging de errores de exportación (DORA: registro de incidentes)
-    original_export = exporter.export
-    def logged_export(spans):
-        try:
-            result = original_export(spans)
-            if hasattr(result, 'result'):
-                result.result(timeout=15)
-            logger.info(f"✅ Exportación OTLP exitosa: {len(spans)} spans")
-            return result
-        except Exception as e:
-            logger.error(f"❌ Error en exportación OTLP: {type(e).__name__}: {e}")
-            return None
-    exporter.export = logged_export
-
-    # Configuración robusta (ISO 25010 - eficiencia, DORA - resiliencia)
     trace_provider = TracerProvider()
     span_processor = BatchSpanProcessor(
         exporter,
-        max_queue_size=2048,              # Aumentado para evitar pérdidas
-        schedule_delay_millis=1000,       # Reducido a 1s para flush más rápido
+        max_queue_size=2048,
+        schedule_delay_millis=1000,
         max_export_batch_size=512,
         export_timeout_millis=10000,
     )
     trace_provider.add_span_processor(span_processor)
     trace.set_tracer_provider(trace_provider)
 
-    logger.info("OpenTelemetry inicializado con Langfuse v4 (instrumentación manual)")
+    logger.info("OpenTelemetry inicializado (solo infraestructura)")
     return True
 
 def get_tracer(name: str = "jarvi"):
@@ -68,7 +55,5 @@ def force_flush():
         if hasattr(provider, 'force_flush'):
             provider.force_flush(timeout_millis=5000)
             logger.info("Flush forzado completado")
-        else:
-            logger.warning("El proveedor no soporta force_flush")
     except Exception as e:
         logger.error(f"Error en force_flush: {e}")
