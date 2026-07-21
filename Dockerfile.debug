@@ -1,10 +1,11 @@
 # =============================================================================
 # Dockerfile.debug - Cliente de depuración (Flask)
+# Utiliza requirements-debug.txt para evitar conflictos de dependencias.
 # =============================================================================
 
 FROM python:3.11-slim
 
-# Dependencias del sistema
+# Dependencias del sistema (necesarias para algunos paquetes)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libstdc++6 \
@@ -13,10 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Instalar dependencias Python (usando el mismo requirements.txt que el backend)
-COPY requirements.txt .
+# Copiar requirements específico de debug
+COPY requirements-debug.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements-debug.txt
 
 # Copiar todos los archivos necesarios para debug_app
 COPY debug_app.py .
