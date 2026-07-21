@@ -1,12 +1,12 @@
 # =============================================================================
-# requirements.txt - JARVI 2.0 con OpenTelemetry y Langfuse v4
+# requirements.txt - JARVI 2.0 con OpenTelemetry y Langfuse v4.14.1
 # =============================================================================
 
 # Frameworks Web
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.1
-python-multipart>=0.0.9
-Flask>=2.2.0
+fastapi==0.115.0
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
+Flask==2.2.0
 
 # Core Agéntico
 langchain==0.2.17
@@ -15,31 +15,37 @@ langchain-community==0.2.19
 langchain-openai==0.1.25
 langgraph==0.2.56
 langgraph-checkpoint-postgres==2.0.7
-openai>=1.50.0
+openai==1.50.0
 
 # Observabilidad (versiones estables compatibles con Langfuse 4.14.1)
-langfuse>=4.0.0
-opentelemetry-sdk>=1.20.0,<1.43.0
-opentelemetry-exporter-otlp>=1.20.0,<1.43.0
+langfuse==4.14.1
+opentelemetry-sdk==1.20.0
+opentelemetry-exporter-otlp==1.20.0
+opentelemetry-instrumentation==0.41b0
+opentelemetry-instrumentation-fastapi==0.41b0
+opentelemetry-instrumentation-sqlalchemy==0.41b0
 
 # Persistencia
-psycopg[binary]>=3.1.4
-sqlalchemy>=2.0.31
-asyncpg>=0.29.0
+psycopg[binary]==3.1.4
+sqlalchemy==2.0.31
+asyncpg==0.29.0
+
+# Configuración
+pydantic-settings==2.2.0
 
 # Utilidades
-requests>=2.32.3
-python-dotenv>=1.0.1
-pydantic>=2.7.4
-httpx>=0.27.2
-psutil>=5.9.8
-google-auth>=2.30.0
-google-auth-oauthlib>=1.2.0
-google-api-python-client>=2.198.0
+requests==2.32.3
+python-dotenv==1.0.1
+pydantic==2.7.4
+httpx==0.27.2
+psutil==5.9.8
+google-auth==2.30.0
+google-auth-oauthlib==1.2.0
+google-api-python-client==2.198.0
 
 # Normalización
-symspellpy>=6.7.0
-rapidfuzz>=3.0.0
+symspellpy==6.7.0
+rapidfuzz==3.0.0
 
 # Cache
-redis>=5.0.0
+redis==5.0.0
