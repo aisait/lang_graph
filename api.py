@@ -1,5 +1,5 @@
 """
-api.py - Servidor FastAPI con trazabilidad Langfuse v4.
+api.py - Servidor FastAPI con trazabilidad Langfuse v4 (SDK nativo).
 Cumple con ISO/IEC 25010, 27001, DORA e ITIL 4.
 """
 import os
@@ -24,10 +24,11 @@ from pydantic import BaseModel
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
+from langfuse import Langfuse
 from langfuse.callback import CallbackHandler
 
-# OpenTelemetry
-from telemetry_otel import init_telemetry, get_tracer, force_flush
+# OpenTelemetry solo para infraestructura (middleware)
+from telemetry_otel import init_telemetry, get_tracer, force_flush as otel_force_flush
 from opentelemetry.trace import Status, StatusCode
 from opentelemetry import trace
 
@@ -66,7 +67,7 @@ async def validar_api_key(auth: str | None = Security(api_key_header)):
 locks = defaultdict(asyncio.Lock)
 
 # =============================================================================
-# TAXONOMÍA DE ERRORES (ISO/IEC 25010 - Mantenibilidad)
+# TAXONOMÍA DE ERRORES
 # =============================================================================
 def taxonomy_error(exc: Exception) -> str:
     if isinstance(exc, HTTPException):
@@ -160,7 +161,7 @@ def normalizar_whatsapp_e164(telefono: str) -> str:
     return limpio
 
 # =============================================================================
-# FUNCIONES DE POSTGRESQL (con reintentos)
+# FUNCIONES DE POSTGRESQL
 # =============================================================================
 async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
                                    fingerprint: Optional[str] = None, origen: str = "desconocido") -> bool:
@@ -381,20 +382,28 @@ async def generar_resumen_con_llm(historial: list, contexto: dict) -> str:
     return response.content
 
 # =============================================================================
-# CICLO DE VIDA DE LA APLICACIÓN (con OpenTelemetry)
+# CICLO DE VIDA DE LA APLICACIÓN
 # =============================================================================
 graph = None
 redis_client = None
+langfuse_client = None  # Cliente Langfuse global
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global graph, redis_client
+    global graph, redis_client, langfuse_client
 
     telemetry_ok = init_telemetry(app)
     if telemetry_ok:
         logger.info("OpenTelemetry inicializado correctamente")
     else:
         logger.warning("OpenTelemetry desactivado (Langfuse no configurado)")
+
+    # Inicializar cliente Langfuse
+    langfuse_client = Langfuse(
+        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+        host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    )
 
     db_url = get_db_url()
     async with AsyncExitStack() as stack:
@@ -415,27 +424,16 @@ async def lifespan(app: FastAPI):
 
     if redis_client:
         await redis_client.close()
+    if langfuse_client:
+        langfuse_client.flush()
     logger.info("Apagando API JARVI")
 
 app = FastAPI(title="JARVI 2.0 API Central", version="2.0.06",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
-# ENDPOINTS
+# MIDDLEWARE DE TELEMETRÍA (solo infraestructura CTFOM)
 # =============================================================================
-@app.get("/health")
-async def health_check():
-    return {"status": "ok", "service": "jarvi-backend"}
-
-@app.get("/debug/routes")
-async def list_routes():
-    routes = [{"path": route.path, "methods": list(route.methods)} for route in app.routes]
-    return {"routes": routes}
-
-@app.post("/ack/{trace_id}")
-async def acknowledge_dispatch(trace_id: str):
-    return {"status": "ACK received", "trace_id": trace_id}
-
 @app.middleware("http")
 async def telemetry_middleware(request: Request, call_next):
     generate_trace_span()
@@ -463,6 +461,22 @@ async def telemetry_middleware(request: Request, call_next):
         )
         raise
 
+# =============================================================================
+# ENDPOINTS
+# =============================================================================
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "jarvi-backend"}
+
+@app.get("/debug/routes")
+async def list_routes():
+    routes = [{"path": route.path, "methods": list(route.methods)} for route in app.routes]
+    return {"routes": routes}
+
+@app.post("/ack/{trace_id}")
+async def acknowledge_dispatch(trace_id: str):
+    return {"status": "ACK received", "trace_id": trace_id}
+
 @app.post("/chat")
 async def chat_endpoint_original(request: ChatRequest, http_request: Request):
     return await process_chat_frontend(request, http_request)
@@ -482,15 +496,18 @@ async def registrar_feedback(feedback: dict):
     if "value" not in feedback:
         raise HTTPException(status_code=422, detail="value es requerido")
     try:
-        tracer = get_tracer()
-        with tracer.start_as_current_span("user_feedback") as span:
-            span.set_attribute("trace.id", feedback["trace_id"])
-            span.set_attribute("feedback.name", feedback.get("name", "satisfaccion"))
-            span.set_attribute("feedback.value", float(feedback["value"]))
-            if feedback.get("comment"):
-                span.set_attribute("feedback.comment", feedback["comment"])
-
-        logger.info(f"Feedback registrado para trace_id {feedback['trace_id']}: {feedback['value']}")
+        # Usar el cliente Langfuse para registrar feedback
+        if langfuse_client:
+            langfuse_client.score(
+                trace_id=feedback["trace_id"],
+                name=feedback.get("name", "satisfaccion"),
+                value=float(feedback["value"]),
+                comment=feedback.get("comment")
+            )
+            langfuse_client.flush()
+            logger.info(f"Feedback registrado para trace_id {feedback['trace_id']}: {feedback['value']}")
+        else:
+            logger.warning("Langfuse no disponible para registrar feedback")
         return {"status": "ok", "trace_id": feedback["trace_id"]}
     except Exception as e:
         logger.error(f"Error al registrar feedback: {e}")
@@ -498,16 +515,13 @@ async def registrar_feedback(feedback: dict):
 
 @app.get("/test-otel")
 async def test_otel():
+    # Solo para probar la infraestructura OTLP
     tracer = get_tracer("test")
     with tracer.start_as_current_span("test_endpoint") as span:
         span.set_attribute("test", True)
         span.set_attribute("timestamp", time.time())
-        span.set_attribute("user.id", "test_user")
-        span.set_attribute("session.id", "test_session")
-        span.set_attribute("gen_ai.system", "openai")
-        span.set_attribute("gen_ai.operation", "test")
-    force_flush()
-    return {"status": "ok", "message": "Traza de prueba enviada, revisar Langfuse"}
+    otel_force_flush()
+    return {"status": "ok", "message": "Traza de prueba enviada (solo OTLP)"}
 
 # =============================================================================
 # PROCESAMIENTO DE CHAT FRONTEND
@@ -717,15 +731,13 @@ async def process_webhook_whatsapp(payload: dict) -> dict:
     return {"status": "Mensaje procesado", "chat_id": chat_id, "response": respuesta_final}
 
 # =============================================================================
-# FUNCIÓN DE GENERACIÓN DE TOKENS (CON CALLBACKHANDLER Y FLUSH)
+# FUNCIÓN DE GENERACIÓN DE TOKENS (CON SDK DE LANGFUSE)
 # =============================================================================
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
                          fingerprint: str | None = None) -> AsyncGenerator[str, None]:
-    from opentelemetry import trace
-    from telemetry_otel import get_tracer, force_flush
-
-    tracer = get_tracer()
+    global langfuse_client
+    tracer = get_tracer()  # Para spans de infraestructura (opcional)
     trace_id_ctfom = trace_id_var.get()
     caso = obtener_caso(thread_id)
     if not run_name:
@@ -734,11 +746,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     whatsapp = nuevo_whatsapp or ""
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
 
-    langfuse_handler = CallbackHandler(
-        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-        host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
-        trace_name=f"jarvi_chat_{caso}",
+    # 1. Crear traza principal con el SDK de Langfuse
+    trace = langfuse_client.trace(
+        name=f"chat_{caso}",
         user_id=user_id,
         session_id=thread_id,
         tags=["production", origen],
@@ -746,219 +756,166 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             "chat_id": chat_id,
             "origen": origen,
             "fingerprint": fingerprint or "",
+            "caso": caso,
+            "whatsapp": user_id
+        },
+        public=False,      # booleano correcto
+        bookmarked=False   # booleano correcto
+    )
+
+    # 2. Crear CallbackHandler vinculado a esta traza
+    langfuse_handler = CallbackHandler(trace=trace)
+
+    logger.info(f"Traza Langfuse creada: {trace.id} para caso {caso}")
+
+    # Preparar sesión y estado (igual que antes)
+    sesion_redis = None
+    historial = []
+    if redis_client:
+        sesion_redis = await obtener_sesion_redis(redis_client, chat_id)
+        if sesion_redis:
+            historial = await obtener_historial_redis(redis_client, chat_id)
+            logger.info(f"Historial recuperado: {len(historial)} mensajes para chat_id {chat_id}")
+        else:
+            logger.warning(f"No hay sesión en Redis para chat_id {chat_id}")
+
+    nombre = extraer_nombre(mensaje)
+    if nombre and (not sesion_redis or not sesion_redis.get("nombre") or sesion_redis.get("nombre") == "Pendiente"):
+        if sesion_redis:
+            sesion_redis["nombre"] = nombre
+            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
+        logger.info(f"Nombre extraído: {nombre}")
+
+    if nuevo_whatsapp:
+        if sesion_redis:
+            sesion_redis["whatsapp"] = nuevo_whatsapp
+            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
+        logger.info(f"WhatsApp actualizado: {nuevo_whatsapp}")
+
+    depto, muni = extraer_ubicacion(mensaje)
+    if depto and (not sesion_redis or not sesion_redis.get("departamento")):
+        if sesion_redis:
+            sesion_redis["departamento"] = depto
+            sesion_redis["municipio"] = muni
+            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
+        logger.info(f"Ubicación extraída: {depto}, {muni}")
+
+    consumo = extraer_consumo(mensaje)
+    if consumo and (not sesion_redis or not sesion_redis.get("consumo_actual")):
+        if sesion_redis:
+            sesion_redis["consumo_actual"] = consumo
+            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
+        logger.info(f"Consumo extraído: {consumo}")
+
+    empresa = extraer_empresa_electrica(mensaje)
+    if empresa and (not sesion_redis or not sesion_redis.get("empresa_electrica")):
+        if sesion_redis:
+            sesion_redis["empresa_electrica"] = empresa
+            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
+        logger.info(f"Empresa eléctrica extraída: {empresa}")
+
+    necesidad = extraer_definicion_necesidad(mensaje)
+    if necesidad and (not sesion_redis or not sesion_redis.get("definicion_necesidad")):
+        if sesion_redis:
+            sesion_redis["definicion_necesidad"] = necesidad
+            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
+        logger.info(f"Necesidad extraída: {necesidad}")
+
+    if sesion_redis and sesion_redis.get("productos_interes") and not sesion_redis.get("vendedor"):
+        vendedor_email = asignar_vendedor(sesion_redis["productos_interes"])
+        sesion_redis["vendedor"] = vendedor_email
+        await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
+        logger.info(f"Vendedor asignado: {vendedor_email}")
+
+    mensaje_con_caso = f"{mensaje} [Caso No. {caso}]"
+
+    messages = []
+    for item in historial:
+        messages.append(HumanMessage(content=item["input"]))
+        messages.append(AIMessage(content=item["output"]))
+    messages.append(HumanMessage(content=mensaje_con_caso))
+
+    estado_inicial = {
+        "messages": messages,
+        "contexto_tecnico": sesion_redis.get("contexto_tecnico", {}) if sesion_redis else {}
+    }
+
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "run_name": f"caso_{caso}",
+        "callbacks": [langfuse_handler],
+        "metadata": {
+            "trace_id": trace.id,  # Para correlación con CTFOM
+            "chat_id": chat_id,
+            "origen": origen,
+            "caso": caso,
+            "fingerprint": fingerprint,
+            "whatsapp": user_id
+        }
+    }
+
+    # 3. Ejecutar grafo (las observaciones se asociarán automáticamente a la traza)
+    async with locks[thread_id]:
+        resultado = await graph.ainvoke(estado_inicial, config=config)
+        ctx = resultado.get("contexto_tecnico", {})
+        logger.info(f"Contexto final: {ctx}")
+
+        respuesta_final = ""
+        for msg in reversed(resultado.get("messages", [])):
+            if isinstance(msg, AIMessage):
+                respuesta_final = msg.content
+                break
+
+        if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
+            respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
+
+    # 4. Registrar el output de la respuesta en la traza (opcional)
+    trace.update(
+        output={"response": respuesta_final},
+        metadata={
+            "chat_id": chat_id,
+            "origen": origen,
             "caso": caso
         }
     )
 
-    with tracer.start_as_current_span("chat_execution") as root_span:
-        root_span.set_attribute("user.id", user_id)
-        root_span.set_attribute("session.id", thread_id)
-        root_span.set_attribute("chat.id", chat_id)
-        root_span.set_attribute("fingerprint", fingerprint or "")
-        root_span.set_attribute("origen", origen)
-        root_span.set_attribute("caso", caso)
-        root_span.set_attribute("gen_ai.system", "openai")
-        if trace_id_ctfom:
-            root_span.set_attribute("ctfom.trace_id", trace_id_ctfom)
+    # 5. Flush del SDK de Langfuse (no de OTEL)
+    langfuse_client.flush()
+    logger.info("Flush de Langfuse completado")
 
-        config = {
-            "configurable": {"thread_id": thread_id},
-            "run_name": f"caso_{caso}",
-            "callbacks": [langfuse_handler],
-            "metadata": {
-                "trace_id": trace_id_ctfom,
-                "chat_id": chat_id,
-                "origen": origen,
-                "caso": caso,
-                "fingerprint": fingerprint,
-                "whatsapp": user_id
-            }
-        }
+    # 6. Generar streaming de tokens (igual que antes)
+    if respuesta_final:
+        tokens = respuesta_final.split()
+        for i, token in enumerate(tokens):
+            yield f"data: {json.dumps({'token': token + (' ' if i < len(tokens)-1 else '')})}\n\n"
+    else:
+        yield f"data: {json.dumps({'token': 'No se pudo generar respuesta.'})}\n\n"
 
-        logger.info(f"Iniciando ejecución para caso {caso} con user_id {user_id}")
-
-        sesion_redis = None
-        historial = []
-        if redis_client:
-            sesion_redis = await obtener_sesion_redis(redis_client, chat_id)
-            if sesion_redis:
-                historial = await obtener_historial_redis(redis_client, chat_id)
-                logger.info(f"Historial recuperado: {len(historial)} mensajes para chat_id {chat_id}")
-            else:
-                logger.warning(f"No hay sesión en Redis para chat_id {chat_id}")
-
-        nombre = extraer_nombre(mensaje)
-        if nombre and (not sesion_redis or not sesion_redis.get("nombre") or sesion_redis.get("nombre") == "Pendiente"):
-            if sesion_redis:
-                sesion_redis["nombre"] = nombre
-                await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-            logger.info(f"Nombre extraído: {nombre}")
-
-        if nuevo_whatsapp:
-            if sesion_redis:
-                sesion_redis["whatsapp"] = nuevo_whatsapp
-                await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-            logger.info(f"WhatsApp actualizado: {nuevo_whatsapp}")
-
-        depto, muni = extraer_ubicacion(mensaje)
-        if depto and (not sesion_redis or not sesion_redis.get("departamento")):
-            if sesion_redis:
-                sesion_redis["departamento"] = depto
-                sesion_redis["municipio"] = muni
-                await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-            logger.info(f"Ubicación extraída: {depto}, {muni}")
-
-        consumo = extraer_consumo(mensaje)
-        if consumo and (not sesion_redis or not sesion_redis.get("consumo_actual")):
-            if sesion_redis:
-                sesion_redis["consumo_actual"] = consumo
-                await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-            logger.info(f"Consumo extraído: {consumo}")
-
-        empresa = extraer_empresa_electrica(mensaje)
-        if empresa and (not sesion_redis or not sesion_redis.get("empresa_electrica")):
-            if sesion_redis:
-                sesion_redis["empresa_electrica"] = empresa
-                await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-            logger.info(f"Empresa eléctrica extraída: {empresa}")
-
-        necesidad = extraer_definicion_necesidad(mensaje)
-        if necesidad and (not sesion_redis or not sesion_redis.get("definicion_necesidad")):
-            if sesion_redis:
-                sesion_redis["definicion_necesidad"] = necesidad
-                await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-            logger.info(f"Necesidad extraída: {necesidad}")
-
-        if sesion_redis and sesion_redis.get("productos_interes") and not sesion_redis.get("vendedor"):
-            vendedor_email = asignar_vendedor(sesion_redis["productos_interes"])
-            sesion_redis["vendedor"] = vendedor_email
-            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-            logger.info(f"Vendedor asignado: {vendedor_email}")
-
-        mensaje_con_caso = f"{mensaje} [Caso No. {caso}]"
-
-        messages = []
-        for item in historial:
-            messages.append(HumanMessage(content=item["input"]))
-            messages.append(AIMessage(content=item["output"]))
-        messages.append(HumanMessage(content=mensaje_con_caso))
-
-        estado_inicial = {
-            "messages": messages,
-            "contexto_tecnico": sesion_redis.get("contexto_tecnico", {}) if sesion_redis else {}
-        }
-
-        with tracer.start_as_current_span("langgraph_execution") as graph_span:
-            graph_span.set_attribute("thread_id", thread_id)
-            graph_span.set_attribute("message_length", len(mensaje))
-
-            async with locks[thread_id]:
-                resultado = await graph.ainvoke(estado_inicial, config=config)
-                ctx = resultado.get("contexto_tecnico", {})
-                logger.info(f"Contexto final: {ctx}")
-
-                respuesta_final = ""
-                for msg in reversed(resultado.get("messages", [])):
-                    if isinstance(msg, AIMessage):
-                        respuesta_final = msg.content
-                        break
-
-                if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
-                    respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
-
-                graph_span.set_attribute("response_length", len(respuesta_final))
-                graph_span.set_status(StatusCode.OK)
-
-        input_tokens = ctx.get("input_tokens", 0)
-        output_tokens = ctx.get("output_tokens", 0)
-        model = ctx.get("model", "gpt-4o-mini")
-
-        MODEL_PRICES = {
-            "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-            "gpt-4o": {"input": 5.00, "output": 15.00},
-        }
-        prices = MODEL_PRICES.get(model, {"input": 0.15, "output": 0.60})
-        input_cost = input_tokens * prices["input"] / 1_000_000
-        output_cost = output_tokens * prices["output"] / 1_000_000
-        total_cost = input_cost + output_cost
-
-        root_span.set_attribute("gen_ai.usage.input_cost", input_cost)
-        root_span.set_attribute("gen_ai.usage.output_cost", output_cost)
-        root_span.set_attribute("gen_ai.usage.total_cost", total_cost)
-
-        if redis_client:
-            if not sesion_redis:
-                sesion_redis = {}
-            telemetry_data = {
-                "trace_id": trace_id_ctfom,
-                "span_id": span_id_var.get(),
-                "llm_cost": total_cost,
-                "llm_model": model,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "caso": caso,
-            }
-            if "contexto_tecnico" not in sesion_redis:
-                sesion_redis["contexto_tecnico"] = {}
-            sesion_redis["contexto_tecnico"]["telemetry"] = telemetry_data
-
-            for key in ["nombre", "whatsapp", "vendedor", "departamento", "municipio",
-                        "topologia", "tipo_producto", "definicion_necesidad",
-                        "consumo_actual", "empresa_electrica"]:
-                if ctx.get(key):
-                    sesion_redis[key] = ctx.get(key)
-            if ctx.get("productos_interes"):
-                sesion_redis["productos_interes"] = ctx.get("productos_interes")
-
-            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-
-        if respuesta_final:
-            await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
-            from db_client import actualizar_thread
-            await actualizar_thread(
-                thread_id=thread_id,
-                nombre=ctx.get("nombre", "Pendiente"),
-                whatsapp=user_id,
-                productos=[p.get("nombre") for p in ctx.get("productos_interes", [])],
-                vendedor=ctx.get("vendedor"),
-                trace_id=trace_id_ctfom,
-                cumulative_cost=total_cost
-            )
-
-        if respuesta_final:
-            tokens = respuesta_final.split()
-            for i, token in enumerate(tokens):
-                yield f"data: {json.dumps({'token': token + (' ' if i < len(tokens)-1 else '')})}\n\n"
-        else:
-            yield f"data: {json.dumps({'token': 'No se pudo generar respuesta.'})}\n\n"
-
-        ctx_para_envio = ctx.copy()
-        ctx_para_envio.update({
-            "chat_id": chat_id,
-            "thread_id": thread_id,
-            "run_name_actual": run_name,
-            "caso": caso,
-            "historial_count": len(historial) + 1,
-            "origen": origen,
-            "fingerprint": fingerprint,
-            "nombre": sesion_redis.get("nombre", "Pendiente") if sesion_redis else "Pendiente",
-            "whatsapp": sesion_redis.get("whatsapp", "") if sesion_redis else "",
-            "vendedor": sesion_redis.get("vendedor", "") if sesion_redis else "",
-            "departamento": sesion_redis.get("departamento", "") if sesion_redis else "",
-            "municipio": sesion_redis.get("municipio", "") if sesion_redis else "",
-            "topologia": sesion_redis.get("topologia", "") if sesion_redis else "",
-            "tipo_producto": sesion_redis.get("tipo_producto", "") if sesion_redis else "",
-            "productos_interes": sesion_redis.get("productos_interes", []) if sesion_redis else [],
-            "definicion_necesidad": sesion_redis.get("definicion_necesidad", "") if sesion_redis else "",
-            "consumo_actual": sesion_redis.get("consumo_actual", "") if sesion_redis else "",
-            "empresa_electrica": sesion_redis.get("empresa_electrica", "") if sesion_redis else "",
-            "resumen": sesion_redis.get("resumen", "") if sesion_redis else "",
-            "telemetry": telemetry_data if redis_client else {}
-        })
-        yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
-
-    force_flush()
-    logger.info("Flush de spans completado (con timeout)")
+    # 7. Enviar contexto final
+    ctx_para_envio = ctx.copy()
+    ctx_para_envio.update({
+        "chat_id": chat_id,
+        "thread_id": thread_id,
+        "run_name_actual": run_name,
+        "caso": caso,
+        "historial_count": len(historial) + 1,
+        "origen": origen,
+        "fingerprint": fingerprint,
+        "nombre": sesion_redis.get("nombre", "Pendiente") if sesion_redis else "Pendiente",
+        "whatsapp": sesion_redis.get("whatsapp", "") if sesion_redis else "",
+        "vendedor": sesion_redis.get("vendedor", "") if sesion_redis else "",
+        "departamento": sesion_redis.get("departamento", "") if sesion_redis else "",
+        "municipio": sesion_redis.get("municipio", "") if sesion_redis else "",
+        "topologia": sesion_redis.get("topologia", "") if sesion_redis else "",
+        "tipo_producto": sesion_redis.get("tipo_producto", "") if sesion_redis else "",
+        "productos_interes": sesion_redis.get("productos_interes", []) if sesion_redis else [],
+        "definicion_necesidad": sesion_redis.get("definicion_necesidad", "") if sesion_redis else "",
+        "consumo_actual": sesion_redis.get("consumo_actual", "") if sesion_redis else "",
+        "empresa_electrica": sesion_redis.get("empresa_electrica", "") if sesion_redis else "",
+        "resumen": sesion_redis.get("resumen", "") if sesion_redis else "",
+        "langfuse_trace_id": trace.id
+    })
+    yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
 
 # =============================================================================
 # ENDPOINTS AUXILIARES
