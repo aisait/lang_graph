@@ -3,14 +3,10 @@ db_client.py
 ═══════════════════════════════════════════════════════════════════════
 Cliente de base de datos para BI y CTFOM.
 Extiende la funcionalidad para almacenar cumulative_cost en threads (BI).
-
-Cumple con ISO/IEC 25010 (mantenibilidad) y DORA (auditabilidad).
-
-Pruebas de caja negra (ISO/IEC 29119):
-    BC‑T08: Verificar que cumulative_cost se actualice en threads.metadata.
 """
 import os
 import json
+import asyncio
 import asyncpg
 import logging
 from typing import Optional, List, Dict, Any
@@ -24,8 +20,15 @@ def get_bi_db_url() -> str:
 def get_ctfom_db_url() -> str:
     return os.getenv("CTFOM_DATABASE_URL")
 
-async def get_db_connection(db_url: str):
-    return await asyncpg.connect(db_url)
+async def get_db_connection(db_url: str, retries=3, delay=2):
+    for attempt in range(retries):
+        try:
+            return await asyncpg.connect(db_url)
+        except Exception as e:
+            logger.warning(f"Intento {attempt+1} de conexión a DB falló: {e}")
+            if attempt == retries - 1:
+                raise
+            await asyncio.sleep(delay * (attempt + 1))
 
 async def actualizar_thread(
     thread_id: str,
@@ -43,7 +46,11 @@ async def actualizar_thread(
     conn = None
     try:
         _, whatsapp_norm = normalizar_contacto("", whatsapp, "")
-        conn = await get_db_connection(get_bi_db_url())
+        db_url = get_bi_db_url()
+        if not db_url:
+            logger.error("BI_DATABASE_URL no configurada")
+            return False
+        conn = await get_db_connection(db_url)
         metadata = {
             "email": email,
             "productos": productos or [],
