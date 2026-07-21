@@ -864,7 +864,22 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         except Exception as e:
             print(f"Error en flush de Langfuse: {e}")
 
-    # 6. Generar streaming de tokens
+    # 6. Guardar historial y thread en BI
+    if respuesta_final:
+        await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
+        from db_client import actualizar_thread
+        await actualizar_thread(
+            thread_id=thread_id,
+            nombre=ctx.get("nombre", "Pendiente"),
+            whatsapp=user_id,
+            productos=[p.get("nombre") for p in ctx.get("productos_interes", [])],
+            vendedor=ctx.get("vendedor"),
+            trace_id=trace_id_ctfom,
+            cumulative_cost=0.0,  # temporal, luego calcularemos
+            metadata_adicional=ctx   # <--- PASA EL CONTEXTO COMPLETO
+        )
+
+    # 7. Generar streaming de tokens
     if respuesta_final:
         tokens = respuesta_final.split()
         for i, token in enumerate(tokens):
@@ -872,7 +887,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     else:
         yield f"data: {json.dumps({'token': 'No se pudo generar respuesta.'})}\n\n"
 
-    # 7. Enviar contexto final
+    # 8. Enviar contexto final
     ctx_para_envio = ctx.copy()
     ctx_para_envio.update({
         "chat_id": chat_id,
