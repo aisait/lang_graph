@@ -1,60 +1,78 @@
 """
 config.py
 Módulo de configuración central de JARVI 2.0.
-Carga variables de entorno, valida requisitos mínimos y expone constantes.
+Carga variables de entorno con mapeo explícito y valores predeterminados vacíos
+para evitar fallos de validación en producción.
 """
 import os
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+from pydantic import Field
 
 load_dotenv()
 
 class Settings(BaseSettings):
-    # API Keys
-    openai_api_key: str
-    chatbot_master_api_key: str
+    # === API Keys (opcionales, con defaults vacíos) ===
+    openai_api_key: str = Field(default="", env="OPENAI_API_KEY")
+    openai_api_key_1: str = Field(default="", env="OPENAI_API_KEY_1")
+    openai_api_key_2: str = Field(default="", env="OPENAI_API_KEY_2")
+    openai_api_key_3: str = Field(default="", env="OPENAI_API_KEY_3")
+    chatbot_master_api_key: str = Field(default="", env="CHATBOT_MASTER_API_KEY")
 
-    # Langfuse
-    langfuse_public_key: str
-    langfuse_secret_key: str
-    langfuse_host: str = "https://langfuse-web-production-2599.up.railway.app"
-    langfuse_tracing_environment: str = "production"
+    # === Langfuse ===
+    langfuse_public_key: str = Field(default="", env="LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key: str = Field(default="", env="LANGFUSE_SECRET_KEY")
+    langfuse_host: str = Field(default="https://cloud.langfuse.com", env="LANGFUSE_HOST")
+    langfuse_tracing_environment: str = Field(default="production", env="LANGFUSE_TRACING_ENVIRONMENT")
 
-    # Bases de datos
-    database_url: str = ""   # Opcional, para checkpoints de LangGraph
-    ctfom_database_url: "https://switchyard.proxy.rlwy.net"
-    bi_database_url: "https://hayabusa.proxy.rlwy.net"
+    # === Bases de datos (PostgreSQL) ===
+    # URLs internas de Railway (ej. postgresql://...@ctfom-postgres.railway.internal:5432/...)
+    ctfom_database_url: str = Field(default="", env="CTFOM_DATABASE_URL")
+    bi_database_url: str = Field(default="", env="BI_DATABASE_URL")
+    database_url: str = Field(default="", env="DATABASE_URL")   # Checkpoints de LangGraph (opcional)
+    database_public_url: str = Field(default="", env="DATABASE_PUBLIC_URL")  # No usar para conexiones internas
 
-    # Redis
-    redis_url: str = ""
-    redis_ttl: int = 604800
+    # === Redis ===
+    redis_url: str = Field(default="", env="REDIS_URL")
+    redis_ttl: int = Field(default=604800, env="REDIS_TTL")
+    redis_password: str = Field(default="", env="REDIS_PASSWORD")
+    redis_host: str = Field(default="", env="REDISHOST")
 
-    # Odoo
-    odoo_host: str = "34.75.123.223"
-    odoo_db: str = "aisa_prod"
-    odoo_user: str = "agente_n8n"
-    odoo_password: str = "Agente*2025"
-    odoo_product_model: str = "product.template"
-    odoo_ongrid_domain: str = '[["sale_ok","=",True],["type","=","product"]]'
+    # === Odoo ===
+    odoo_host: str = Field(default="34.75.123.223", env="ODOO_HOST")
+    odoo_db: str = Field(default="aisa_prod", env="ODOO_DB")
+    odoo_user: str = Field(default="agente_n8n", env="ODOO_USER")
+    odoo_password: str = Field(default="Agente*2025", env="ODOO_PASSWORD")
+    odoo_product_model: str = Field(default="product.template", env="ODOO_PRODUCT_MODEL")
+    odoo_ongrid_domain: str = Field(
+        default='[["sale_ok","=",True],["type","=","product"]]',
+        env="ODOO_ONGRID_DOMAIN"
+    )
 
-    # Correo
-    controller_email: str = "joseardon@aisa.com.gt"
-    smtp_user: str = "AISA Bot"
-    gmail_refresh_token: str
-    gmail_client_id: str
-    gmail_client_secret: str
+    # === Correo (Gmail) ===
+    controller_email: str = Field(default="joseardon@aisa.com.gt", env="CONTROLLER_EMAIL")
+    smtp_user: str = Field(default="AISA Bot", env="SMTP_USER")
+    gmail_refresh_token: str = Field(default="", env="GMAIL_REFRESH_TOKEN")
+    gmail_client_id: str = Field(default="", env="GMAIL_CLIENT_ID")
+    gmail_client_secret: str = Field(default="", env="GMAIL_CLIENT_SECRET")
 
-    # Webhooks
-    apichat_instance: str = ""
-    apichat_endpoint: str = ""
-    apichat_token: str = ""
+    # === Webhooks (n8n, Apichat) ===
+    n8n_webhook_url: str = Field(default="", env="N8N_WEBHOOK_URL")
+    apichat_instance: str = Field(default="", env="APICHAT_INSTANCE")
+    apichat_endpoint: str = Field(default="", env="APICHAT_ENDPOINT")
+    apichat_token: str = Field(default="", env="APICHAT_TOKEN")
 
-    # Otros
-    backend_url: str = "https://jarvi-backend-production.up.railway.app"
-    n8n_webhook_url: str = "https://jarvi-backend-n8n-production.up.railway.app"
+    # === URLs públicas ===
+    backend_url: str = Field(
+        default="https://jarvi-backend-production.up.railway.app",
+        env="BACKEND_URL"
+    )
+    api_url: str = Field(default="", env="API_URL")
 
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"  # Ignorar variables extra no declaradas
 
+# Instancia única (singleton)
 settings = Settings()
