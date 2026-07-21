@@ -1,8 +1,5 @@
 """
-db_client.py
-═══════════════════════════════════════════════════════════════════════
-Cliente de base de datos para BI y CTFOM.
-Extiende la funcionalidad para almacenar cumulative_cost en threads (BI).
+db_client.py - Cliente de base de datos con reintentos y manejo de errores.
 """
 import os
 import json
@@ -40,9 +37,6 @@ async def actualizar_thread(
     trace_id: Optional[str] = None,
     cumulative_cost: Optional[float] = None
 ) -> bool:
-    """
-    Actualiza o inserta un thread en BI, acumulando costos de LLM.
-    """
     conn = None
     try:
         _, whatsapp_norm = normalizar_contacto("", whatsapp, "")
@@ -105,7 +99,6 @@ async def registrar_evento_auditoria(
     payload: Dict[str, Any],
     langsmith_run_id: Optional[str] = None
 ) -> bool:
-    """Registra un evento de auditoría en CTFOM."""
     conn = None
     try:
         conn = await get_db_connection(get_ctfom_db_url())
@@ -133,7 +126,6 @@ async def registrar_evento_auditoria(
             await conn.close()
 
 async def acumular_costo_thread(thread_id: str, costo: float) -> bool:
-    """Función auxiliar para acumular costo en threads (mantenida por compatibilidad)."""
     conn = None
     try:
         conn = await get_db_connection(get_bi_db_url())
