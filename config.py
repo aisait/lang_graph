@@ -17,13 +17,13 @@ class Settings(BaseSettings):
     # Langfuse
     langfuse_public_key: str
     langfuse_secret_key: str
-    langfuse_host: str = "https://langfuse-web-production-2599.up.railway.app/"
+    langfuse_host: str = "https://langfuse-web-production-2599.up.railway.app"
     langfuse_tracing_environment: str = "production"
 
     # Bases de datos
     database_url: str = ""   # Opcional, para checkpoints de LangGraph
-    ctfom_database_url: str
-    bi_database_url: str
+    ctfom_database_url: "https://switchyard.proxy.rlwy.net"
+    bi_database_url: "https://hayabusa.proxy.rlwy.net"
 
     # Redis
     redis_url: str = ""
