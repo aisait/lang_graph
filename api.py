@@ -25,7 +25,20 @@ from pydantic import BaseModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 from langfuse import Langfuse
-from langfuse.integrations.langchain import CallbackHandler  # <--- IMPORT CORRECTO
+
+# --- INTENTAR IMPORTAR CALLBACKHANDLER DE LA RUTA CORRECTA ---
+try:
+    from langfuse.langchain import CallbackHandler
+except ImportError:
+    try:
+        from langfuse.callback import CallbackHandler
+    except ImportError:
+        # Fallback: si no está disponible, definir una clase dummy (no recomendado)
+        # Esto solo es para evitar el error de importación, pero no funcionará.
+        class CallbackHandler:
+            def __init__(self, *args, **kwargs):
+                pass
+        print("⚠️  WARNING: CallbackHandler no disponible. La trazabilidad en LangGraph no funcionará correctamente.")
 
 # OpenTelemetry solo para infraestructura (middleware), NO para LLM
 from telemetry_otel import init_telemetry, get_tracer, force_flush as otel_force_flush
@@ -737,7 +750,12 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
 
     # 2. Crear CallbackHandler vinculado a esta traza (si existe)
     if trace:
-        langfuse_handler = CallbackHandler(trace=trace)
+        try:
+            # Usar la importación correcta de CallbackHandler (ya está importada al inicio)
+            langfuse_handler = CallbackHandler(trace=trace)
+        except Exception as e:
+            print(f"Error al crear CallbackHandler: {e}")
+            langfuse_handler = None
     else:
         langfuse_handler = None
 
