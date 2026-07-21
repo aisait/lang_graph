@@ -3,14 +3,6 @@ telemetry_otel.py
 ═══════════════════════════════════════════════════════════════════════
 Inicialización de OpenTelemetry con exportador OTLP a Langfuse.
 Cumple con ISO/IEC 25010 (eficiencia, fiabilidad) y DORA (resiliencia).
-
-Configuración robusta:
-    - BatchSpanProcessor con cola amplia y timeouts para evitar pérdida de spans.
-    - Logging de errores de exportación.
-
-Pruebas de caja negra (ISO/IEC 29119):
-    BC‑T07: Ejecutar nodo → verificar que el span se exporte sin errores.
-    BC‑T10: Health check → verificar que el exportador responde.
 """
 import os
 import base64
@@ -23,10 +15,6 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 logger = logging.getLogger(__name__)
 
 def init_telemetry(app=None):
-    """
-    Inicializa OpenTelemetry con exportación a Langfuse v4.
-    Retorna True si se configuró correctamente.
-    """
     public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
     secret_key = os.getenv("LANGFUSE_SECRET_KEY")
     host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
@@ -61,7 +49,7 @@ def init_telemetry(app=None):
     span_processor = BatchSpanProcessor(
         exporter,
         max_queue_size=1024,
-        scheduled_delay_millis=5000,
+        schedule_delay_millis=5000,        # <--- CORREGIDO (era 'scheduled_delay_millis')
         max_export_batch_size=512,
         export_timeout_millis=10000,
     )
@@ -72,11 +60,9 @@ def init_telemetry(app=None):
     return True
 
 def get_tracer(name: str = "jarvi"):
-    """Obtiene un tracer para spans manuales."""
     return trace.get_tracer(name)
 
 def force_flush():
-    """Fuerza la exportación de todos los spans pendientes con timeout."""
     try:
         provider = trace.get_tracer_provider()
         if hasattr(provider, 'force_flush'):
