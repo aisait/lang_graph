@@ -1,5 +1,5 @@
 """
-api.py - Servidor FastAPI con trazabilidad OpenTelemetry + Langfuse v4.
+api.py - Servidor FastAPI con trazabilidad Langfuse v4.
 Cumple con ISO/IEC 25010, 27001, DORA e ITIL 4.
 """
 import os
@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
+from langfuse.callback import CallbackHandler
 
 # OpenTelemetry
 from telemetry_otel import init_telemetry, get_tracer, force_flush
@@ -37,6 +38,7 @@ from ontology import obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 from db_client import get_bi_db_url, get_ctfom_db_url
 from utils.sanitize import sanitize_pii, sanitize_dict
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +52,7 @@ class TTSRequest(BaseModel):
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
 # =============================================================================
-API_KEY = os.getenv("CHATBOT_MASTER_API_KEY", "sk_dev_fallback_key")
+API_KEY = settings.chatbot_master_api_key
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 
 async def validar_api_key(auth: str | None = Security(api_key_header)):
@@ -72,7 +74,7 @@ def taxonomy_error(exc: Exception) -> str:
     return "SWR-API-UNKNOWN-000"
 
 # =============================================================================
-# FUNCIONES DE EXTRACCIÓN DE DATOS (sin cambios)
+# FUNCIONES DE EXTRACCIÓN DE DATOS
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
     if not mensaje:
@@ -158,12 +160,15 @@ def normalizar_whatsapp_e164(telefono: str) -> str:
     return limpio
 
 # =============================================================================
-# FUNCIONES DE POSTGRESQL (sin cambios)
+# FUNCIONES DE POSTGRESQL (con reintentos)
 # =============================================================================
 async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
                                    fingerprint: Optional[str] = None, origen: str = "desconocido") -> bool:
     try:
         db_url = get_bi_db_url()
+        if not db_url:
+            logger.error("BI_DATABASE_URL no configurada")
+            return False
         conn = await asyncpg.connect(db_url)
         metadata = contexto.copy()
         metadata["origen"] = origen
@@ -186,9 +191,9 @@ async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
         return False
 
 # =============================================================================
-# FUNCIONES DE REDIS (sin cambios)
+# FUNCIONES DE REDIS
 # =============================================================================
-REDIS_TTL = int(os.getenv("REDIS_TTL", 604800))
+REDIS_TTL = settings.redis_ttl
 HISTORIAL_LIMITE = 64
 
 def serializar_para_redis(valor):
@@ -310,7 +315,7 @@ async def guardar_whatsapp_redis(redis_client: Optional[redis.Redis], whatsapp: 
         logger.error(f"Error guardando mapeo whatsapp: {e}")
 
 # =============================================================================
-# ASIGNACIÓN DE VENDEDOR (sin cambios)
+# ASIGNACIÓN DE VENDEDOR
 # =============================================================================
 def asignar_vendedor(productos: list) -> str:
     try:
@@ -325,7 +330,7 @@ def asignar_vendedor(productos: list) -> str:
     return vendedores.get("default", "default@aisa.com.gt")
 
 # =============================================================================
-# FUNCIONES DE SANEAMIENTO DE URL Y OBTENCIÓN DE DB_URL (CORREGIDO)
+# FUNCIONES DE SANEAMIENTO DE URL Y OBTENCIÓN DE DB_URL
 # =============================================================================
 def sanear_db_url(db_url: str) -> str:
     if not db_url:
@@ -341,28 +346,20 @@ def sanear_db_url(db_url: str) -> str:
         return db_url
 
 def get_db_url() -> str:
-    """
-    Obtiene la URL de la base de datos para checkpoints de LangGraph.
-    Prioriza DATABASE_URL, si no existe, usa CTFOM_DATABASE_URL.
-    Si ninguna está definida, lanza RuntimeError.
-    """
     raw = os.getenv("DATABASE_URL")
     if raw:
         return sanear_db_url(raw)
-    
-    # Fallback a CTFOM_DATABASE_URL (base de datos de telemetría, que sí está configurada)
     ctfom_url = os.getenv("CTFOM_DATABASE_URL")
     if ctfom_url:
         logger.warning("DATABASE_URL no definida. Usando CTFOM_DATABASE_URL para checkpoints de LangGraph.")
         return sanear_db_url(ctfom_url)
-    
     raise RuntimeError(
         "No se encontró DATABASE_URL ni CTFOM_DATABASE_URL. "
         "Verifique las variables de entorno en Railway."
     )
 
 # =============================================================================
-# GENERACIÓN DE RESUMEN CON LLM (sin cambios)
+# GENERACIÓN DE RESUMEN CON LLM
 # =============================================================================
 async def generar_resumen_con_llm(historial: list, contexto: dict) -> str:
     from langchain_openai import ChatOpenAI
@@ -393,14 +390,13 @@ redis_client = None
 async def lifespan(app: FastAPI):
     global graph, redis_client
 
-    # Inicializar OpenTelemetry
     telemetry_ok = init_telemetry(app)
     if telemetry_ok:
         logger.info("OpenTelemetry inicializado correctamente")
     else:
         logger.warning("OpenTelemetry desactivado (Langfuse no configurado)")
 
-    db_url = get_db_url()  # Ahora siempre devuelve una URL válida o lanza excepción
+    db_url = get_db_url()
     async with AsyncExitStack() as stack:
         checkpointer = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(db_url))
         await checkpointer.setup()
@@ -425,30 +421,21 @@ app = FastAPI(title="JARVI 2.0 API Central", version="2.0.06",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
-# ENDPOINT DE SALUD
+# ENDPOINTS
 # =============================================================================
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": "jarvi-backend"}
 
-# =============================================================================
-# ENDPOINT DE DEPURACIÓN DE RUTAS
-# =============================================================================
 @app.get("/debug/routes")
 async def list_routes():
     routes = [{"path": route.path, "methods": list(route.methods)} for route in app.routes]
     return {"routes": routes}
 
-# =============================================================================
-# ENDPOINT DE ACKNOWLEDGE
-# =============================================================================
 @app.post("/ack/{trace_id}")
 async def acknowledge_dispatch(trace_id: str):
     return {"status": "ACK received", "trace_id": trace_id}
 
-# =============================================================================
-# MIDDLEWARE DE TELEMETRÍA (CTFOM) – se mantiene
-# =============================================================================
 @app.middleware("http")
 async def telemetry_middleware(request: Request, call_next):
     generate_trace_span()
@@ -476,9 +463,6 @@ async def telemetry_middleware(request: Request, call_next):
         )
         raise
 
-# =============================================================================
-# ENDPOINTS PRINCIPALES
-# =============================================================================
 @app.post("/chat")
 async def chat_endpoint_original(request: ChatRequest, http_request: Request):
     return await process_chat_frontend(request, http_request)
@@ -491,9 +475,6 @@ async def chat_endpoint_stream(request: ChatRequest, http_request: Request):
 async def webhook_whatsapp(payload: dict):
     return await process_webhook_whatsapp(payload)
 
-# =============================================================================
-# ENDPOINT DE FEEDBACK (se mantiene, ahora con OpenTelemetry)
-# =============================================================================
 @app.post("/feedback")
 async def registrar_feedback(feedback: dict):
     if "trace_id" not in feedback:
@@ -515,12 +496,8 @@ async def registrar_feedback(feedback: dict):
         logger.error(f"Error al registrar feedback: {e}")
         raise HTTPException(status_code=500, detail=f"Error al registrar feedback: {str(e)}")
 
-# =============================================================================
-# ENDPOINT DE PRUEBA OTLP
-# =============================================================================
 @app.get("/test-otel")
 async def test_otel():
-    """Endpoint para probar la exportación OTLP desde el entorno real."""
     tracer = get_tracer("test")
     with tracer.start_as_current_span("test_endpoint") as span:
         span.set_attribute("test", True)
@@ -533,7 +510,7 @@ async def test_otel():
     return {"status": "ok", "message": "Traza de prueba enviada, revisar Langfuse"}
 
 # =============================================================================
-# PROCESAMIENTO DE CHAT FRONTEND (sin cambios en lógica, solo spans)
+# PROCESAMIENTO DE CHAT FRONTEND
 # =============================================================================
 async def process_chat_frontend(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
     fingerprint = chat_request.metadata.get("fingerprint") or http_request.headers.get("X-Fingerprint")
@@ -659,7 +636,7 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
     )
 
 # =============================================================================
-# PROCESAMIENTO DE WEBHOOK WHATSAPP (sin cambios)
+# PROCESAMIENTO DE WEBHOOK WHATSAPP
 # =============================================================================
 async def process_webhook_whatsapp(payload: dict) -> dict:
     whatsapp = payload.get("number")
@@ -740,13 +717,15 @@ async def process_webhook_whatsapp(payload: dict) -> dict:
     return {"status": "Mensaje procesado", "chat_id": chat_id, "response": respuesta_final}
 
 # =============================================================================
-# FUNCIÓN DE GENERACIÓN DE TOKENS (CON SPANS OPENTELEMETRY Y HOOKS DE INYECCIÓN)
+# FUNCIÓN DE GENERACIÓN DE TOKENS (CON CALLBACKHANDLER Y FLUSH)
 # =============================================================================
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
                          fingerprint: str | None = None) -> AsyncGenerator[str, None]:
-    tracer = get_tracer()
+    from opentelemetry import trace
+    from telemetry_otel import get_tracer, force_flush
 
+    tracer = get_tracer()
     trace_id_ctfom = trace_id_var.get()
     caso = obtener_caso(thread_id)
     if not run_name:
@@ -754,6 +733,22 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
 
     whatsapp = nuevo_whatsapp or ""
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
+
+    langfuse_handler = CallbackHandler(
+        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+        host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+        trace_name=f"jarvi_chat_{caso}",
+        user_id=user_id,
+        session_id=thread_id,
+        tags=["production", origen],
+        metadata={
+            "chat_id": chat_id,
+            "origen": origen,
+            "fingerprint": fingerprint or "",
+            "caso": caso
+        }
+    )
 
     with tracer.start_as_current_span("chat_execution") as root_span:
         root_span.set_attribute("user.id", user_id)
@@ -769,6 +764,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         config = {
             "configurable": {"thread_id": thread_id},
             "run_name": f"caso_{caso}",
+            "callbacks": [langfuse_handler],
             "metadata": {
                 "trace_id": trace_id_ctfom,
                 "chat_id": chat_id,
@@ -873,9 +869,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                 graph_span.set_attribute("response_length", len(respuesta_final))
                 graph_span.set_status(StatusCode.OK)
 
-        # ================================================================
-        # HOOK POST-EJECUCIÓN: Cálculo de costos y enriquecimiento
-        # ================================================================
         input_tokens = ctx.get("input_tokens", 0)
         output_tokens = ctx.get("output_tokens", 0)
         model = ctx.get("model", "gpt-4o-mini")
@@ -964,14 +957,11 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         })
         yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
 
-    try:
-        force_flush()
-        logger.info("Flush de spans completado (con timeout)")
-    except Exception as e:
-        logger.error(f"Error en flush final: {e}")
+    force_flush()
+    logger.info("Flush de spans completado (con timeout)")
 
 # =============================================================================
-# ENDPOINTS AUXILIARES (sin cambios)
+# ENDPOINTS AUXILIARES
 # =============================================================================
 @app.post("/stt")
 async def speech_to_text(request: AudioRequest):
