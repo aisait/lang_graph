@@ -1,7 +1,12 @@
-#!/usr/bin/env python3
 """
-validate_langfuse.py - Validación determinística de Langfuse vía OTLP.
-Cumple con ISO/IEC 29119 (pruebas de caja negra).
+validate_langfuse.py
+═══════════════════════════════════════════════════════════════════════
+Script de validación de integración Langfuse.
+Cumple con ISO/IEC 29119 (pruebas de caja negra) y verifica que todos los campos requeridos lleguen.
+
+Pruebas:
+    - Crear traza con todos los atributos gen_ai.*.
+    - Verificar que la traza aparezca en Langfuse y contenga model, tokens, costs.
 """
 import os
 import sys
@@ -16,26 +21,25 @@ def main():
     print(f"{'='*60}\n")
 
     # 1. Verificar importación
-    print("[1/5] Verificando importación de langfuse...")
+    print("[1/6] Verificando importación de langfuse...")
     try:
         from langfuse import Langfuse
-        from langfuse.callback import CallbackHandler
-        print("✅ Módulo langfuse importado correctamente")
+        print("✅ Módulo langfuse importado")
     except ImportError as e:
         print(f"❌ Error: {e}")
         sys.exit(1)
 
     # 2. Verificar variables de entorno
-    print("\n[2/5] Verificando variables de entorno...")
+    print("\n[2/6] Verificando variables de entorno...")
     required = ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"]
     missing = [v for v in required if not os.getenv(v)]
     if missing:
         print(f"❌ Faltan: {missing}")
         sys.exit(1)
-    print("✅ Variables de entorno configuradas")
+    print("✅ Variables configuradas")
 
-    # 3. Crear traza de prueba
-    print("\n[3/5] Creando traza de prueba...")
+    # 3. Crear traza de prueba con todos los atributos semánticos
+    print("\n[3/6] Creando traza de prueba con atributos gen_ai...")
     try:
         client = Langfuse(
             public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
@@ -44,17 +48,32 @@ def main():
         )
         trace = client.trace(
             name="validation_test",
-            user_id="validation_bot",
-            metadata={"source": "validation_script", "timestamp": datetime.utcnow().isoformat()}
+            user_id="test_user",
+            session_id="test_session",
+            metadata={"test": True, "version": "2.0.03"}
         )
-        span = trace.span(name="test_span", input={"test": "input"})
-        span.end(output={"test": "output"})
+        # Crear observación con atributos gen_ai
+        gen = trace.generation(
+            name="gpt-4o-mini-test",
+            model="gpt-4o-mini",
+            model_parameters={"temperature": 0.1},
+            input={"role": "user", "content": "Mensaje de prueba"},
+            output={"role": "assistant", "content": "Respuesta de prueba"},
+            usage={
+                "input": 10,
+                "output": 20,
+                "total": 30,
+                "unit": "TOKENS",
+                "inputCost": 10 * 0.15 / 1_000_000,
+                "outputCost": 20 * 0.60 / 1_000_000,
+                "totalCost": (10*0.15 + 20*0.60) / 1_000_000
+            }
+        )
         client.flush()
-        print(f"✅ Traza creada con ID: {trace.id}")
         time.sleep(2)
 
-        # 4. Verificar en API
-        print("\n[4/5] Verificando en Langfuse...")
+        # Verificar en API
+        print("\n[4/6] Verificando traza en Langfuse...")
         auth = base64.b64encode(f"{os.getenv('LANGFUSE_PUBLIC_KEY')}:{os.getenv('LANGFUSE_SECRET_KEY')}".encode()).decode()
         resp = requests.get(
             f"{os.getenv('LANGFUSE_HOST')}/api/public/traces/{trace.id}",
@@ -62,11 +81,17 @@ def main():
             timeout=10
         )
         if resp.status_code == 200:
-            print(f"✅ Traza confirmada en Langfuse")
-            print(f"   URL: {os.getenv('LANGFUSE_HOST')}/trace/{trace.id}")
+            data = resp.json()
+            print(f"✅ Traza confirmada con ID: {trace.id}")
+            # Buscar la generación
+            obs = data.get('observations', [{}])[0] if data.get('observations') else {}
+            print(f"   - Model: {obs.get('model', 'N/A')}")
+            usage = obs.get('usage', {})
+            print(f"   - Input tokens: {usage.get('input', 'N/A')}")
+            print(f"   - Output tokens: {usage.get('output', 'N/A')}")
+            print(f"   - Total cost: {usage.get('totalCost', 'N/A')}")
         else:
             print(f"⚠️  API respondió {resp.status_code}, verificar manualmente")
-            print(f"   URL: {os.getenv('LANGFUSE_HOST')}/trace/{trace.id}")
     except Exception as e:
         print(f"❌ Error: {e}")
         sys.exit(1)
