@@ -1,17 +1,39 @@
+#!/usr/bin/env python3
 # db_migrate_unificado.py
 """
 Migración unificada para JARVI 2.0 – Separa CTFOM y BI.
 Ejecuta la migración en dos bases de datos distintas usando variables de entorno.
 """
-
 import os
 import sys
 import asyncio
 import asyncpg
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
-# ---------------------------------------------------------------------
+# =============================================================================
+# FUNCIÓN PARA SANEAR LA URL DE CONEXIÓN (elimina parámetros inválidos)
+# =============================================================================
+def sanear_db_url(db_url: str) -> str:
+    """Elimina parámetros de pool y otros que no son válidos para asyncpg."""
+    if not db_url:
+        return db_url
+    try:
+        parsed = urlparse(db_url)
+        query = parse_qs(parsed.query)
+        # Parámetros que no son compatibles con asyncpg
+        parametros_invalidos = ["pool_size", "max_overflow", "pool_timeout", "ssl", "sslmode"]
+        for p in parametros_invalidos:
+            query.pop(p, None)
+        clean_query = urlencode(query, doseq=True)
+        # Reconstruir la URL sin los parámetros eliminados
+        return urlunparse(parsed._replace(query=clean_query))
+    except Exception:
+        # Si algo falla, devolver la URL original (por si acaso)
+        return db_url
+
+# =============================================================================
 # DDL para CTFOM (telemetría, auditoría, checkpoints)
-# ---------------------------------------------------------------------
+# =============================================================================
 DDL_CTFOM = """
 -- Tablas de telemetría y auditoría (CTFOM)
 CREATE TABLE IF NOT EXISTS telemetry_events (
@@ -113,9 +135,9 @@ CREATE TABLE IF NOT EXISTS audit_events (
 CREATE INDEX IF NOT EXISTS idx_audit_thread_id ON audit_events(thread_id);
 """
 
-# ---------------------------------------------------------------------
+# =============================================================================
 # DDL para BI (negocio: threads, resumenes, leads, etc.)
-# ---------------------------------------------------------------------
+# =============================================================================
 DDL_BI = """
 CREATE TABLE IF NOT EXISTS threads (
     thread_id UUID PRIMARY KEY,
@@ -139,9 +161,16 @@ CREATE TABLE IF NOT EXISTS resumenes (
 CREATE INDEX IF NOT EXISTS idx_resumenes_created_at ON resumenes (created_at);
 """
 
+# =============================================================================
+# FUNCIÓN DE MIGRACIÓN CON SANEAMIENTO DE URL
+# =============================================================================
 async def run_migration(db_url: str, ddl: str, label: str):
     try:
-        conn = await asyncpg.connect(db_url)
+        # Sanear la URL antes de conectar
+        db_url_clean = sanear_db_url(db_url)
+        print(f"Conectando a {label} con URL saneada...")
+        conn = await asyncpg.connect(db_url_clean)
+        print(f"Ejecutando DDL en {label}...")
         await conn.execute(ddl)
         await conn.close()
         print(f"✅ Migración completada para {label}")
@@ -149,13 +178,19 @@ async def run_migration(db_url: str, ddl: str, label: str):
         print(f"❌ Error en {label}: {e}")
         sys.exit(1)
 
+# =============================================================================
+# MAIN
+# =============================================================================
 async def main():
     ctfom_url = os.getenv("CTFOM_DATABASE_URL")
     bi_url = os.getenv("BI_DATABASE_URL")
     if not ctfom_url or not bi_url:
-        raise RuntimeError("Faltan CTFOM_DATABASE_URL o BI_DATABASE_URL")
+        raise RuntimeError("Faltan CTFOM_DATABASE_URL o BI_DATABASE_URL en el entorno")
+
+    print("=== Iniciando migración unificada de bases de datos JARVI 2.0 ===")
     await run_migration(ctfom_url, DDL_CTFOM, "CTFOM")
     await run_migration(bi_url, DDL_BI, "BI")
+    print("✅ Migración completada exitosamente en ambas bases de datos.")
 
 if __name__ == "__main__":
     asyncio.run(main())
