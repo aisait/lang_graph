@@ -1,19 +1,11 @@
 # =============================================================================
 # requirements-debug.txt - Dependencias para cliente-debug (Flask)
-# Solo lo necesario para la consola de depuración.
 # =============================================================================
 
-# Web framework
 Flask==2.2.0
-
-# Utilidades HTTP
 requests==2.32.3
 python-dotenv==1.0.1
-
-# Procesamiento de audio e imágenes (OpenAI)
 openai==1.50.0
-
-# Google API para correos (opcional, pero se mantiene)
 google-auth==2.30.0
 google-auth-oauthlib==1.2.0
 google-api-python-client==2.198.0
