@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copiar requirements específico de debug
+# Copiar requirements específico de debug (NO requirements.txt)
 COPY requirements-debug.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements-debug.txt
