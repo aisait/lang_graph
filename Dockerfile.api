@@ -13,11 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Instalación de dependencias Python
+# Instalación de dependencias Python (versiones fijas en requirements.txt)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir --force-reinstall "langfuse>=4.0.0" "packaging==24.2"
+    pip install --no-cache-dir -r requirements.txt
 
 # Verificación determinística (Fail-Fast)
 RUN python -c "import langfuse, opentelemetry, asyncpg, redis; print('✅ Dependencias críticas OK')"
