@@ -1,11 +1,6 @@
 """
 schemas.py
-═══════════════════════════════════════════════════════════════════════
 Contratos de datos (Pydantic) para la API central.
-Se añaden modelos para la telemetría enriquecida (ISO/IEC 25010 - mantenibilidad).
-
-Pruebas de caja negra (ISO/IEC 29119):
-    BC‑T05: Validación de schema → verificar que los nuevos modelos rechacen datos inválidos.
 """
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, List
@@ -20,9 +15,7 @@ class ChatResponse(BaseModel):
     run_id: str
     status: str = "success"
 
-# Nuevos modelos para telemetría enriquecida (ISO 25010 - mantenibilidad)
 class TelemetryContext(BaseModel):
-    """Contexto de telemetría inyectado en CTFOM y Redis."""
     trace_id: str
     span_id: str
     caso: str
