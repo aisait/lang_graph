@@ -33,10 +33,7 @@ SANITIZATION_RULES = {
 }
 
 def sanitize_pii(text: Optional[str]) -> Optional[str]:
-    """
-    Sanitiza información personal identificable (PII) en una cadena.
-    Retorna la cadena con marcadores de redacción.
-    """
+    """Sanitiza información personal identificable (PII) en una cadena."""
     if not text or not isinstance(text, str):
         return text
     sanitized = text
@@ -46,10 +43,7 @@ def sanitize_pii(text: Optional[str]) -> Optional[str]:
     return sanitized
 
 def sanitize_dict(data: Any, max_depth: int = 3) -> Any:
-    """
-    Sanitiza recursivamente diccionarios, listas y strings.
-    Aplica sanitize_pii a todos los strings.
-    """
+    """Sanitiza recursivamente diccionarios, listas y strings."""
     if max_depth <= 0:
         return data
     if isinstance(data, dict):
