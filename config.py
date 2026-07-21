@@ -1,8 +1,7 @@
 """
-config.py
-Módulo de configuración central de JARVI 2.0.
-Carga variables de entorno con mapeo explícito y valores predeterminados vacíos
-para evitar fallos de validación en producción.
+config.py - Módulo de configuración central de JARVI 2.0.
+Carga variables de entorno con valores predeterminados vacíos para evitar fallos.
+Incluye lógica de fallback para claves de OpenAI.
 """
 import os
 from dotenv import load_dotenv
@@ -12,33 +11,59 @@ from pydantic import Field
 load_dotenv()
 
 class Settings(BaseSettings):
-    # === API Keys (opcionales, con defaults vacíos) ===
-    openai_api_key: str = Field(default="", env="OPENAI_API_KEY")
-    openai_api_key_1: str = Field(default="", env="OPENAI_API_KEY_1")
-    openai_api_key_2: str = Field(default="", env="OPENAI_API_KEY_2")
-    openai_api_key_3: str = Field(default="", env="OPENAI_API_KEY_3")
-    chatbot_master_api_key: str = Field(default="", env="CHATBOT_MASTER_API_KEY")
+    # ========================================================================
+    #  BASES DE DATOS (PostgreSQL) - URLs internas de Railway
+    # ========================================================================
+    ctfom_database_url: str = Field(default="", env="CTFOM_DATABASE_URL")
+    bi_database_url: str = Field(default="", env="BI_DATABASE_URL")
+    database_url: str = Field(default="", env="DATABASE_URL")
 
-    # === Langfuse ===
+    # ========================================================================
+    #  REDIS (Sesiones y Buffer)
+    # ========================================================================
+    redis_url: str = Field(default="", env="REDIS_URL")
+    redis_ttl: int = Field(default=604800, env="REDIS_TTL")
+
+    # ========================================================================
+    #  LANGFUSE (Observabilidad)
+    # ========================================================================
     langfuse_public_key: str = Field(default="", env="LANGFUSE_PUBLIC_KEY")
     langfuse_secret_key: str = Field(default="", env="LANGFUSE_SECRET_KEY")
     langfuse_host: str = Field(default="https://cloud.langfuse.com", env="LANGFUSE_HOST")
     langfuse_tracing_environment: str = Field(default="production", env="LANGFUSE_TRACING_ENVIRONMENT")
 
-    # === Bases de datos (PostgreSQL) ===
-    # URLs internas de Railway (ej. postgresql://...@ctfom-postgres.railway.internal:5432/...)
-    ctfom_database_url: str = Field(default="", env="CTFOM_DATABASE_URL")
-    bi_database_url: str = Field(default="", env="BI_DATABASE_URL")
-    database_url: str = Field(default="", env="DATABASE_URL")   # Checkpoints de LangGraph (opcional)
-    database_public_url: str = Field(default="", env="DATABASE_PUBLIC_URL")  # No usar para conexiones internas
+    # ========================================================================
+    #  OPENAI (Modelos LLM) - con fallback a _1, _2, _3
+    # ========================================================================
+    openai_api_key_1: str = Field(default="", env="OPENAI_API_KEY_1")
+    openai_api_key_2: str = Field(default="", env="OPENAI_API_KEY_2")
+    openai_api_key_3: str = Field(default="", env="OPENAI_API_KEY_3")
 
-    # === Redis ===
-    redis_url: str = Field(default="", env="REDIS_URL")
-    redis_ttl: int = Field(default=604800, env="REDIS_TTL")
-    redis_password: str = Field(default="", env="REDIS_PASSWORD")
-    redis_host: str = Field(default="", env="REDISHOST")
+    @property
+    def openai_api_key(self) -> str:
+        """Devuelve la primera clave de OpenAI disponible."""
+        for key in [self.openai_api_key_1, self.openai_api_key_2, self.openai_api_key_3]:
+            if key:
+                return key
+        return os.getenv("OPENAI_API_KEY", "")  # Fallback final
 
-    # === Odoo ===
+    # ========================================================================
+    #  SEGURIDAD API
+    # ========================================================================
+    chatbot_master_api_key: str = Field(default="sk_dev_fallback_key", env="CHATBOT_MASTER_API_KEY")
+
+    # ========================================================================
+    #  CORREO (Gmail)
+    # ========================================================================
+    controller_email: str = Field(default="joseardon@aisa.com.gt", env="CONTROLLER_EMAIL")
+    smtp_user: str = Field(default="AISA Bot", env="SMTP_USER")
+    gmail_refresh_token: str = Field(default="", env="GMAIL_REFRESH_TOKEN")
+    gmail_client_id: str = Field(default="", env="GMAIL_CLIENT_ID")
+    gmail_client_secret: str = Field(default="", env="GMAIL_CLIENT_SECRET")
+
+    # ========================================================================
+    #  ODOO (ERP)
+    # ========================================================================
     odoo_host: str = Field(default="34.75.123.223", env="ODOO_HOST")
     odoo_db: str = Field(default="aisa_prod", env="ODOO_DB")
     odoo_user: str = Field(default="agente_n8n", env="ODOO_USER")
@@ -49,30 +74,26 @@ class Settings(BaseSettings):
         env="ODOO_ONGRID_DOMAIN"
     )
 
-    # === Correo (Gmail) ===
-    controller_email: str = Field(default="joseardon@aisa.com.gt", env="CONTROLLER_EMAIL")
-    smtp_user: str = Field(default="AISA Bot", env="SMTP_USER")
-    gmail_refresh_token: str = Field(default="", env="GMAIL_REFRESH_TOKEN")
-    gmail_client_id: str = Field(default="", env="GMAIL_CLIENT_ID")
-    gmail_client_secret: str = Field(default="", env="GMAIL_CLIENT_SECRET")
-
-    # === Webhooks (n8n, Apichat) ===
+    # ========================================================================
+    #  WEBHOOKS (n8n, Apichat)
+    # ========================================================================
     n8n_webhook_url: str = Field(default="", env="N8N_WEBHOOK_URL")
     apichat_instance: str = Field(default="", env="APICHAT_INSTANCE")
     apichat_endpoint: str = Field(default="", env="APICHAT_ENDPOINT")
     apichat_token: str = Field(default="", env="APICHAT_TOKEN")
 
-    # === URLs públicas ===
+    # ========================================================================
+    #  URLs PÚBLICAS
+    # ========================================================================
     backend_url: str = Field(
         default="https://jarvi-backend-production.up.railway.app",
         env="BACKEND_URL"
     )
-    api_url: str = Field(default="", env="API_URL")
 
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
-        extra = "ignore"  # Ignorar variables extra no declaradas
+        extra = "ignore"  # Ignorar variables extra
 
-# Instancia única (singleton)
+# Instancia única
 settings = Settings()
