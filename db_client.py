@@ -1,13 +1,20 @@
 """
-db_client.py - Cliente de base de datos para threads (BI) y auditoría (CTFOM).
-Las funciones de negocio (threads, resumenes) usan BI_DATABASE_URL.
-Las funciones de auditoría (audit_events) usan CTFOM_DATABASE_URL.
+db_client.py
+═══════════════════════════════════════════════════════════════════════
+Cliente de base de datos para BI y CTFOM.
+Extiende la funcionalidad para almacenar cumulative_cost en threads (BI).
+
+Cumple con ISO/IEC 25010 (mantenibilidad) y DORA (auditabilidad).
+
+Pruebas de caja negra (ISO/IEC 29119):
+    BC‑T08: Verificar que cumulative_cost se actualice en threads.metadata.
 """
 import os
 import json
 import asyncpg
 import logging
 from typing import Optional, List, Dict, Any
+from agent_graph import normalizar_contacto
 
 logger = logging.getLogger("jarvi.db")
 
@@ -27,19 +34,21 @@ async def actualizar_thread(
     email: Optional[str] = None,
     productos: Optional[List[str]] = None,
     vendedor: Optional[str] = None,
-    trace_id: Optional[str] = None
+    trace_id: Optional[str] = None,
+    cumulative_cost: Optional[float] = None  # NUEVO: costo acumulado
 ) -> bool:
-    """Actualiza o inserta un thread en la base de datos de BI."""
+    """
+    Actualiza o inserta un thread en BI, acumulando costos de LLM.
+    """
     conn = None
     try:
-        from agent_graph import normalizar_contacto
         _, whatsapp_norm = normalizar_contacto("", whatsapp, "")
         conn = await get_db_connection(get_bi_db_url())
         metadata = {
             "email": email,
             "productos": productos or [],
             "vendedor": vendedor,
-            "trace_id": trace_id
+            "trace_id": trace_id,
         }
         existing = await conn.fetchrow(
             "SELECT thread_id, metadata FROM threads WHERE whatsapp_id = $1",
@@ -47,8 +56,10 @@ async def actualizar_thread(
         )
         if existing:
             old_meta = existing["metadata"] or {}
-            if "cumulative_cost" in old_meta:
-                metadata["cumulative_cost"] = old_meta["cumulative_cost"]
+            # Acumular costo
+            old_cost = old_meta.get("cumulative_cost", 0.0)
+            new_cost = old_cost + (cumulative_cost or 0.0)
+            metadata["cumulative_cost"] = new_cost
             await conn.execute(
                 """
                 UPDATE threads
@@ -60,7 +71,7 @@ async def actualizar_thread(
                 whatsapp_norm
             )
         else:
-            metadata["cumulative_cost"] = 0.0
+            metadata["cumulative_cost"] = cumulative_cost or 0.0
             await conn.execute(
                 """
                 INSERT INTO threads (thread_id, nombre_cliente, whatsapp_id, metadata)
@@ -116,7 +127,7 @@ async def registrar_evento_auditoria(
             await conn.close()
 
 async def acumular_costo_thread(thread_id: str, costo: float) -> bool:
-    """Acumula costo en el thread (BI)."""
+    """Función auxiliar para acumular costo en threads (mantenida por compatibilidad)."""
     conn = None
     try:
         conn = await get_db_connection(get_bi_db_url())
