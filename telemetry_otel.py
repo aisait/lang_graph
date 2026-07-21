@@ -48,8 +48,8 @@ def init_telemetry(app=None):
     trace_provider = TracerProvider()
     span_processor = BatchSpanProcessor(
         exporter,
-        max_queue_size=1024,
-        schedule_delay_millis=5000,        # <--- CORREGIDO
+        max_queue_size=2048,              # Aumentado para evitar pérdidas
+        schedule_delay_millis=1000,       # Reducido a 1s para flush más rápido
         max_export_batch_size=512,
         export_timeout_millis=10000,
     )
