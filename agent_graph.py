@@ -120,14 +120,14 @@ class AgentState(TypedDict):
 def observe_node(layer: str = "graph", node_name: str = ""):
     def decorator(func):
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        async def wrapper(*args, **kwargs):
             trace_id = trace_id_var.get()
             span_id = str(uuid.uuid4())
             parent = span_id_var.get()
             span_id_var.set(span_id)
             start = time.perf_counter()
             try:
-                result = func(*args, **kwargs)
+                result = await func(*args, **kwargs)
                 elapsed = (time.perf_counter() - start) * 1000
                 schedule_telemetry_event(
                     trace_id, span_id, parent,
@@ -150,7 +150,7 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA CON DOCSTRING (CORREGIDO)
+# HERRAMIENTA CON DOCSTRING
 # =============================================================================
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
@@ -275,12 +275,12 @@ def extraer_tipo_producto(mensaje: str) -> Optional[str]:
 def otel_span_node(node_name: str):
     def decorator(func):
         @functools.wraps(func)
-        def wrapper(state, config=None):
+        async def wrapper(state, config=None):
             with tracer.start_as_current_span(node_name) as span:
                 span.set_attribute("node.name", node_name)
                 span.set_attribute("gen_ai.system", "openai")
                 span.set_attribute("gen_ai.operation", node_name)
-                result = func(state, config) if config is not None else func(state)
+                result = await func(state, config) if config is not None else await func(state)
                 if isinstance(result, dict) and "contexto_tecnico" in result:
                     ctx = result["contexto_tecnico"]
                     if ctx.get("topologia"):
@@ -303,7 +303,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     @auditar_fase(nombre_fase="Clasificador de Intención Comercial", criticidad="MEDIA")
     @observe_node(node_name="clasificar_intencion_comercial")
     @otel_span_node("clasificar_intencion_comercial")
-    def clasificar_intencion_comercial_node(state: AgentState):
+    async def clasificar_intencion_comercial_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
@@ -320,7 +320,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     @auditar_fase(nombre_fase="Validador de Ubicación del Cliente", criticidad="MEDIA")
     @observe_node(node_name="validar_ubicacion_cliente")
     @otel_span_node("validar_ubicacion_cliente")
-    def validar_ubicacion_cliente_node(state: AgentState):
+    async def validar_ubicacion_cliente_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
@@ -341,7 +341,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     @auditar_fase(nombre_fase="Selección de Productos", criticidad="ALTA")
     @observe_node(node_name="seleccionar_productos")
     @otel_span_node("seleccionar_productos")
-    def seleccionar_productos_node(state: AgentState):
+    async def seleccionar_productos_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if ctx.get("tipo_producto"):
@@ -361,7 +361,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     @auditar_fase(nombre_fase="Generación de Respuesta Comercial", criticidad="ALTA")
     @observe_node(node_name="generar_respuesta_comercial")
     @otel_span_node("generar_respuesta_comercial")
-    def generar_respuesta_comercial_node(state: AgentState, config: RunnableConfig):
+    async def generar_respuesta_comercial_node(state: AgentState, config: RunnableConfig):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
@@ -384,7 +384,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         if ultimo_mensaje and (not ctx.get("nombre") or ctx.get("nombre") == "Usuario" or not ctx.get("whatsapp")):
             try:
-                extraccion = extractor_llm.invoke(f"Identifica nombre o teléfono. Mensaje: {ultimo_mensaje}")
+                extraccion = await extractor_llm.ainvoke(f"Identifica nombre o teléfono. Mensaje: {ultimo_mensaje}")
                 if extraccion.nombre and (not ctx.get("nombre") or ctx["nombre"] == "Usuario"):
                     ctx["nombre"] = extraccion.nombre
                 if extraccion.telefono and (not ctx.get("whatsapp") or ctx["whatsapp"] == "Pendiente"):
@@ -458,7 +458,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             llm_span.set_attribute("gen_ai.prompt.0.role", "system")
             llm_span.set_attribute("gen_ai.prompt.0.content", sanitize_pii(prompt_text[:5000]))
 
-            respuesta = llm.invoke([prompt_sistema] + state["messages"], config=config)
+            respuesta = await llm.ainvoke([prompt_sistema] + state["messages"], config=config)
 
             llm_span.set_attribute("gen_ai.completion.0.role", "assistant")
             llm_span.set_attribute("gen_ai.completion.0.content", sanitize_pii(respuesta.content[:5000]))
@@ -478,7 +478,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     @observe_node(node_name="anexar_caso_respuesta")
     @otel_span_node("anexar_caso_respuesta")
-    def anexar_caso_respuesta_node(state: AgentState, config: RunnableConfig):
+    async def anexar_caso_respuesta_node(state: AgentState, config: RunnableConfig):
         messages = state.get("messages", [])
         caso = config.get("metadata", {}).get("caso", "000000000000")
         if messages and isinstance(messages[-1], AIMessage):
