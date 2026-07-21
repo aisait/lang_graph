@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # Langfuse
     langfuse_public_key: str
     langfuse_secret_key: str
-    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_host: str = "https://langfuse-web-production-2599.up.railway.app/"
     langfuse_tracing_environment: str = "production"
 
     # Bases de datos
