@@ -355,17 +355,18 @@ async def lifespan(app: FastAPI):
     print(f"OpenTelemetry init: {telemetry_ok}")
 
     # ============================
-    # 1. CREACIÓN Y VALIDACIÓN DEL CLIENTE LANGFUSE
+    # 1. CREACIÓN Y VALIDACIÓN DEL CLIENTE LANGFUSE (VERSIÓN ROBUSTA)
     # ============================
     try:
-        from langfuse import Langfuse
+        from langfuse import Langfuse as LangfuseClient
         host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         pk = os.getenv("LANGFUSE_PUBLIC_KEY", "")
         sk = os.getenv("LANGFUSE_SECRET_KEY", "")
         print(f"Langfuse Host: {host}")
+        print(f"Langfuse Public Key: {pk[:10] if pk else 'No definida'}...")
 
         if pk and sk:
-            langfuse_client = Langfuse(
+            langfuse_client = LangfuseClient(
                 public_key=pk,
                 secret_key=sk,
                 host=host
@@ -386,10 +387,14 @@ async def lifespan(app: FastAPI):
                     # No se pone None para no deshabilitar completamente; se reintentará en cada request.
             else:
                 print("❌ ERROR CRÍTICO: 'Langfuse' no tiene método 'trace'. Versionado incorrecto.")
+                print(f"   Atributos disponibles: {dir(langfuse_client)}")
                 langfuse_client = None
         else:
             print("❌ Langfuse no configurado (faltan keys). La trazabilidad LLM estará deshabilitada.")
             langfuse_client = None
+    except ImportError as e:
+        print(f"❌ Error de importación: {e}. Asegúrate de que langfuse esté instalado (versión 4.14.1).")
+        langfuse_client = None
     except Exception as e:
         print(f"❌ Error al crear cliente Langfuse: {e}")
         langfuse_client = None
@@ -747,10 +752,10 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
 
     # ============================
-    # 1. CREAR TRAZA PRINCIPAL (solo si cliente Langfuse está operativo)
+    # 1. CREAR TRAZA PRINCIPAL (con fallback silencioso)
     # ============================
     trace = None
-    if langfuse_client:
+    if langfuse_client and hasattr(langfuse_client, 'trace'):
         try:
             trace = langfuse_client.trace(
                 name=f"chat_{caso}",
@@ -772,7 +777,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             print(f"❌ Error al crear traza Langfuse: {e}")
             trace = None
     else:
-        print("Langfuse client no disponible. No se creará traza.")
+        print("⚠️ Langfuse client no disponible o sin método 'trace'. Traza omitida.")
         trace = None
 
     # ============================
@@ -786,7 +791,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             print(f"Error al crear CallbackHandler: {e}")
             langfuse_handler = None
 
-    # Preparar sesión y estado (igual que antes)
+    # Preparar sesión y estado
     sesion_redis = None
     historial = []
     if redis_client:
@@ -872,14 +877,13 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         config["callbacks"] = [langfuse_handler]
 
     # ============================
-    # 3. EJECUTAR GRAFO
+    # 3. EJECUTAR GRAFO (con manejo de errores)
     # ============================
     async with locks[thread_id]:
         try:
             resultado = await graph.ainvoke(estado_inicial, config=config)
         except Exception as e:
             print(f"❌ Error en ejecución del grafo: {e}")
-            # Retornar mensaje de error en lugar de colapsar
             yield f"data: {json.dumps({'token': 'Lo siento, ocurrió un error interno. Por favor, intenta de nuevo más tarde.'})}\n\n"
             ctx_error = {
                 "chat_id": chat_id,
