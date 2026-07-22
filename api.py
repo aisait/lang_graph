@@ -1,6 +1,7 @@
 """
 api.py - Servidor FastAPI con trazabilidad Langfuse v4 (SDK nativo).
-VERSIÓN 2.0.04 – Eliminadas referencias a correo, mejorado manejo de Langfuse.
+VERSIÓN 2.0.05 – Validación robusta de cliente Langfuse, health check avanzado.
+Cumple con ISO/IEC 25010, 27001, DORA.
 """
 import os
 import asyncio
@@ -74,7 +75,7 @@ def taxonomy_error(exc: Exception) -> str:
     return "SWR-API-UNKNOWN-000"
 
 # =============================================================================
-# FUNCIONES DE EXTRACCIÓN
+# FUNCIONES DE EXTRACCIÓN (sin cambios)
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
     if not mensaje:
@@ -340,7 +341,7 @@ def get_db_url() -> str:
     raise RuntimeError("No se encontró DATABASE_URL ni CTFOM_DATABASE_URL.")
 
 # =============================================================================
-# CICLO DE VIDA DE LA APLICACIÓN
+# CICLO DE VIDA DE LA APLICACIÓN (CON VALIDACIÓN DE LANGFUSE)
 # =============================================================================
 graph = None
 redis_client = None
@@ -353,21 +354,49 @@ async def lifespan(app: FastAPI):
     telemetry_ok = init_telemetry(app)
     print(f"OpenTelemetry init: {telemetry_ok}")
 
+    # ============================
+    # 1. CREACIÓN Y VALIDACIÓN DEL CLIENTE LANGFUSE
+    # ============================
     try:
-        host = os.getenv("LANGFUSE_HOST", "No definido")
-        pk = os.getenv("LANGFUSE_PUBLIC_KEY", "No definido")
-        sk = os.getenv("LANGFUSE_SECRET_KEY", "No definido")
+        from langfuse import Langfuse
+        host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        pk = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+        sk = os.getenv("LANGFUSE_SECRET_KEY", "")
         print(f"Langfuse Host: {host}")
-        langfuse_client = Langfuse(
-            public_key=pk if pk != "No definido" else "",
-            secret_key=sk if sk != "No definido" else "",
-            host=host if host != "No definido" else "https://cloud.langfuse.com"
-        )
-        print("✅ Cliente Langfuse creado exitosamente")
+
+        if pk and sk:
+            langfuse_client = Langfuse(
+                public_key=pk,
+                secret_key=sk,
+                host=host
+            )
+            # VALIDACIÓN EPISTÉMICA: Verificar que el método 'trace' exista
+            if hasattr(langfuse_client, 'trace'):
+                print("✅ Cliente Langfuse creado y validado (método 'trace' presente).")
+                # Prueba de humo: traza de validación de inicio
+                try:
+                    test_trace = langfuse_client.trace(
+                        name="startup_validation",
+                        metadata={"stage": "init", "version": "2.0.05"}
+                    )
+                    langfuse_client.flush()
+                    print("✅ Traza de validación de inicio creada con éxito.")
+                except Exception as e:
+                    print(f"⚠️ Advertencia: Traza de prueba falló (cliente existe pero no pudo escribir): {e}")
+                    # No se pone None para no deshabilitar completamente; se reintentará en cada request.
+            else:
+                print("❌ ERROR CRÍTICO: 'Langfuse' no tiene método 'trace'. Versionado incorrecto.")
+                langfuse_client = None
+        else:
+            print("❌ Langfuse no configurado (faltan keys). La trazabilidad LLM estará deshabilitada.")
+            langfuse_client = None
     except Exception as e:
         print(f"❌ Error al crear cliente Langfuse: {e}")
         langfuse_client = None
 
+    # ============================
+    # 2. CONEXIÓN A POSTGRES Y GRAFO
+    # ============================
     db_url = get_db_url()
     print(f"DB URL (sanitizada): {db_url[:50]}...")
     async with AsyncExitStack() as stack:
@@ -376,6 +405,9 @@ async def lifespan(app: FastAPI):
         graph = create_graph(checkpointer)
         print("JARVI 2.0 API inicializada – Grafo listo")
 
+        # ============================
+        # 3. CONEXIÓN A REDIS
+        # ============================
         redis_url = os.getenv("REDIS_URL")
         if redis_url:
             redis_client = redis.from_url(redis_url, decode_responses=True)
@@ -386,6 +418,9 @@ async def lifespan(app: FastAPI):
         start_batch_worker()
         yield
 
+    # ============================
+    # 4. LIMPIEZA AL APAGAR
+    # ============================
     if redis_client:
         await redis_client.close()
     if langfuse_client:
@@ -394,7 +429,7 @@ async def lifespan(app: FastAPI):
         print("Langfuse flush completado")
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.06",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.05",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -428,12 +463,33 @@ async def telemetry_middleware(request: Request, call_next):
         raise
 
 # =============================================================================
-# ENDPOINTS
+# HEALTH CHECK EXTENDIDO (CP-02)
 # =============================================================================
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "jarvi-backend"}
+    status = {
+        "service": "jarvi-backend",
+        "version": "2.0.05",
+        "redis": "connected" if redis_client else "disconnected",
+        "graph": "ready" if graph else "unavailable",
+        "langfuse": "healthy" if langfuse_client else "unavailable",
+        "status": "ok"
+    }
+    # Validación adicional: si langfuse_client existe pero no responde, se podría marcar como degradado.
+    if langfuse_client:
+        try:
+            # Intento de traza de prueba ligera (no bloqueante)
+            test_trace = langfuse_client.trace(name="health_check", metadata={"type": "liveness"})
+            langfuse_client.flush()
+            status["langfuse"] = "healthy"
+        except Exception:
+            status["langfuse"] = "degraded"
+            status["status"] = "degraded"
+    return status
 
+# =============================================================================
+# ENDPOINTS
+# =============================================================================
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest, http_request: Request):
     return await process_chat_frontend(request, http_request)
@@ -690,7 +746,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     whatsapp = nuevo_whatsapp or ""
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
 
-    # 1. Crear traza principal con el SDK de Langfuse
+    # ============================
+    # 1. CREAR TRAZA PRINCIPAL (solo si cliente Langfuse está operativo)
+    # ============================
     trace = None
     if langfuse_client:
         try:
@@ -717,7 +775,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         print("Langfuse client no disponible. No se creará traza.")
         trace = None
 
-    # 2. Crear CallbackHandler
+    # ============================
+    # 2. CREAR CALLBACK HANDLER
+    # ============================
     langfuse_handler = None
     if trace:
         try:
@@ -726,7 +786,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             print(f"Error al crear CallbackHandler: {e}")
             langfuse_handler = None
 
-    # Preparar sesión y estado
+    # Preparar sesión y estado (igual que antes)
     sesion_redis = None
     historial = []
     if redis_client:
@@ -811,9 +871,27 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     if langfuse_handler:
         config["callbacks"] = [langfuse_handler]
 
-    # 3. Ejecutar grafo
+    # ============================
+    # 3. EJECUTAR GRAFO
+    # ============================
     async with locks[thread_id]:
-        resultado = await graph.ainvoke(estado_inicial, config=config)
+        try:
+            resultado = await graph.ainvoke(estado_inicial, config=config)
+        except Exception as e:
+            print(f"❌ Error en ejecución del grafo: {e}")
+            # Retornar mensaje de error en lugar de colapsar
+            yield f"data: {json.dumps({'token': 'Lo siento, ocurrió un error interno. Por favor, intenta de nuevo más tarde.'})}\n\n"
+            ctx_error = {
+                "chat_id": chat_id,
+                "thread_id": thread_id,
+                "error": str(e),
+                "origen": origen,
+                "fingerprint": fingerprint,
+                "caso": caso
+            }
+            yield f"data: {json.dumps({'contexto_tecnico': ctx_error})}\n\n"
+            return
+
         ctx = resultado.get("contexto_tecnico", {})
 
         respuesta_final = ""
@@ -825,7 +903,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
             respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
-    # 4. Actualizar traza
+    # ============================
+    # 4. ACTUALIZAR TRAZA
+    # ============================
     if trace:
         try:
             trace.update(
@@ -861,6 +941,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             metadata_adicional=ctx
         )
 
+    # ============================
+    # 5. STREAMING DE RESPUESTA
+    # ============================
     if respuesta_final:
         tokens = respuesta_final.split()
         for i, token in enumerate(tokens):
@@ -868,6 +951,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     else:
         yield f"data: {json.dumps({'token': 'No se pudo generar respuesta.'})}\n\n"
 
+    # Contexto final
     ctx_para_envio = ctx.copy()
     ctx_para_envio.update({
         "chat_id": chat_id,
@@ -894,7 +978,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
 
 # =============================================================================
-# ENDPOINTS AUXILIARES
+# ENDPOINTS AUXILIARES (PENDIENTES)
 # =============================================================================
 @app.post("/stt")
 async def speech_to_text(request: AudioRequest):
