@@ -1,6 +1,6 @@
 """
 config.py - Configuración central con mapeo explícito de variables de entorno.
-Todos los campos tienen valores predeterminados para evitar fallos.
+VERSIÓN 2.0.04 – Eliminadas variables obsoletas de correo y Gmail.
 """
 import os
 from dotenv import load_dotenv
@@ -48,14 +48,7 @@ class Settings(BaseSettings):
     odoo_product_model: str = Field(default="product.template", env="ODOO_PRODUCT_MODEL")
     odoo_ongrid_domain: str = Field(default='[["sale_ok","=",True],["type","=","product"]]', env="ODOO_ONGRID_DOMAIN")
 
-    # Correo
-    controller_email: str = Field(default="joseardon@aisa.com.gt", env="CONTROLLER_EMAIL")
-    smtp_user: str = Field(default="AISA Bot", env="SMTP_USER")
-    gmail_refresh_token: str = Field(default="", env="GMAIL_REFRESH_TOKEN")
-    gmail_client_id: str = Field(default="", env="GMAIL_CLIENT_ID")
-    gmail_client_secret: str = Field(default="", env="GMAIL_CLIENT_SECRET")
-
-    # Webhooks
+    # Webhooks (SOLO APICHAT, sin correo)
     n8n_webhook_url: str = Field(default="", env="N8N_WEBHOOK_URL")
     apichat_instance: str = Field(default="", env="APICHAT_INSTANCE")
     apichat_endpoint: str = Field(default="", env="APICHAT_ENDPOINT")
