@@ -4,17 +4,15 @@ telemetry.py
 Telemetría CTFOM (infraestructura y auditoría).
 Captura eventos de ejecución con metadata enriquecida.
 
+VERSIÓN HOMOGENEIZADA 2.0.04 - Soporte para funciones síncronas y asíncronas.
 Cumple con ISO/IEC 25010 (mantenibilidad) y DORA (registro de incidentes).
-
-Pruebas de caja negra (ISO/IEC 29119):
-    BC‑T07: Ejecutar nodo → verificar que telemetry_events tenga metadata enriquecida.
-    BC‑T09: Despacho de lead → verificar dispatch_events con ack_received.
 """
-import asyncio
+import asyncio  # <--- NUEVA IMPORTACIÓN
 import os
 import json
 import uuid
 import logging
+import functools
 from contextvars import ContextVar
 from typing import Optional, Any
 from psycopg_pool import AsyncConnectionPool
@@ -131,3 +129,75 @@ def generate_trace_span():
     span_id_var.set(span_id)
     parent_span_id_var.set("")
     return trace_id, span_id
+
+# =============================================================================
+# DECORADOR @observe_node HOMOGENEIZADO
+# =============================================================================
+def observe_node(layer: str = "graph", node_name: str = ""):
+    """
+    Decorador homogeneizado para CTFOM. Detecta si la función es síncrona o asíncrona
+    y la envuelve correctamente para registrar eventos de telemetría.
+    """
+    def decorator(func):
+        # Caso 1: Función Asíncrona
+        if asyncio.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                trace_id = trace_id_var.get()
+                span_id = str(uuid.uuid4())
+                parent = span_id_var.get()
+                span_id_var.set(span_id)
+                start = asyncio.get_event_loop().time()
+                try:
+                    result = await func(*args, **kwargs)
+                    elapsed = (asyncio.get_event_loop().time() - start) * 1000
+                    schedule_telemetry_event(
+                        trace_id, span_id, parent,
+                        layer=layer, node_name=node_name,
+                        event_type="END", latency_ms=elapsed
+                    )
+                    return result
+                except Exception as e:
+                    elapsed = (asyncio.get_event_loop().time() - start) * 1000
+                    schedule_telemetry_event(
+                        trace_id, span_id, parent,
+                        layer=layer, node_name=node_name,
+                        event_type="ERROR", latency_ms=elapsed,
+                        error_code=f"SWR-LGG-{type(e).__name__}"
+                    )
+                    raise
+                finally:
+                    span_id_var.set(parent)
+            return async_wrapper
+        
+        # Caso 2: Función Síncrona
+        else:
+            @functools.wraps(func)
+            def sync_wrapper(*args, **kwargs):
+                trace_id = trace_id_var.get()
+                span_id = str(uuid.uuid4())
+                parent = span_id_var.get()
+                span_id_var.set(span_id)
+                start = asyncio.get_event_loop().time()  # También funciona en hilos
+                try:
+                    result = func(*args, **kwargs)
+                    elapsed = (asyncio.get_event_loop().time() - start) * 1000
+                    schedule_telemetry_event(
+                        trace_id, span_id, parent,
+                        layer=layer, node_name=node_name,
+                        event_type="END", latency_ms=elapsed
+                    )
+                    return result
+                except Exception as e:
+                    elapsed = (asyncio.get_event_loop().time() - start) * 1000
+                    schedule_telemetry_event(
+                        trace_id, span_id, parent,
+                        layer=layer, node_name=node_name,
+                        event_type="ERROR", latency_ms=elapsed,
+                        error_code=f"SWR-LGG-{type(e).__name__}"
+                    )
+                    raise
+                finally:
+                    span_id_var.set(parent)
+            return sync_wrapper
+    return decorator
