@@ -1,7 +1,7 @@
 """
 api.py - Servidor FastAPI con trazabilidad Langfuse v3 mediante API REST.
 VERSIÓN 2.0.16 – Añadida observación GENERATION para tokens, costos y latencia.
-Cumple con ISO/IEC 25010, 27001, DORA.
+Cumple con ISO/IEC 25010, 27001, DORA. 15
 """
 import os
 import asyncio
