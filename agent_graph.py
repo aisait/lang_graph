@@ -1,6 +1,6 @@
 """
-agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación.
-VERSIÓN 2.0.04 – Eliminada dependencia de correo, manejado webhook vacío.
+agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
+VERSIÓN 2.0.04 – Auditada: decoradores OTLP desactivados para compatibilidad con Langfuse v3.
 """
 import os
 import time
@@ -111,7 +111,7 @@ class AgentState(TypedDict):
     contexto_tecnico: InferenciaEnergetica
 
 # =============================================================================
-# DECORADOR CTFOM
+# DECORADOR CTFOM (MANTENIDO, NO AFECTA A LANGFUSE)
 # =============================================================================
 def observe_node(layer: str = "graph", node_name: str = ""):
     def decorator(func):
@@ -235,27 +235,22 @@ def extraer_tipo_producto(mensaje: str) -> Optional[str]:
     return None
 
 def otel_span_node(node_name: str):
+    """
+    Decorador que instrumenta un nodo con OpenTelemetry.
+    COMENTADO EN PRODUCCIÓN PARA EVITAR CORRUPCIÓN EN ClickHouse v3.
+    """
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(state, config=None):
-            with tracer.start_as_current_span(node_name) as span:
-                span.set_attribute("node.name", node_name)
-                span.set_attribute("gen_ai.system", "openai")
-                span.set_attribute("gen_ai.operation", node_name)
-                result = await func(state, config) if config is not None else await func(state)
-                if isinstance(result, dict) and "contexto_tecnico" in result:
-                    ctx = result["contexto_tecnico"]
-                    if ctx.get("topologia"):
-                        span.set_attribute("topologia", ctx["topologia"])
-                    if ctx.get("tipo_producto"):
-                        span.set_attribute("tipo_producto", ctx["tipo_producto"])
-                span.set_status(Status(StatusCode.OK))
-                return result
+            # Este decorador está desactivado (comentado en cada nodo)
+            # Se mantiene la función por si se requiere en el futuro con Langfuse v4.
+            result = await func(state, config) if config is not None else await func(state)
+            return result
         return wrapper
     return decorator
 
 # =============================================================================
-# CONSTRUCCIÓN DEL GRAFO (Se mantiene funcionalidad original)
+# CONSTRUCCIÓN DEL GRAFO
 # =============================================================================
 def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
@@ -264,7 +259,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     @auditar_fase(nombre_fase="Clasificador de Intención Comercial", criticidad="MEDIA")
     @observe_node(node_name="clasificar_intencion_comercial")
-    @otel_span_node("clasificar_intencion_comercial")
+    # @otel_span_node("clasificar_intencion_comercial")  # <--- COMENTADO PARA v3
     async def clasificar_intencion_comercial_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
@@ -281,7 +276,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     @auditar_fase(nombre_fase="Validador de Ubicación del Cliente", criticidad="MEDIA")
     @observe_node(node_name="validar_ubicacion_cliente")
-    @otel_span_node("validar_ubicacion_cliente")
+    # @otel_span_node("validar_ubicacion_cliente")  # <--- COMENTADO PARA v3
     async def validar_ubicacion_cliente_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
@@ -302,7 +297,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     @auditar_fase(nombre_fase="Selección de Productos", criticidad="ALTA")
     @observe_node(node_name="seleccionar_productos")
-    @otel_span_node("seleccionar_productos")
+    # @otel_span_node("seleccionar_productos")  # <--- COMENTADO PARA v3
     async def seleccionar_productos_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
@@ -322,7 +317,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     @auditar_fase(nombre_fase="Generación de Respuesta Comercial", criticidad="ALTA")
     @observe_node(node_name="generar_respuesta_comercial")
-    @otel_span_node("generar_respuesta_comercial")
+    # @otel_span_node("generar_respuesta_comercial")  # <--- COMENTADO PARA v3
     async def generar_respuesta_comercial_node(state: AgentState, config: RunnableConfig):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
@@ -434,7 +429,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
     @observe_node(node_name="anexar_caso_respuesta")
-    @otel_span_node("anexar_caso_respuesta")
+    # @otel_span_node("anexar_caso_respuesta")  # <--- COMENTADO PARA v3
     async def anexar_caso_respuesta_node(state: AgentState, config: RunnableConfig):
         messages = state.get("messages", [])
         caso = config.get("metadata", {}).get("caso", "000000000000")
