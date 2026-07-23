@@ -1,6 +1,6 @@
 """
 config.py - Configuración central con mapeo explícito de variables de entorno.
-VERSIÓN 2.0.04 – Eliminadas variables obsoletas de correo y Gmail.
+VERSIÓN 2.0.05 – Añadidas variables para Langfuse Project ID y Release.
 """
 import os
 from dotenv import load_dotenv
@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = Field(default="", env="LANGFUSE_SECRET_KEY")
     langfuse_host: str = Field(default="https://cloud.langfuse.com", env="LANGFUSE_HOST")
     langfuse_tracing_environment: str = Field(default="production", env="LANGFUSE_TRACING_ENVIRONMENT")
+    langfuse_project_id: str = Field(default="", env="LANGFUSE_PROJECT_ID")  # <--- NUEVO: Centraliza Project ID
 
     # Bases de datos
     ctfom_database_url: str = Field(default="", env="CTFOM_DATABASE_URL")
@@ -54,8 +55,9 @@ class Settings(BaseSettings):
     apichat_endpoint: str = Field(default="", env="APICHAT_ENDPOINT")
     apichat_token: str = Field(default="", env="APICHAT_TOKEN")
 
-    # URLs públicas
+    # URLs públicas y Release
     backend_url: str = Field(default="https://jarvi-backend-production.up.railway.app", env="BACKEND_URL")
+    release_version: str = Field(default="jarvi-2.0.09", env="RELEASE_VERSION")  # <--- NUEVO: Permite inyectar la versión desde Railway
 
     class Config:
         env_file = ".env"
