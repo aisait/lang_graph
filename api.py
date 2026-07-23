@@ -1,6 +1,8 @@
 """
 api.py - Servidor FastAPI con trazabilidad Langfuse v3 mediante API REST.
-VERSIÓN 2.0.11 – Compatibilidad garantizada con Langfuse Server v3.218.0 OSS.
+VERSIÓN 2.0.12 – Compatibilidad garantizada con Langfuse Server v3.218.0 OSS.
+Arquitectura: REST enriquecida con campos raíz (userId, sessionId, release, input, output)
+y scores nativos. Sin dependencia del SDK v4 para trazado.
 Cumple con ISO/IEC 25010, 27001, DORA.
 """
 import os
@@ -30,9 +32,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
 # =============================================================================
-# <--- FIX v3: ELIMINADAS importaciones de Langfuse SDK v4
-# from langfuse import Langfuse
-# from langfuse.langchain import CallbackHandler
+# <--- ARQUITECTURA: SE ELIMINA LA DEPENDENCIA DEL SDK v4 PARA TRAZADO
 # =============================================================================
 
 from telemetry_otel import init_telemetry, get_tracer, force_flush as otel_force_flush
@@ -63,7 +63,25 @@ LANGFUSE_PROJECT_ID = os.getenv("LANGFUSE_PROJECT_ID", "cmrnufyoj0006o902f3nrln4
 LANGFUSE_ENVIRONMENT = settings.langfuse_tracing_environment  # "production"
 
 # =============================================================================
-# <--- FIX v3: FUNCIONES REST PARA LANGFUSE (COMPATIBLES CON v3)
+# SEGURIDAD (ISO/IEC 27001) - FUNCIÓN RESTAURADA
+# =============================================================================
+API_KEY = settings.chatbot_master_api_key
+api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
+
+async def validar_api_key(auth: str | None = Security(api_key_header)):
+    if not auth or auth != f"Bearer {API_KEY}":
+        raise HTTPException(status_code=403, detail="Acceso no autorizado")
+    return auth
+
+locks = defaultdict(asyncio.Lock)
+
+def taxonomy_error(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        return f"SWR-API-MED-{exc.status_code}"
+    return "SWR-API-UNKNOWN-000"
+
+# =============================================================================
+# FUNCIONES AUXILIARES REST PARA LANGFUSE v3 (ENRIQUECIDAS)
 # =============================================================================
 def langfuse_basic_auth() -> str:
     credentials = f"{LANGFUSE_PUBLIC_KEY}:{LANGFUSE_SECRET_KEY}"
@@ -96,8 +114,8 @@ def crear_traza_langfuse(
         "id": trace_id,
         "projectId": LANGFUSE_PROJECT_ID,
         "name": name,
-        "userId": user_id,                # <--- FIX: Pobla "User" en UI
-        "sessionId": session_id,          # <--- FIX: Pobla "Session" en UI
+        "userId": user_id,                # <--- POBLA "User" EN UI
+        "sessionId": session_id,          # <--- POBLA "Session" EN UI
         "metadata": metadata,
         "tags": tags or [],
         "public": public,
@@ -106,10 +124,10 @@ def crear_traza_langfuse(
     }
     
     if input is not None:
-        payload["input"] = input
+        payload["input"] = input          # <--- POBLA "Input" EN UI
     
     if release:
-        payload["release"] = release      # <--- FIX: Pobla "Release" en UI
+        payload["release"] = release      # <--- POBLA "Release" EN UI
     
     resp = requests.post(url, json=payload, headers=headers, timeout=10)
     resp.raise_for_status()
@@ -125,15 +143,18 @@ def actualizar_traza_langfuse(trace_id: str, output: dict, metadata: dict = None
         "Content-Type": "application/json"
     }
     payload = {
-        "id": trace_id,                   # <--- FIX: PATCH requiere id en body para v3
-        "output": output,
+        "id": trace_id,                   # <--- PATCH requiere id en body para v3
+        "output": output,                 # <--- POBLA "Output" EN UI
         "metadata": metadata or {}
     }
     resp = requests.patch(url, json=payload, headers=headers, timeout=10)
     resp.raise_for_status()
 
 def crear_score_langfuse(trace_id: str, name: str, value, comment: str = None, data_type: str = "NUMERIC"):
-    """Registra un score (feedback) vía API REST de v3."""
+    """
+    Registra un score (feedback) vía API REST de v3.
+    data_type puede ser "NUMERIC" o "CATEGORICAL".
+    """
     url = f"{LANGFUSE_HOST}/api/public/scores"
     headers = {
         "Authorization": f"Basic {langfuse_basic_auth()}",
@@ -148,7 +169,7 @@ def crear_score_langfuse(trace_id: str, name: str, value, comment: str = None, d
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
     if data_type:
-        payload["dataType"] = data_type   # <--- FIX: Define si es NUMERIC o CATEGORICAL
+        payload["dataType"] = data_type   # <--- DEFINE SI ES NUMERIC O CATEGORICAL
     resp = requests.post(url, json=payload, headers=headers, timeout=10)
     resp.raise_for_status()
 
@@ -167,16 +188,15 @@ def calcular_puntaje_completitud(ctx: dict) -> float:
     presentes = 0
     for campo in CAMPOS_SCORE:
         valor = ctx.get(campo)
-        # Para listas, consideramos presente si no está vacía
         if isinstance(valor, list):
             if valor:
                 presentes += 1
-        elif valor:  # string, número, booleano
+        elif valor:
             presentes += 1
     return round((presentes / len(CAMPOS_SCORE)) * 100, 2)
 
 # =============================================================================
-# FUNCIONES AUXILIARES DE EXTRACCIÓN (sin cambios)
+# FUNCIONES AUXILIARES DE EXTRACCIÓN (SIN CAMBIOS - COPIADAS DE SU ORIGINAL)
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
     if not mensaje:
@@ -259,7 +279,7 @@ def normalizar_whatsapp_e164(telefono: str) -> str:
     return limpio
 
 # =============================================================================
-# FUNCIONES DE POSTGRESQL (sin cambios)
+# FUNCIONES DE POSTGRESQL (SIN CAMBIOS)
 # =============================================================================
 async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
                                    fingerprint: Optional[str] = None, origen: str = "desconocido") -> bool:
@@ -290,7 +310,7 @@ async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
         return False
 
 # =============================================================================
-# FUNCIONES DE REDIS (sin cambios)
+# FUNCIONES DE REDIS (SIN CAMBIOS)
 # =============================================================================
 REDIS_TTL = settings.redis_ttl
 HISTORIAL_LIMITE = 64
@@ -443,7 +463,6 @@ def get_db_url() -> str:
 
 # =============================================================================
 # CICLO DE VIDA DE LA APLICACIÓN (SIN LANGFUSE CLIENT)
-# <--- FIX v3: Eliminado langfuse_client y su inicialización
 # =============================================================================
 graph = None
 redis_client = None
@@ -480,11 +499,11 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.11",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.12",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
-# MIDDLEWARE DE TELEMETRÍA (sin cambios)
+# MIDDLEWARE DE TELEMETRÍA
 # =============================================================================
 @app.middleware("http")
 async def telemetry_middleware(request: Request, call_next):
@@ -514,13 +533,13 @@ async def telemetry_middleware(request: Request, call_next):
         raise
 
 # =============================================================================
-# HEALTH CHECK (sin cambios)
+# HEALTH CHECK
 # =============================================================================
 @app.get("/health")
 async def health_check():
     status = {
         "service": "jarvi-backend",
-        "version": "2.0.11",
+        "version": "2.0.12",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "healthy (REST v3)",
@@ -529,7 +548,7 @@ async def health_check():
     return status
 
 # =============================================================================
-# ENDPOINTS (sin cambios)
+# ENDPOINTS
 # =============================================================================
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest, http_request: Request):
@@ -543,7 +562,6 @@ async def chat_endpoint_stream(request: ChatRequest, http_request: Request):
 async def webhook_whatsapp(payload: dict):
     return await process_webhook_whatsapp(payload)
 
-# <--- FIX v3: Endpoint /feedback modificado para usar REST
 @app.post("/feedback")
 async def registrar_feedback(feedback: dict):
     if "trace_id" not in feedback:
@@ -565,7 +583,7 @@ async def registrar_feedback(feedback: dict):
         raise HTTPException(status_code=500, detail=f"Error al registrar feedback: {str(e)}")
 
 # =============================================================================
-# PROCESAMIENTO DE CHAT FRONTEND (sin cambios)
+# PROCESAMIENTO DE CHAT FRONTEND (SIN CAMBIOS)
 # =============================================================================
 async def process_chat_frontend(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
     fingerprint = chat_request.metadata.get("fingerprint") or http_request.headers.get("X-Fingerprint")
@@ -690,7 +708,7 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
     )
 
 # =============================================================================
-# PROCESAMIENTO DE WEBHOOK WHATSAPP (sin cambios)
+# PROCESAMIENTO DE WEBHOOK WHATSAPP (SIN CAMBIOS)
 # =============================================================================
 async def process_webhook_whatsapp(payload: dict) -> dict:
     whatsapp = payload.get("number")
@@ -771,7 +789,7 @@ async def process_webhook_whatsapp(payload: dict) -> dict:
     return {"status": "Mensaje procesado", "chat_id": chat_id, "response": respuesta_final}
 
 # =============================================================================
-# <--- FIX v3: FUNCIÓN generar_tokens REEMPLAZADA CON API REST
+# FUNCIÓN DE GENERACIÓN DE TOKENS (CON API REST ENRIQUECIDA)
 # =============================================================================
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
@@ -785,15 +803,15 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
 
     # ============================
-    # 1. CREAR TRAZA VÍA API REST (COMPATIBLE v3)
+    # 1. CREAR TRAZA VÍA API REST ENRIQUECIDA
     # ============================
     trace_id_langfuse = str(uuid.uuid4())
     try:
         crear_traza_langfuse(
             trace_id=trace_id_langfuse,
             name=f"chat_{caso}",
-            user_id=user_id,                    # <--- FIX: Pobla User
-            session_id=thread_id,               # <--- FIX: Pobla Session
+            user_id=user_id,                    # <--- POBLA "User"
+            session_id=thread_id,               # <--- POBLA "Session"
             metadata={
                 "chat_id": chat_id,
                 "origen": origen,
@@ -804,8 +822,8 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             tags=["production", origen],
             public=False,
             bookmarked=False,
-            input={"message": mensaje},         # Pobla Input
-            release=settings.release_version if hasattr(settings, 'release_version') else "jarvi-2.0.11"  # <--- FIX: Pobla Release
+            input={"message": mensaje},         # <--- POBLA "Input"
+            release="jarvi-2.0.12"              # <--- POBLA "Release"
         )
         print(f"Traza Langfuse creada vía REST: {trace_id_langfuse}")
     except Exception as e:
@@ -813,7 +831,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         trace_id_langfuse = None
 
     # ============================
-    # 2. PREPARAR SESIÓN Y ESTADO (sin cambios)
+    # 2. PREPARAR SESIÓN Y ESTADO (SIN CAMBIOS)
     # ============================
     sesion_redis = None
     historial = []
@@ -899,7 +917,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
 
     # ============================
     # 3. EJECUTAR GRAFO (SIN CALLBACKS)
-    # <--- FIX v3: Eliminado bloque de CallbackHandler y propagate_attributes
     # ============================
     async with locks[thread_id]:
         try:
@@ -937,7 +954,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         try:
             actualizar_traza_langfuse(
                 trace_id=trace_id_langfuse,
-                output={"response": respuesta_final},
+                output={"response": respuesta_final},  # <--- POBLA "Output"
                 metadata={
                     "chat_id": chat_id,
                     "origen": origen,
