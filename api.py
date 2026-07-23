@@ -1,8 +1,6 @@
 """
 api.py - Servidor FastAPI con trazabilidad Langfuse v3 mediante API REST.
-VERSIÓN 2.0.14 – Auditoría Final. Compatible con Langfuse Server v3.218.0 OSS.
-Arquitectura: REST enriquecida con campos raíz (userId, sessionId, release, input, output)
-y scores nativos. Sin dependencia del SDK v4.
+VERSIÓN 2.0.15 – CORREGIDA: actualización de traza con PATCH /traces/{traceId}.
 Cumple con ISO/IEC 25010, 27001, DORA.
 """
 import os
@@ -31,10 +29,6 @@ from datetime import datetime, timezone
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
-# =============================================================================
-# ARQUITECTURA: ELIMINADA DEPENDENCIA DEL SDK v4
-# =============================================================================
-
 from telemetry_otel import init_telemetry, get_tracer, force_flush as otel_force_flush
 from opentelemetry import trace
 
@@ -59,7 +53,7 @@ class TTSRequest(BaseModel):
 LANGFUSE_HOST = settings.langfuse_host
 LANGFUSE_PUBLIC_KEY = settings.langfuse_public_key
 LANGFUSE_SECRET_KEY = settings.langfuse_secret_key
-LANGFUSE_PROJECT_ID = settings.langfuse_project_id  # <--- Centralizado
+LANGFUSE_PROJECT_ID = settings.langfuse_project_id
 LANGFUSE_ENVIRONMENT = settings.langfuse_tracing_environment
 
 # =============================================================================
@@ -108,8 +102,8 @@ def crear_traza_langfuse(
         "id": trace_id,
         "projectId": LANGFUSE_PROJECT_ID,
         "name": name,
-        "userId": user_id,                # POBLA "User"
-        "sessionId": session_id,          # POBLA "Session"
+        "userId": user_id,
+        "sessionId": session_id,
         "metadata": metadata,
         "tags": tags or [],
         "public": public,
@@ -117,26 +111,37 @@ def crear_traza_langfuse(
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
     if input is not None:
-        payload["input"] = input          # POBLA "Input"
+        payload["input"] = input
     if release:
-        payload["release"] = release      # POBLA "Release"
+        payload["release"] = release
     resp = requests.post(url, json=payload, headers=headers, timeout=10)
     resp.raise_for_status()
     return resp.json()
 
 def actualizar_traza_langfuse(trace_id: str, output: dict, metadata: dict = None):
-    url = f"{LANGFUSE_HOST}/api/public/traces"
+    """
+    Actualiza una traza existente con el output y metadata adicional.
+    CORREGIDO: usa PATCH /api/public/traces/{trace_id} (el trace_id va en la URL).
+    """
+    url = f"{LANGFUSE_HOST}/api/public/traces/{trace_id}"  # <--- FIX: trace_id en URL
     headers = {
         "Authorization": f"Basic {langfuse_basic_auth()}",
         "Content-Type": "application/json"
     }
     payload = {
-        "id": trace_id,
-        "output": output,                 # POBLA "Output"
+        "output": output,
         "metadata": metadata or {}
     }
-    resp = requests.patch(url, json=payload, headers=headers, timeout=10)
-    resp.raise_for_status()
+    try:
+        resp = requests.patch(url, json=payload, headers=headers, timeout=10)
+        resp.raise_for_status()
+        print(f"✅ Traza {trace_id} actualizada con éxito")
+        return resp.json()
+    except Exception as e:
+        print(f"❌ Error al actualizar traza {trace_id}: {e}")
+        if hasattr(e, 'response') and e.response:
+            print(f"   Respuesta: {e.response.text}")
+        raise
 
 def crear_score_langfuse(trace_id: str, name: str, value, comment: str = None, data_type: str = "NUMERIC"):
     url = f"{LANGFUSE_HOST}/api/public/scores"
@@ -479,7 +484,7 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.14",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.15",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -519,7 +524,7 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend",
-        "version": "2.0.14",
+        "version": "2.0.15",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "healthy (REST v3)",
@@ -801,7 +806,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             public=False,
             bookmarked=False,
             input={"message": mensaje},
-            release=settings.release_version  # <--- Centralizado
+            release=settings.release_version
         )
         print(f"Traza Langfuse creada vía REST: {trace_id_langfuse}")
     except Exception as e:
@@ -926,9 +931,10 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
     # ============================
-    # 4. ACTUALIZAR TRAZA CON OUTPUT (REST)
+    # 4. ACTUALIZAR TRAZA CON OUTPUT (REST) - CORREGIDO
     # ============================
-    if trace_id_langfuse:
+    if trace_id_langfuse and respuesta_final:
+        print(f"🔄 Actualizando traza {trace_id_langfuse} con output...")
         try:
             actualizar_traza_langfuse(
                 trace_id=trace_id_langfuse,
@@ -943,9 +949,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                     "tipo_producto": ctx.get("tipo_producto")
                 }
             )
-            print(f"Traza {trace_id_langfuse} actualizada con respuesta final")
+            print(f"✅ Traza {trace_id_langfuse} actualizada con respuesta final")
         except Exception as e:
-            print(f"Error al actualizar traza: {e}")
+            print(f"❌ Error al actualizar traza: {e}")
 
     # ============================
     # 5. CREAR SCORES NATIVOS (REST)
@@ -954,7 +960,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         try:
             puntaje = calcular_puntaje_completitud(ctx)
             accion = "Calificado" if puntaje >= 60 else "No Calificado"
-            
+
             crear_score_langfuse(
                 trace_id=trace_id_langfuse,
                 name="Completitud Lead",
