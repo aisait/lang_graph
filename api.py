@@ -1,6 +1,6 @@
 """
 api.py - Servidor FastAPI con trazabilidad Langfuse v3 mediante API REST.
-VERSIÓN 2.0.15 – CORREGIDA: actualización de traza con PATCH /traces/{traceId}.
+VERSIÓN 2.0.16 – Añadida observación GENERATION para tokens, costos y latencia.
 Cumple con ISO/IEC 25010, 27001, DORA.
 """
 import os
@@ -15,6 +15,7 @@ import requests
 from collections import defaultdict
 from typing import AsyncGenerator, Optional
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from datetime import datetime, timezone
 
 import psutil
 import asyncpg
@@ -24,7 +25,6 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
 from contextlib import asynccontextmanager, AsyncExitStack
 from pydantic import BaseModel
-from datetime import datetime, timezone
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
@@ -123,7 +123,7 @@ def actualizar_traza_langfuse(trace_id: str, output: dict, metadata: dict = None
     Actualiza una traza existente con el output y metadata adicional.
     CORREGIDO: usa PATCH /api/public/traces/{trace_id} (el trace_id va en la URL).
     """
-    url = f"{LANGFUSE_HOST}/api/public/traces/{trace_id}"  # <--- FIX: trace_id en URL
+    url = f"{LANGFUSE_HOST}/api/public/traces/{trace_id}"
     headers = {
         "Authorization": f"Basic {langfuse_basic_auth()}",
         "Content-Type": "application/json"
@@ -139,6 +139,58 @@ def actualizar_traza_langfuse(trace_id: str, output: dict, metadata: dict = None
         return resp.json()
     except Exception as e:
         print(f"❌ Error al actualizar traza {trace_id}: {e}")
+        if hasattr(e, 'response') and e.response:
+            print(f"   Respuesta: {e.response.text}")
+        raise
+
+def crear_observacion_generacion(
+    trace_id: str,
+    name: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    total_tokens: int,
+    input_data: dict = None,
+    output_data: dict = None,
+    start_time: datetime = None,
+    end_time: datetime = None,
+    metadata: dict = None
+) -> dict:
+    """
+    Crea una observación de tipo GENERATION para que Langfuse calcule costos y latencia.
+    """
+    url = f"{LANGFUSE_HOST}/api/public/observations"
+    headers = {
+        "Authorization": f"Basic {langfuse_basic_auth()}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "traceId": trace_id,
+        "name": name,
+        "type": "GENERATION",
+        "model": model,
+        "startTime": start_time.isoformat() if start_time else datetime.now(timezone.utc).isoformat(),
+        "endTime": end_time.isoformat() if end_time else datetime.now(timezone.utc).isoformat(),
+        "usage": {
+            "input": input_tokens,
+            "output": output_tokens,
+            "total": total_tokens
+        }
+    }
+    if input_data is not None:
+        payload["input"] = input_data
+    if output_data is not None:
+        payload["output"] = output_data
+    if metadata:
+        payload["metadata"] = metadata
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
+        resp.raise_for_status()
+        print(f"✅ Observación GENERATION creada para trace {trace_id}")
+        return resp.json()
+    except Exception as e:
+        print(f"❌ Error al crear observación GENERATION: {e}")
         if hasattr(e, 'response') and e.response:
             print(f"   Respuesta: {e.response.text}")
         raise
@@ -484,7 +536,7 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.15",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.16",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -524,7 +576,7 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend",
-        "version": "2.0.15",
+        "version": "2.0.16",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "healthy (REST v3)",
@@ -772,7 +824,7 @@ async def process_webhook_whatsapp(payload: dict) -> dict:
     return {"status": "Mensaje procesado", "chat_id": chat_id, "response": respuesta_final}
 
 # =============================================================================
-# FUNCIÓN DE GENERACIÓN DE TOKENS (CON API REST ENRIQUECIDA)
+# FUNCIÓN DE GENERACIÓN DE TOKENS (CON API REST ENRIQUECIDA Y OBSERVACIÓN GENERATION)
 # =============================================================================
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
@@ -899,8 +951,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     }
 
     # ============================
-    # 3. EJECUTAR GRAFO (SIN CALLBACKS)
+    # 3. EJECUTAR GRAFO (SIN CALLBACKS) - MEDIR TIEMPO
     # ============================
+    start_time = datetime.now(timezone.utc)
     async with locks[thread_id]:
         try:
             resultado = await graph.ainvoke(estado_inicial, config=config)
@@ -918,20 +971,57 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             }
             yield f"data: {json.dumps({'contexto_tecnico': ctx_error})}\n\n"
             return
+    end_time = datetime.now(timezone.utc)
 
-        ctx = resultado.get("contexto_tecnico", {})
+    ctx = resultado.get("contexto_tecnico", {})
 
-        respuesta_final = ""
-        for msg in reversed(resultado.get("messages", [])):
-            if isinstance(msg, AIMessage):
-                respuesta_final = msg.content
-                break
+    respuesta_final = ""
+    ultimo_aimessage = None
+    for msg in reversed(resultado.get("messages", [])):
+        if isinstance(msg, AIMessage):
+            respuesta_final = msg.content
+            ultimo_aimessage = msg
+            break
 
-        if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
-            respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
+    if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
+        respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
+
+    print(f"🔍 Respuesta final: {respuesta_final[:100] if respuesta_final else 'VACÍA'}")
 
     # ============================
-    # 4. ACTUALIZAR TRAZA CON OUTPUT (REST) - CORREGIDO
+    # 4. CREAR OBSERVACIÓN GENERATION CON TOKENS Y LATENCIA
+    # ============================
+    if trace_id_langfuse and ultimo_aimessage:
+        try:
+            # Extraer usage de la respuesta de OpenAI
+            usage = ultimo_aimessage.response_metadata.get('token_usage', {})
+            input_tokens = usage.get('prompt_tokens', 0)
+            output_tokens = usage.get('completion_tokens', 0)
+            total_tokens = usage.get('total_tokens', 0)
+            model = "gpt-4o-mini"  # Debe coincidir con el modelo usado en agent_graph.py
+
+            if total_tokens > 0:
+                crear_observacion_generacion(
+                    trace_id=trace_id_langfuse,
+                    name=f"LLM Generation {caso}",
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                    input_data={"messages": mensaje},
+                    output_data={"response": respuesta_final},
+                    start_time=start_time,
+                    end_time=end_time,
+                    metadata={"chat_id": chat_id, "origen": origen}
+                )
+                print(f"✅ Observación GENERATION creada con tokens: {total_tokens} tokens")
+            else:
+                print(f"⚠️ No se encontraron tokens en la respuesta, no se crea observación")
+        except Exception as e:
+            print(f"❌ Error al crear observación GENERATION: {e}")
+
+    # ============================
+    # 5. ACTUALIZAR TRAZA CON OUTPUT (REST) - CORREGIDO
     # ============================
     if trace_id_langfuse and respuesta_final:
         print(f"🔄 Actualizando traza {trace_id_langfuse} con output...")
@@ -954,7 +1044,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             print(f"❌ Error al actualizar traza: {e}")
 
     # ============================
-    # 5. CREAR SCORES NATIVOS (REST)
+    # 6. CREAR SCORES NATIVOS (REST)
     # ============================
     if trace_id_langfuse:
         try:
@@ -979,7 +1069,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             print(f"Error al crear scores: {e}")
 
     # ============================
-    # 6. GUARDAR HISTORIAL Y THREAD EN BI (PROPIEDAD INTELECTUAL - INTACTA)
+    # 7. GUARDAR HISTORIAL Y THREAD EN BI (PROPIEDAD INTELECTUAL - INTACTA)
     # ============================
     if respuesta_final:
         await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
@@ -996,7 +1086,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         )
 
     # ============================
-    # 7. STREAMING DE RESPUESTA
+    # 8. STREAMING DE RESPUESTA
     # ============================
     if respuesta_final:
         tokens = respuesta_final.split()
