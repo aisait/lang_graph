@@ -1,7 +1,7 @@
 """
 api.py - Servidor FastAPI con trazabilidad Langfuse v3 mediante API REST.
-VERSIÓN 2.0.16 – Añadida observación GENERATION para tokens, costos y latencia.
-Cumple con ISO/IEC 25010, 27001, DORA. 15
+VERSIÓN 2.0.17 – Depuración arquitectónica: eliminados endpoints obsoletos y OTLP.
+Cumple con ISO/IEC 25010, 27001, DORA.
 """
 import os
 import asyncio
@@ -28,9 +28,6 @@ from pydantic import BaseModel
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
-
-from telemetry_otel import init_telemetry, get_tracer, force_flush as otel_force_flush
-from opentelemetry import trace
 
 from schemas import ChatRequest, AudioRequest, ImageRequest
 from agent_graph import create_graph, normalizar_contacto
@@ -119,10 +116,6 @@ def crear_traza_langfuse(
     return resp.json()
 
 def actualizar_traza_langfuse(trace_id: str, output: dict, metadata: dict = None):
-    """
-    Actualiza una traza existente con el output y metadata adicional.
-    CORREGIDO: usa PATCH /api/public/traces/{trace_id} (el trace_id va en la URL).
-    """
     url = f"{LANGFUSE_HOST}/api/public/traces/{trace_id}"
     headers = {
         "Authorization": f"Basic {langfuse_basic_auth()}",
@@ -156,9 +149,6 @@ def crear_observacion_generacion(
     end_time: datetime = None,
     metadata: dict = None
 ) -> dict:
-    """
-    Crea una observación de tipo GENERATION para que Langfuse calcule costos y latencia.
-    """
     url = f"{LANGFUSE_HOST}/api/public/observations"
     headers = {
         "Authorization": f"Basic {langfuse_basic_auth()}",
@@ -511,8 +501,7 @@ redis_client = None
 async def lifespan(app: FastAPI):
     global graph, redis_client
     print("=== INICIO DEL LIFESPAN ===")
-    telemetry_ok = init_telemetry(app)
-    print(f"OpenTelemetry init: {telemetry_ok}")
+    print("OpenTelemetry desactivado. Usando Langfuse REST v3.")
 
     db_url = get_db_url()
     print(f"DB URL (sanitizada): {db_url[:50]}...")
@@ -536,11 +525,11 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.16",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.17",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
-# MIDDLEWARE DE TELEMETRÍA
+# MIDDLEWARE DE TELEMETRÍA (CTFOM)
 # =============================================================================
 @app.middleware("http")
 async def telemetry_middleware(request: Request, call_next):
@@ -576,7 +565,7 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend",
-        "version": "2.0.16",
+        "version": "2.0.17",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "healthy (REST v3)",
@@ -585,7 +574,7 @@ async def health_check():
     return status
 
 # =============================================================================
-# ENDPOINTS
+# ENDPOINTS (SOLO LOS NECESARIOS)
 # =============================================================================
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest, http_request: Request):
@@ -594,10 +583,6 @@ async def chat_endpoint(request: ChatRequest, http_request: Request):
 @app.post("/api/chat/stream")
 async def chat_endpoint_stream(request: ChatRequest, http_request: Request):
     return await process_chat_frontend(request, http_request)
-
-@app.post("/webhook/whatsapp")
-async def webhook_whatsapp(payload: dict):
-    return await process_webhook_whatsapp(payload)
 
 @app.post("/feedback")
 async def registrar_feedback(feedback: dict):
@@ -741,87 +726,6 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
             "Access-Control-Allow-Origin": "*"
         }
     )
-
-# =============================================================================
-# PROCESAMIENTO DE WEBHOOK WHATSAPP (PROPIEDAD INTELECTUAL - INTACTA)
-# =============================================================================
-async def process_webhook_whatsapp(payload: dict) -> dict:
-    whatsapp = payload.get("number")
-    mensaje = payload.get("text")
-    datos_cliente = payload.get("datos_cliente", {})
-    chat_id_from_odoo = payload.get("chat_id")
-
-    if not whatsapp or not mensaje:
-        raise HTTPException(400, "Faltan campos obligatorios: number y text")
-
-    _, whatsapp_norm = normalizar_contacto("", whatsapp, "")
-    if not whatsapp_norm or whatsapp_norm == "Pendiente":
-        raise HTTPException(400, "Número de WhatsApp inválido")
-
-    if not chat_id_from_odoo:
-        raise HTTPException(400, "chat_id de Odoo es obligatorio")
-    chat_id = chat_id_from_odoo
-
-    sesion_redis = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
-    if sesion_redis:
-        thread_id = sesion_redis.get("thread_id")
-        if not thread_id:
-            thread_id = str(uuid.uuid4())
-            sesion_redis["thread_id"] = thread_id
-            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        run_name = obtener_caso(thread_id)
-        if datos_cliente:
-            for key in ["nombre", "vendedor", "departamento", "municipio", "topologia", "tipo_producto", "definicion_necesidad", "consumo_actual", "empresa_electrica"]:
-                if key in datos_cliente and datos_cliente[key]:
-                    sesion_redis[key] = datos_cliente[key]
-            sesion_redis["contexto_tecnico"] = datos_cliente
-            pasos = []
-            for p in ["nombre", "whatsapp", "departamento", "municipio", "topologia", "tipo_producto"]:
-                if sesion_redis.get(p):
-                    pasos.append(p)
-            sesion_redis["pasos_completados"] = pasos
-            sesion_redis["fase_actual"] = "webhook"
-            if redis_client:
-                await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-    else:
-        thread_id = str(uuid.uuid4())
-        run_name = obtener_caso(thread_id)
-        data_inicial = {
-            "thread_id": thread_id,
-            "chat_id": chat_id,
-            "fingerprint": "",
-            "origen": "odoo",
-            "whatsapp": whatsapp_norm,
-            "nombre": datos_cliente.get("nombre", "Pendiente"),
-            "vendedor": datos_cliente.get("vendedor", ""),
-            "departamento": datos_cliente.get("departamento", ""),
-            "municipio": datos_cliente.get("municipio", ""),
-            "topologia": datos_cliente.get("topologia", ""),
-            "tipo_producto": datos_cliente.get("tipo_producto", ""),
-            "productos_interes": [],
-            "contexto_tecnico": datos_cliente,
-            "pasos_completados": ["nombre", "whatsapp", "departamento", "municipio", "topologia", "tipo_producto"] if all(k in datos_cliente for k in ["nombre","whatsapp","departamento","municipio","topologia","tipo_producto"]) else [],
-            "fase_actual": "webhook",
-            "ultimo_mensaje": mensaje,
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        }
-        if redis_client:
-            await guardar_sesion_redis(redis_client, chat_id, data_inicial)
-            await guardar_whatsapp_redis(redis_client, whatsapp_norm, chat_id)
-
-    response_generator = generar_tokens(thread_id, mensaje, chat_id, run_name, origen="odoo")
-    respuesta_final = ""
-    async for chunk in response_generator:
-        if chunk.startswith("data: "):
-            try:
-                data = json.loads(chunk[6:])
-                if "token" in data:
-                    respuesta_final += data["token"]
-                elif "contexto_tecnico" in data:
-                    break
-            except:
-                pass
-    return {"status": "Mensaje procesado", "chat_id": chat_id, "response": respuesta_final}
 
 # =============================================================================
 # FUNCIÓN DE GENERACIÓN DE TOKENS (CON API REST ENRIQUECIDA Y OBSERVACIÓN GENERATION)
@@ -993,12 +897,11 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     # ============================
     if trace_id_langfuse and ultimo_aimessage:
         try:
-            # Extraer usage de la respuesta de OpenAI
             usage = ultimo_aimessage.response_metadata.get('token_usage', {})
             input_tokens = usage.get('prompt_tokens', 0)
             output_tokens = usage.get('completion_tokens', 0)
             total_tokens = usage.get('total_tokens', 0)
-            model = "gpt-4o-mini"  # Debe coincidir con el modelo usado en agent_graph.py
+            model = "gpt-4o-mini"
 
             if total_tokens > 0:
                 crear_observacion_generacion(
@@ -1021,7 +924,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             print(f"❌ Error al crear observación GENERATION: {e}")
 
     # ============================
-    # 5. ACTUALIZAR TRAZA CON OUTPUT (REST) - CORREGIDO
+    # 5. ACTUALIZAR TRAZA CON OUTPUT (REST)
     # ============================
     if trace_id_langfuse and respuesta_final:
         print(f"🔄 Actualizando traza {trace_id_langfuse} con output...")
@@ -1120,22 +1023,3 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         "langfuse_trace_id": trace_id_langfuse
     })
     yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
-
-# =============================================================================
-# ENDPOINTS AUXILIARES (PENDIENTES)
-# =============================================================================
-@app.post("/stt")
-async def speech_to_text(request: AudioRequest):
-    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar Whisper")
-
-@app.post("/tts")
-async def text_to_speech(request: TTSRequest):
-    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar TTS")
-
-@app.post("/vision/analyze")
-async def analizar_factura(request: ImageRequest):
-    raise HTTPException(status_code=501, detail="No implementado – pendiente centralizar visión")
-
-@app.post("/products")
-async def consultar_productos(topologia: str = "on-grid"):
-    raise HTTPException(status_code=501, detail="No implementado – pendiente exponer catálogo")
