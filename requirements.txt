@@ -1,5 +1,5 @@
 # =============================================================================
-# requirements.txt - JARVI 2.0 (Backend) - Auditoría Final v3
+# requirements.txt - JARVI 2.0 (Backend) - Versión Depurada
 # =============================================================================
 
 fastapi==0.115.0
@@ -14,7 +14,7 @@ langgraph==0.2.56
 langgraph-checkpoint-postgres==2.0.7
 openai==1.50.0
 
-# SDK v3 (compatible con servidor v3). No se usa activamente, pero fijamos versión.
+# SDK Langfuse v3 (se mantiene, aunque se usa REST vía requests)
 langfuse==3.9.0
 
 psycopg[binary]==3.3.4
@@ -28,10 +28,9 @@ python-dotenv==1.0.1
 pydantic==2.7.4
 httpx==0.27.2
 psutil==5.9.8
-google-auth==2.30.0
-google-auth-oauthlib==1.2.0
-google-api-python-client==2.198.0
 
+# Corrección ortográfica y fuzzy matching
 symspellpy==6.7.0
 rapidfuzz==3.0.0
+
 redis==5.0.0
