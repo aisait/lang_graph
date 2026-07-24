@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.0.04 – Auditada: decoradores OTLP desactivados para compatibilidad con Langfuse v3.
+VERSIÓN 2.0.04 – Auditada: eliminados residuos OTLP y decoradores obsoletos.
 """
 import os
 import time
@@ -23,10 +23,6 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-# OpenTelemetry (infraestructura)
-from telemetry_otel import get_tracer
-from opentelemetry.trace import Status, StatusCode
-
 # Sanitización
 from utils.sanitize import sanitize_pii
 
@@ -37,16 +33,21 @@ from telemetry import trace_id_var, span_id_var, schedule_telemetry_event
 from ubicacion import buscar_ubicacion
 
 logger = logging.getLogger(__name__)
-tracer = get_tracer("jarvi.graph")
 
 # =============================================================================
-# CONFIGURACIÓN DE API KEY
+# CONFIGURACIÓN DE API KEY (CON ROTACIÓN)
 # =============================================================================
-OPENAI_KEYS = [os.getenv(f"OPENAI_API_KEY_{i}") for i in range(1, 4)]
-OPENAI_KEYS = [k for k in OPENAI_KEYS if k]
-DEFAULT_API_KEY = OPENAI_KEYS[0] if OPENAI_KEYS else os.getenv("OPENAI_API_KEY")
-if not DEFAULT_API_KEY:
-    raise RuntimeError("No se encontró ninguna API Key de OpenAI.")
+from config import settings
+
+def get_llm():
+    return ChatOpenAI(
+        openai_api_key=settings.openai_api_key,
+        model="gpt-4o-mini",
+        temperature=0.1,
+        timeout=60.0,
+        max_retries=5,
+        default_headers={"User-Agent": "JARVI/2.0.17"}
+    )
 
 # =============================================================================
 # CÓDIGOS DE ÁREA
@@ -146,7 +147,7 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA SIN CORREO Y CON WEBHOOK RESILIENTE
+# HERRAMIENTA DE ENVÍO A N8N (SIN TRAZAS OTLP)
 # =============================================================================
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
@@ -161,57 +162,44 @@ async def procesar_oportunidad_backend(
     resumen_18_palabras: str
 ) -> str:
     """
-    Envía leads calificados a los canales del Controller (solo webhook, sin correo).
-    Si el endpoint de webhook no está configurado, solo registra en logs.
+    Envía leads calificados a N8N mediante webhook.
     """
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
 
-    with tracer.start_as_current_span("dispatch_lead") as span:
-        span.set_attribute("channel", "webhook")
-        span.set_attribute("whatsapp", whatsapp_norm)
-        span.set_attribute("nombre", nombre_norm)
-        span.set_attribute("gen_ai.system", "openai")
-        span.set_attribute("gen_ai.operation", "dispatch")
+    # Obtener endpoint y token
+    endpoint = os.getenv("N8N_WEBHOOK_URL", "")
+    if not endpoint:
+        logger.warning("N8N_WEBHOOK_URL no configurado. Lead no enviado.")
+        return "⚠️ No se pudo enviar el lead: webhook no configurado."
 
-        # Obtener endpoint y token
-        endpoint = os.getenv("APICHAT_ENDPOINT", "")
-        token = os.getenv("APICHAT_TOKEN", "")
-        instance = os.getenv("APICHAT_INSTANCE", "")
+    num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
+    payload = {
+        "nombre": nombre_norm,
+        "whatsapp": num_limpio,
+        "ubicacion": departamento_municipio,
+        "consumo": consumo_actual,
+        "empresa_electrica": empresa_electrica,
+        "necesidad": definicion_necesidad,
+        "equipos": listado_equipos_html,
+        "resumen": resumen_18_palabras
+    }
 
-        if endpoint:
-            num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
-            payload_wa = {
-                "instance_id": instance,
-                "number": num_limpio,
-                "text": (
-                    f"🚨 Lead Calificado:\n\n"
-                    f"Cliente: {nombre_norm}\nWhatsApp: {whatsapp_norm}\n"
-                    f"Ubicación: {departamento_municipio}\nEquipos:\n{listado_equipos_html}"
-                )
-            }
-            try:
-                await asyncio.to_thread(
-                    requests.post,
-                    endpoint,
-                    json=payload_wa,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json"
-                    },
-                    timeout=15
-                )
-                logger.info(f"Webhook enviado exitosamente para {whatsapp_norm}")
-            except Exception as e:
-                logger.error(f"Fallo en envío de webhook: {e}")
-        else:
-            logger.info(f"Webhook no configurado (APICHAT_ENDPOINT vacío). Lead no enviado para {whatsapp_norm}")
-
-        span.set_status(Status(StatusCode.OK))
-        return f"✅ Los datos técnicos han sido guardados y auditados. Contacto: {whatsapp_norm}."
+    try:
+        await asyncio.to_thread(
+            requests.post,
+            endpoint,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=15
+        )
+        logger.info(f"Lead enviado exitosamente a N8N para {whatsapp_norm}")
+        return f"✅ Lead enviado a N8N. Contacto: {whatsapp_norm}."
+    except Exception as e:
+        logger.error(f"Fallo en envío a N8N: {e}")
+        return f"❌ Error al enviar lead: {str(e)}"
 
 # =============================================================================
-# FUNCIONES AUXILIARES (extraer_intencion_humana, extraer_tipo_producto, etc.)
-# (Se mantienen exactamente igual a la versión original, sin cambios)
+# FUNCIONES AUXILIARES (extraer_intencion_humana, extraer_tipo_producto)
 # =============================================================================
 def extraer_intencion_humana(messages: list) -> str:
     for msg in reversed(messages):
@@ -234,32 +222,16 @@ def extraer_tipo_producto(mensaje: str) -> Optional[str]:
         return "unitario"
     return None
 
-def otel_span_node(node_name: str):
-    """
-    Decorador que instrumenta un nodo con OpenTelemetry.
-    COMENTADO EN PRODUCCIÓN PARA EVITAR CORRUPCIÓN EN ClickHouse v3.
-    """
-    def decorator(func):
-        @functools.wraps(func)
-        async def wrapper(state, config=None):
-            # Este decorador está desactivado (comentado en cada nodo)
-            # Se mantiene la función por si se requiere en el futuro con Langfuse v4.
-            result = await func(state, config) if config is not None else await func(state)
-            return result
-        return wrapper
-    return decorator
-
 # =============================================================================
 # CONSTRUCCIÓN DEL GRAFO
 # =============================================================================
 def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
-    llm = ChatOpenAI(openai_api_key=DEFAULT_API_KEY, model="gpt-4o-mini", temperature=0.1).bind_tools([procesar_oportunidad_backend])
+    llm = get_llm().bind_tools([procesar_oportunidad_backend])
     extractor_llm = llm.with_structured_output(ExtractorContacto)
 
     @auditar_fase(nombre_fase="Clasificador de Intención Comercial", criticidad="MEDIA")
     @observe_node(node_name="clasificar_intencion_comercial")
-    # @otel_span_node("clasificar_intencion_comercial")  # <--- COMENTADO PARA v3
     async def clasificar_intencion_comercial_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
@@ -276,7 +248,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     @auditar_fase(nombre_fase="Validador de Ubicación del Cliente", criticidad="MEDIA")
     @observe_node(node_name="validar_ubicacion_cliente")
-    # @otel_span_node("validar_ubicacion_cliente")  # <--- COMENTADO PARA v3
     async def validar_ubicacion_cliente_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
@@ -297,7 +268,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     @auditar_fase(nombre_fase="Selección de Productos", criticidad="ALTA")
     @observe_node(node_name="seleccionar_productos")
-    # @otel_span_node("seleccionar_productos")  # <--- COMENTADO PARA v3
     async def seleccionar_productos_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
@@ -317,7 +287,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
     @auditar_fase(nombre_fase="Generación de Respuesta Comercial", criticidad="ALTA")
     @observe_node(node_name="generar_respuesta_comercial")
-    # @otel_span_node("generar_respuesta_comercial")  # <--- COMENTADO PARA v3
     async def generar_respuesta_comercial_node(state: AgentState, config: RunnableConfig):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
@@ -400,36 +369,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             )
         )
 
-        with tracer.start_as_current_span("llm_generation") as llm_span:
-            llm_span.set_attribute("gen_ai.system", "openai")
-            llm_span.set_attribute("gen_ai.operation", "chat")
-            llm_span.set_attribute("gen_ai.request.model", "gpt-4o-mini")
-            llm_span.set_attribute("gen_ai.request.temperature", 0.1)
-
-            prompt_text = prompt_sistema.content + " " + ultimo_mensaje
-            llm_span.set_attribute("gen_ai.prompt.0.role", "system")
-            llm_span.set_attribute("gen_ai.prompt.0.content", sanitize_pii(prompt_text[:5000]))
-
-            respuesta = await llm.ainvoke([prompt_sistema] + state["messages"], config=config)
-
-            llm_span.set_attribute("gen_ai.completion.0.role", "assistant")
-            llm_span.set_attribute("gen_ai.completion.0.content", sanitize_pii(respuesta.content[:5000]))
-
-            if hasattr(respuesta, 'response_metadata'):
-                usage = respuesta.response_metadata.get('token_usage', {})
-                input_tokens = usage.get('prompt_tokens', 0)
-                output_tokens = usage.get('completion_tokens', 0)
-                total_tokens = usage.get('total_tokens', 0)
-                llm_span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
-                llm_span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
-                llm_span.set_attribute("gen_ai.usage.total_tokens", total_tokens)
-
-            llm_span.set_status(Status(StatusCode.OK))
-
+        # Uso del LLM con el cliente configurado
+        respuesta = await llm.ainvoke([prompt_sistema] + state["messages"], config=config)
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
     @observe_node(node_name="anexar_caso_respuesta")
-    # @otel_span_node("anexar_caso_respuesta")  # <--- COMENTADO PARA v3
     async def anexar_caso_respuesta_node(state: AgentState, config: RunnableConfig):
         messages = state.get("messages", [])
         caso = config.get("metadata", {}).get("caso", "000000000000")
