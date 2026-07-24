@@ -1,6 +1,6 @@
 """
 api.py - Servidor FastAPI con trazabilidad Langfuse v3 mediante API REST.
-VERSIÓN 2.0.17 – Depuración arquitectónica: eliminados endpoints obsoletos y OTLP.
+VERSIÓN 2.0.18 – Logs de diagnóstico para depuración de Output y tokens.
 Cumple con ISO/IEC 25010, 27001, DORA.
 """
 import os
@@ -525,7 +525,7 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.17",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.18",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -565,7 +565,7 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend",
-        "version": "2.0.17",
+        "version": "2.0.18",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "healthy (REST v3)",
@@ -890,7 +890,13 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
         respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
+    # ============================
+    # LOGS DE DIAGNÓSTICO (NUEVOS)
+    # ============================
     print(f"🔍 Respuesta final: {respuesta_final[:100] if respuesta_final else 'VACÍA'}")
+    print(f"🔍 ultimo_aimessage: {ultimo_aimessage is not None}")
+    if ultimo_aimessage:
+        print(f"🔍 response_metadata: {ultimo_aimessage.response_metadata}")
 
     # ============================
     # 4. CREAR OBSERVACIÓN GENERATION CON TOKENS Y LATENCIA
