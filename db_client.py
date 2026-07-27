@@ -1,5 +1,6 @@
 """
 db_client.py - Cliente de base de datos con reintentos y manejo de errores.
+VERSIÓN CORREGIDA – UPSERT en actualizar_thread (ON CONFLICT) 27JUL2026.
 """
 import os
 import json
@@ -27,6 +28,9 @@ async def get_db_connection(db_url: str, retries=3, delay=2):
                 raise
             await asyncio.sleep(delay * (attempt + 1))
 
+# =============================================================================
+# FUNCIÓN CORREGIDA (UPSERT) - EL RESTO DEL ARCHIVO PERMANECE IGUAL
+# =============================================================================
 async def actualizar_thread(
     thread_id: str,
     nombre: str,
@@ -39,8 +43,8 @@ async def actualizar_thread(
     metadata_adicional: Optional[Dict[str, Any]] = None
 ) -> bool:
     """
-    Actualiza o inserta un thread en BI, acumulando costos de LLM.
-    metadata_adicional se fusiona con la metadata existente.
+    Actualiza o inserta un thread en BI usando UPSERT (ON CONFLICT).
+    Corregido para evitar violación de clave primaria (threads_pkey).
     """
     conn = None
     try:
@@ -50,14 +54,13 @@ async def actualizar_thread(
             logger.error("BI_DATABASE_URL no configurada")
             return False
         conn = await get_db_connection(db_url)
-        
-        # Asegurar que metadata_adicional sea un diccionario
+
         if metadata_adicional is None:
             metadata_adicional = {}
         if not isinstance(metadata_adicional, dict):
             logger.error(f"metadata_adicional no es dict: {type(metadata_adicional)}")
             metadata_adicional = {}
-            
+
         # Construir metadata base
         metadata = {
             "email": email,
@@ -65,46 +68,59 @@ async def actualizar_thread(
             "vendedor": vendedor,
             "trace_id": trace_id,
         }
-        # Fusionar con metadata_adicional
         metadata.update(metadata_adicional)
-        
-        existing = await conn.fetchrow(
-            "SELECT thread_id, metadata FROM threads WHERE whatsapp_id = $1",
-            whatsapp_norm
-        )
-        if existing:
-            old_meta = existing["metadata"] or {}
-            # Asegurar que old_meta sea dict
+
+        # Lógica de acumulación de costos (respetando la regla de negocio original)
+        if cumulative_cost is not None:
+            # Obtener el costo actual de la metadata existente usando thread_id
+            row = await conn.fetchrow(
+                "SELECT metadata FROM threads WHERE thread_id = $1",
+                thread_id
+            )
+            old_meta = row["metadata"] if row else {}
             if isinstance(old_meta, str):
                 try:
                     old_meta = json.loads(old_meta)
                 except:
                     old_meta = {}
             old_cost = old_meta.get("cumulative_cost", 0.0)
-            new_cost = old_cost + (cumulative_cost or 0.0)
-            metadata["cumulative_cost"] = new_cost
-            await conn.execute(
-                """
-                UPDATE threads
-                SET nombre_cliente = $1, metadata = $2
-                WHERE whatsapp_id = $3
-                """,
-                nombre,
-                json.dumps(metadata),
-                whatsapp_norm
-            )
+            metadata["cumulative_cost"] = old_cost + cumulative_cost
         else:
-            metadata["cumulative_cost"] = cumulative_cost or 0.0
-            await conn.execute(
-                """
-                INSERT INTO threads (thread_id, nombre_cliente, whatsapp_id, metadata)
-                VALUES ($1, $2, $3, $4)
-                """,
-                thread_id,
-                nombre,
-                whatsapp_norm,
-                json.dumps(metadata)
-            )
+            # Si no se pasa costo, mantener el existente o poner 0
+            if "cumulative_cost" not in metadata:
+                row = await conn.fetchrow(
+                    "SELECT metadata FROM threads WHERE thread_id = $1",
+                    thread_id
+                )
+                if row:
+                    old_meta = row["metadata"] if row else {}
+                    if isinstance(old_meta, str):
+                        try:
+                            old_meta = json.loads(old_meta)
+                        except:
+                            old_meta = {}
+                    metadata["cumulative_cost"] = old_meta.get("cumulative_cost", 0.0)
+                else:
+                    metadata["cumulative_cost"] = 0.0
+
+        # =============================================================
+        # UPSERT CORRECTO: ON CONFLICT (thread_id) DO UPDATE
+        # =============================================================
+        await conn.execute(
+            """
+            INSERT INTO threads (thread_id, nombre_cliente, whatsapp_id, metadata)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (thread_id) DO UPDATE
+            SET nombre_cliente = EXCLUDED.nombre_cliente,
+                whatsapp_id = EXCLUDED.whatsapp_id,
+                metadata = EXCLUDED.metadata
+            """,
+            thread_id,
+            nombre,
+            whatsapp_norm,
+            json.dumps(metadata)
+        )
+
         logger.info(f"Thread actualizado (BI): {thread_id} - {nombre} ({whatsapp_norm})")
         return True
     except Exception as e:
@@ -114,6 +130,9 @@ async def actualizar_thread(
         if conn:
             await conn.close()
 
+# =============================================================================
+# FUNCIONES ORIGINALES (INTACTAS) - NO SE MODIFICAN
+# =============================================================================
 async def registrar_evento_auditoria(
     thread_id: str,
     trace_id: str,
