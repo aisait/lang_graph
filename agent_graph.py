@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.0.18 – Auditada: eliminados residuos OTLP y decoradores obsoletos 27JUL2026.
+VERSIÓN 2.0.18 – Auditada: eliminados residuos OTLP y decoradores obsoletos 27JUL2026 1300.
 """
 import os
 import time
