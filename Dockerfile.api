@@ -1,13 +1,11 @@
 # =============================================================================
-# JARVI 2.0.18 | Dockerfile.api CON INVALIDACIÓN DE CACHÉ Y RENOMBRADO
+# JARVI 2.0.18 | Dockerfile.api CON INVALIDACIÓN DE CACHÉ
 # =============================================================================
 
-# ARG que actúa como "cache buster". Cambia este valor en cada deploy.
-ARG CACHE_BUST=20260727_02
+ARG CACHE_BUST=20260727_04
 
 FROM python:3.11-slim
 
-# Dependencias del sistema
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libstdc++6 \
@@ -16,33 +14,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# =============================================================================
-# INVALIDACIÓN DE CACHÉ
-# =============================================================================
 RUN echo "Cache bust version: ${CACHE_BUST}"
 
-# Instalación de dependencias Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Verificación determinística
 RUN python -c "import langfuse, asyncpg, redis; print('✅ Dependencias críticas OK')"
 
-# Copiar código fuente
+# =============================================================================
+# COPIAR CÓDIGO FUENTE (YA NO SE RENOMBRA porque api.py no existe)
+# =============================================================================
 COPY . .
 
-# Verificación explícita de que el archivo nuevo tiene los prints de diagnóstico
+# Verificación de que los archivos correctos están presentes
 RUN grep -q "🔍 Respuesta final:" /app/api_new.py && echo "✅ api_new.py contiene diagnóstico" || echo "❌ api_new.py NO contiene diagnóstico"
 RUN grep -q "ON CONFLICT (thread_id)" /app/db_client.py && echo "✅ db_client.py tiene UPSERT" || echo "❌ db_client.py antiguo"
+RUN grep -q "===== JARVI API" /app/api_new.py && echo "✅ api_new.py tiene print de inicio" || echo "❌ api_new.py sin print"
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import langfuse, asyncpg, redis" || exit 1
 
 EXPOSE 8080
 
 # =============================================================================
-# CMD usando el nuevo nombre
+# CMD usando api_new.py (que ya existe en el repositorio)
 # =============================================================================
 CMD ["uvicorn", "api_new:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
