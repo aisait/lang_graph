@@ -44,6 +44,9 @@ class TTSRequest(BaseModel):
     text: str
     voice: str | None = None
 
+
+print("===== JARVI API v2.0.18 con diagnóstico ACTIVADO =====")
+
 # =============================================================================
 # CONFIGURACIÓN DE LANGFUSE (SOLO PARA REST)
 # =============================================================================
