@@ -22,12 +22,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 RUN python -c "import langfuse, asyncpg, redis; print('✅ Dependencias críticas OK')"
 
-# =============================================================================
-# COPIAR CÓDIGO FUENTE (YA NO SE RENOMBRA porque api.py no existe)
-# =============================================================================
 COPY . .
 
-# Verificación de que los archivos correctos están presentes
+# =============================================================================
+# VERIFICACIÓN DE ARCHIVOS CORRECTOS
+# =============================================================================
 RUN grep -q "🔍 Respuesta final:" /app/api_new.py && echo "✅ api_new.py contiene diagnóstico" || echo "❌ api_new.py NO contiene diagnóstico"
 RUN grep -q "ON CONFLICT (thread_id)" /app/db_client.py && echo "✅ db_client.py tiene UPSERT" || echo "❌ db_client.py antiguo"
 RUN grep -q "===== JARVI API" /app/api_new.py && echo "✅ api_new.py tiene print de inicio" || echo "❌ api_new.py sin print"
@@ -38,6 +37,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 EXPOSE 8080
 
 # =============================================================================
-# CMD usando api_new.py (que ya existe en el repositorio)
+# CMD con api_new:app (renombrado en repositorio)
 # =============================================================================
 CMD ["uvicorn", "api_new:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
