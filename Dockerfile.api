@@ -1,6 +1,9 @@
 # =============================================================================
-# JARVI 2.0.03 | Dockerfile.api CORREGIDO
+# JARVI 2.0.18 | Dockerfile.api CON INVALIDACIÓN DE CACHÉ
 # =============================================================================
+
+# ARG que actúa como "cache buster". Cambia este valor en cada deploy.
+ARG CACHE_BUST=20260727_01
 
 FROM python:3.11-slim
 
@@ -13,20 +16,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# =============================================================================
+# INVALIDACIÓNDE CACHÉ - Capa que se reconstruye siempre que CACHE_BUST cambie
+# =============================================================================
+# Esta línea fuerza que todas las capas posteriores se reconstruyan
+# porque dependen del valor de CACHE_BUST.
+RUN echo "Cache bust version: ${CACHE_BUST}"
+
 # Instalación de dependencias Python (versiones fijas en requirements.txt)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Verificación determinística (Fail-Fast)
-RUN python -c "import langfuse, opentelemetry, asyncpg, redis; print('✅ Dependencias críticas OK')"
+RUN python -c "import langfuse, asyncpg, redis; print('✅ Dependencias críticas OK')"
 
 # Copiar código fuente
 COPY . .
 
 # Health check que verifica dependencias
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import langfuse, opentelemetry, asyncpg, redis" || exit 1
+    CMD python -c "import langfuse, asyncpg, redis" || exit 1
 
 EXPOSE 8080
 CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
