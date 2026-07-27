@@ -1,8 +1,8 @@
 # =============================================================================
-# JARVI 2.0.18 | Dockerfile.api CON INVALIDACIÓN DE CACHÉ
+# JARVI 2.0.18 | Dockerfile.api FINAL CON LIMPIEZA DE COLISIONES
 # =============================================================================
 
-ARG CACHE_BUST=20260727_04
+ARG CACHE_BUST=20260727_FINAL_LIMPIO
 
 FROM python:3.11-slim
 
@@ -14,29 +14,52 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# =============================================================================
+# INVALIDACIÓNDE CACHÉ DE DOCKER
+# =============================================================================
 RUN echo "Cache bust version: ${CACHE_BUST}"
 
+# =============================================================================
+# INSTALACIÓN DE DEPENDENCIAS
+# =============================================================================
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 RUN python -c "import langfuse, asyncpg, redis; print('✅ Dependencias críticas OK')"
 
+# =============================================================================
+# COPIAR CÓDIGO FUENTE
+# =============================================================================
 COPY . .
 
 # =============================================================================
-# VERIFICACIÓN DE ARCHIVOS CORRECTOS
+# 1. ELIMINAR ARCHIVOS OBSOLETOS PARA EVITAR COLISIONES DE NOMBRES
 # =============================================================================
-RUN grep -q "🔍 Respuesta final:" /app/api_new.py && echo "✅ api_new.py contiene diagnóstico" || echo "❌ api_new.py NO contiene diagnóstico"
-RUN grep -q "ON CONFLICT (thread_id)" /app/db_client.py && echo "✅ db_client.py tiene UPSERT" || echo "❌ db_client.py antiguo"
-RUN grep -q "===== JARVI API" /app/api_new.py && echo "✅ api_new.py tiene print de inicio" || echo "❌ api_new.py sin print"
+RUN rm -f /app/api.py /app/api_server.py /app/api_buffer.py
 
+# =============================================================================
+# 2. LIMPIAR CACHÉ DE BYTECODE DE PYTHON (¡PUNTO CRÍTICO!)
+# =============================================================================
+RUN find . -type d -name __pycache__ -exec rm -rf {} + || true
+
+# =============================================================================
+# 3. VERIFICACIÓN EXPLÍCITA DE QUE SOLO EXISTE api_new.py
+# =============================================================================
+RUN ls -la /app/api*.py && \
+    grep -q "🔍 Respuesta final:" /app/api_new.py && echo "✅ api_new.py contiene diagnóstico" || echo "❌ api_new.py NO contiene diagnóstico" && \
+    grep -q "ON CONFLICT (thread_id)" /app/db_client.py && echo "✅ db_client.py tiene UPSERT" || echo "❌ db_client.py antiguo" && \
+    grep -q "===== JARVI API" /app/api_new.py && echo "✅ api_new.py tiene print de inicio" || echo "❌ api_new.py sin print"
+
+# =============================================================================
+# HEALTH CHECK
+# =============================================================================
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import langfuse, asyncpg, redis" || exit 1
 
 EXPOSE 8080
 
 # =============================================================================
-# CMD con api_new:app (renombrado en repositorio)
+# PUNTO DE ENTRADA ÚNICO Y EXCLUSIVO
 # =============================================================================
 CMD ["uvicorn", "api_new:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
