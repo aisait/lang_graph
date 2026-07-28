@@ -1,7 +1,7 @@
 # =============================================================================
-# JARVI 2.0.19 | Dockerfile.api – Adaptador REST
+# JARVI 2.0.23 | Dockerfile.api – Ingestion API
 # =============================================================================
-ARG CACHE_BUST=20260728_REST_FINAL
+ARG CACHE_BUST=20260728_INGESTION_FINAL
 
 FROM python:3.11-slim
 
@@ -26,12 +26,7 @@ COPY . .
 RUN rm -f /app/api.py /app/api_server.py /app/api_buffer.py 2>/dev/null || true
 RUN find . -type d -name __pycache__ -exec rm -rf {} + || true
 
-RUN grep -q "ObservabilityPort" /app/observability.py && echo "✅ observability.py OK" || echo "❌ observability.py falta"
-RUN grep -q "LangfuseRESTAdapter" /app/observability.py && echo "✅ adaptador REST presente" || echo "❌ adaptador REST ausente"
-RUN grep -q "get_observability_adapter" /app/api_v2.py && echo "✅ api_v2.py usa adaptador" || echo "❌ api_v2.py sin adaptador"
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import asyncpg, redis" || exit 1
+RUN grep -q "LangfuseIngestionAdapter" /app/observability.py && echo "✅ Adaptador Ingestion presente" || echo "❌ Adaptador Ingestion ausente"
 
 EXPOSE 8080
 
