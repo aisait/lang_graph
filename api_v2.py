@@ -1,6 +1,6 @@
 """
-api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía REST.
-VERSIÓN 2.0.19 – Adaptador REST estable, sin SDK 1151 28JUL2026.
+api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía SDK.
+VERSIÓN 2.0.22 – SDK nativo con sintaxis correcta.
 """
 import os
 import asyncio
@@ -27,9 +27,9 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
 # =============================================================================
-# IMPORTACIÓN DEL ADAPTADOR DE OBSERVABILIDAD (REST)
+# IMPORTACIÓN DEL ADAPTADOR SDK
 # =============================================================================
-from observability import ObservabilityPort, LangfuseRESTAdapter
+from observability import ObservabilityPort, LangfuseSDKAdapter
 
 # =============================================================================
 # IMPORTACIONES EXISTENTES DEL SISTEMA
@@ -51,7 +51,7 @@ LANGFUSE_PUBLIC_KEY = settings.langfuse_public_key
 LANGFUSE_SECRET_KEY = settings.langfuse_secret_key
 
 # =============================================================================
-# INICIALIZACIÓN DEL ADAPTADOR REST
+# INICIALIZACIÓN DEL ADAPTADOR SDK
 # =============================================================================
 _observability_adapter: Optional[ObservabilityPort] = None
 
@@ -59,14 +59,14 @@ def get_observability_adapter() -> ObservabilityPort:
     global _observability_adapter
     if _observability_adapter is None:
         try:
-            _observability_adapter = LangfuseRESTAdapter(
+            _observability_adapter = LangfuseSDKAdapter(
                 public_key=LANGFUSE_PUBLIC_KEY,
                 secret_key=LANGFUSE_SECRET_KEY,
                 host=LANGFUSE_HOST
             )
-            logger.info("Langfuse REST adapter inicializado")
+            logger.info("Langfuse SDK adapter inicializado")
         except Exception as e:
-            logger.critical(f"Error al inicializar adaptador REST: {e}")
+            logger.critical(f"Error al inicializar adaptador SDK: {e}")
             _observability_adapter = NullObservabilityAdapter()
             logger.warning("Usando NullObservabilityAdapter (no-op)")
     return _observability_adapter
@@ -82,7 +82,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.0.19 con ADAPTADOR REST =====")
+print("===== JARVI API v2.0.22 con ADAPTADOR SDK =====")
 
 # =============================================================================
 # SEGURIDAD
@@ -408,7 +408,7 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.19",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.22",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -448,10 +448,10 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend",
-        "version": "2.0.19",
+        "version": "2.0.22",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
-        "langfuse": "REST adapter",
+        "langfuse": "SDK adapter",
         "status": "ok"
     }
     return status
@@ -613,7 +613,7 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
     )
 
 # =============================================================================
-# GENERACIÓN DE TOKENS CON ADAPTADOR REST
+# GENERACIÓN DE TOKENS CON ADAPTADOR SDK
 # =============================================================================
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
@@ -627,7 +627,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
 
     # ============================
-    # 1. INSTRUMENTACIÓN CON ADAPTADOR REST
+    # 1. INSTRUMENTACIÓN CON SDK
     # ============================
     adapter = get_observability_adapter()
     trace_id_langfuse = None
@@ -645,9 +645,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             },
             input_data={"message": mensaje}
         )
-        print(f"Traza Langfuse creada vía REST: {trace_id_langfuse}")
+        print(f"Traza Langfuse creada vía SDK: {trace_id_langfuse}")
     except Exception as e:
-        print(f"❌ Error al crear traza vía REST: {e}")
+        print(f"❌ Error al crear traza vía SDK: {e}")
         trace_id_langfuse = None
 
     # ============================
@@ -776,7 +776,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         print(f"🔍 response_metadata: {ultimo_aimessage.response_metadata}")
 
     # ============================
-    # 4. CREAR OBSERVACIÓN GENERATION (REST)
+    # 4. CREAR GENERACIÓN (SDK)
     # ============================
     if trace_id_langfuse and ultimo_aimessage:
         try:
@@ -802,14 +802,14 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                     end_time=end_time,
                     metadata={"chat_id": chat_id, "origen": origen}
                 )
-                print(f"✅ Observación GENERATION creada con tokens: {total_tokens} tokens")
+                print(f"✅ Generación creada con tokens: {total_tokens} tokens")
             else:
-                print(f"⚠️ No se encontraron tokens en la respuesta, no se crea observación")
+                print(f"⚠️ No se encontraron tokens en la respuesta, no se crea generación")
         except Exception as e:
-            print(f"❌ Error al crear observación GENERATION: {e}")
+            print(f"❌ Error al crear generación: {e}")
 
     # ============================
-    # 5. CREAR SCORES (REST)
+    # 5. CREAR SCORES (SDK)
     # ============================
     if trace_id_langfuse:
         try:
@@ -834,11 +834,11 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             print(f"Error al crear scores: {e}")
 
     # ============================
-    # 6. FLUSH (no-op para REST)
+    # 6. FLUSH
     # ============================
     try:
         adapter.flush()
-        print("✅ Flush completado (no-op)")
+        print("✅ Flush completado")
     except Exception as e:
         print(f"❌ Error en flush: {e}")
 
