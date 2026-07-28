@@ -1,5 +1,5 @@
 # =============================================================================
-# requirements.txt - JARVI 2.0 (Backend) - Versión Depurada
+# requirements.txt - JARVI 2.0.18 - Versión estabilizada con SDK
 # =============================================================================
 
 fastapi==0.115.0
@@ -14,18 +14,19 @@ langgraph==0.2.56
 langgraph-checkpoint-postgres==2.0.7
 openai==1.50.0
 
-# SDK Langfuse v3 (se mantiene, aunque se usa REST vía requests)
+# SDK Langfuse (oficial)
 langfuse==3.9.0
 
+# Drivers y utilidades
 psycopg[binary]==3.3.4
 sqlalchemy==2.0.31
 asyncpg==0.29.0
 
 pydantic-settings==2.2.0
+pydantic==2.7.4
 
 requests==2.32.3
 python-dotenv==1.0.1
-pydantic==2.7.4
 httpx==0.27.2
 psutil==5.9.8
 
