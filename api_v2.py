@@ -1,6 +1,6 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía REST.
-VERSIÓN 2.0.19 – Adaptador REST estable, sin SDK.
+VERSIÓN 2.0.19 – Adaptador REST estable, sin SDK 1151 28JUL2026.
 """
 import os
 import asyncio
