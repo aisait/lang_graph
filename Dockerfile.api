@@ -2,7 +2,7 @@
 # JARVI 2.0.18 | Dockerfile.api CON INVALIDACIÓN DE CACHÉ
 # =============================================================================
 
-ARG CACHE_BUST=20260727_05
+ARG CACHE_BUST=20260728_SDK
 
 FROM python:3.11-slim
 
@@ -24,26 +24,15 @@ RUN python -c "import langfuse, asyncpg, redis; print('✅ Dependencias crítica
 
 COPY . .
 
-# =============================================================================
-# ELIMINAR ARCHIVOS OBSOLETOS
-# =============================================================================
-RUN rm -f /app/api.py /app/api_new.py /app/api_server.py /app/api_buffer.py 2>/dev/null || true
+RUN rm -f /app/api.py /app/api_server.py /app/api_buffer.py 2>/dev/null || true
 RUN find . -type d -name __pycache__ -exec rm -rf {} + || true
 
-# =============================================================================
-# VERIFICACIÓN DE ARCHIVOS
-# =============================================================================
-RUN ls -la /app/api*.py && \
-    grep -q "🔍 Respuesta final:" /app/api_v2.py && echo "✅ api_v2.py contiene diagnóstico" || echo "❌ api_v2.py NO contiene diagnóstico" && \
-    grep -q "ON CONFLICT (thread_id)" /app/db_client.py && echo "✅ db_client.py tiene UPSERT" || echo "❌ db_client.py antiguo" && \
-    grep -q "===== JARVI API" /app/api_v2.py && echo "✅ api_v2.py tiene print de inicio" || echo "❌ api_v2.py sin print"
+RUN grep -q "🔍 Respuesta final:" /app/api_v2.py && echo "✅ api_v2.py contiene diagnóstico" || echo "❌ api_v2.py NO contiene diagnóstico"
+RUN grep -q "langfuse" /app/api_v2.py && echo "✅ api_v2.py tiene SDK" || echo "❌ api_v2.py sin SDK"
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import langfuse, asyncpg, redis" || exit 1
 
 EXPOSE 8080
 
-# =============================================================================
-# CMD CON api_v2:app (único punto de entrada)
-# =============================================================================
 CMD ["uvicorn", "api_v2:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
