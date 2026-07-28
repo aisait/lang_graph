@@ -1,8 +1,8 @@
 # =============================================================================
-# JARVI 2.0.18 | Dockerfile.api CON INVALIDACIÓN DE CACHÉ
+# JARVI 2.0.18 | Dockerfile.api CON INVALIDACIÓN DE CACHÉ FORZADA
 # =============================================================================
-
-ARG CACHE_BUST=20260728_SDK_FINAL
+# Cambiar CACHE_BUST en cada despliegue para forzar rebuild limpio
+ARG CACHE_BUST=20260728_SDK_FINAL_V2
 
 FROM python:3.11-slim
 
@@ -14,19 +14,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Forzar invalidación de caché de pip
 RUN echo "Cache bust version: ${CACHE_BUST}"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-RUN python -c "import langfuse, asyncpg, redis; print('✅ Dependencias críticas OK')"
+# Verificación explícita de la versión del SDK de Langfuse
+RUN python -c "import langfuse; print(f'✅ Langfuse version: {langfuse.__version__}')" && \
+    python -c "import langfuse; assert hasattr(langfuse.Langfuse, 'trace'), '❌ Langfuse SDK < 3.0.0 detectado. Abortando build.'" && \
+    echo "✅ Langfuse SDK >= 3.0.0 verificado correctamente."
+
+# Verificación de otras dependencias críticas
+RUN python -c "import asyncpg, redis, openai; print('✅ Dependencias críticas OK')"
 
 COPY . .
 
+# Eliminar archivos obsoletos (si existen)
 RUN rm -f /app/api.py /app/api_server.py /app/api_buffer.py 2>/dev/null || true
 RUN find . -type d -name __pycache__ -exec rm -rf {} + || true
 
+# Validación de que los archivos clave están presentes
 RUN grep -q "ObservabilityPort" /app/observability.py && echo "✅ observability.py tiene interfaz" || echo "❌ observability.py falta"
 RUN grep -q "LangfuseSDKAdapter" /app/observability.py && echo "✅ observability.py tiene adaptador" || echo "❌ observability.py sin adaptador"
 RUN grep -q "get_observability_adapter" /app/api_v2.py && echo "✅ api_v2.py usa adaptador" || echo "❌ api_v2.py sin adaptador"
