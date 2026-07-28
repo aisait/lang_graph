@@ -1,6 +1,7 @@
 """
-api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía SDK.
-VERSIÓN 2.0.22 – SDK nativo con sintaxis correcta.
+api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
+VERSIÓN 2.0.24 – Usa /api/public/ingestion para trazas y observaciones
+Cumple con ISO/IEC 25010, 27001, DORA 28JUL2026.
 """
 import os
 import asyncio
@@ -27,9 +28,9 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
 # =============================================================================
-# IMPORTACIÓN DEL ADAPTADOR SDK
+# IMPORTACIÓN DEL ADAPTADOR DE OBSERVABILIDAD (INGESTION API)
 # =============================================================================
-from observability import ObservabilityPort, LangfuseSDKAdapter
+from observability import ObservabilityPort, LangfuseIngestionAdapter
 
 # =============================================================================
 # IMPORTACIONES EXISTENTES DEL SISTEMA
@@ -51,7 +52,7 @@ LANGFUSE_PUBLIC_KEY = settings.langfuse_public_key
 LANGFUSE_SECRET_KEY = settings.langfuse_secret_key
 
 # =============================================================================
-# INICIALIZACIÓN DEL ADAPTADOR SDK
+# INICIALIZACIÓN DEL ADAPTADOR (INGESTION API)
 # =============================================================================
 _observability_adapter: Optional[ObservabilityPort] = None
 
@@ -59,14 +60,14 @@ def get_observability_adapter() -> ObservabilityPort:
     global _observability_adapter
     if _observability_adapter is None:
         try:
-            _observability_adapter = LangfuseSDKAdapter(
+            _observability_adapter = LangfuseIngestionAdapter(
                 public_key=LANGFUSE_PUBLIC_KEY,
                 secret_key=LANGFUSE_SECRET_KEY,
                 host=LANGFUSE_HOST
             )
-            logger.info("Langfuse SDK adapter inicializado")
+            logger.info("Langfuse Ingestion adapter inicializado")
         except Exception as e:
-            logger.critical(f"Error al inicializar adaptador SDK: {e}")
+            logger.critical(f"Error al inicializar adaptador Ingestion: {e}")
             _observability_adapter = NullObservabilityAdapter()
             logger.warning("Usando NullObservabilityAdapter (no-op)")
     return _observability_adapter
@@ -82,10 +83,10 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.0.22 con ADAPTADOR SDK =====")
+print("===== JARVI API v2.0.24 con ADAPTADOR INGESTION =====")
 
 # =============================================================================
-# SEGURIDAD
+# SEGURIDAD (ISO/IEC 27001)
 # =============================================================================
 API_KEY = settings.chatbot_master_api_key
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
@@ -103,7 +104,7 @@ def taxonomy_error(exc: Exception) -> str:
     return "SWR-API-UNKNOWN-000"
 
 # =============================================================================
-# FUNCIONES AUXILIARES (extracción, scores, etc.) - INTACTAS
+# FUNCIONES AUXILIARES PARA CÁLCULO DE SCORE (NEGOCIO) - INTACTAS
 # =============================================================================
 CAMPOS_SCORE = [
     "ciudad", "empresa_electrica", "tarifa_base_gtq", "topologia",
@@ -123,6 +124,9 @@ def calcular_puntaje_completitud(ctx: dict) -> float:
             presentes += 1
     return round((presentes / len(CAMPOS_SCORE)) * 100, 2)
 
+# =============================================================================
+# FUNCIONES DE EXTRACCIÓN (PROPIEDAD INTELECTUAL - INTACTAS)
+# =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
     if not mensaje:
         return None
@@ -199,7 +203,7 @@ def normalizar_whatsapp_e164(telefono: str) -> str:
     return limpio
 
 # =============================================================================
-# FUNCIONES DE POSTGRESQL Y REDIS (INTACTAS)
+# FUNCIONES DE POSTGRESQL Y REDIS (PROPIEDAD INTELECTUAL - INTACTAS)
 # =============================================================================
 async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
                                    fingerprint: Optional[str] = None, origen: str = "desconocido") -> bool:
@@ -379,7 +383,7 @@ def get_db_url() -> str:
     raise RuntimeError("No se encontró DATABASE_URL ni CTFOM_DATABASE_URL.")
 
 # =============================================================================
-# CICLO DE VIDA DE LA APLICACIÓN
+# CICLO DE VIDA DE LA APLICACIÓN (CON INICIALIZACIÓN DEL ADAPTADOR)
 # =============================================================================
 graph = None
 redis_client = None
@@ -388,7 +392,11 @@ redis_client = None
 async def lifespan(app: FastAPI):
     global graph, redis_client
     print("=== INICIO DEL LIFESPAN ===")
+    print("Usando Ingestion API de Langfuse (compatible con OSS)")
+
+    # Inicializar el adaptador
     get_observability_adapter()
+
     db_url = get_db_url()
     print(f"DB URL (sanitizada): {db_url[:50]}...")
     async with AsyncExitStack() as stack:
@@ -396,19 +404,22 @@ async def lifespan(app: FastAPI):
         await checkpointer.setup()
         graph = create_graph(checkpointer)
         print("JARVI 2.0 API inicializada – Grafo listo")
+
         redis_url = os.getenv("REDIS_URL")
         if redis_url:
             redis_client = redis.from_url(redis_url, decode_responses=True)
             print("Conexión a Redis establecida")
         else:
             print("REDIS_URL no configurada – buffer de sesión deshabilitado")
+
         start_batch_worker()
         yield
+
     if redis_client:
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.22",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.24",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -448,10 +459,10 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend",
-        "version": "2.0.22",
+        "version": "2.0.24",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
-        "langfuse": "SDK adapter",
+        "langfuse": "Ingestion API adapter",
         "status": "ok"
     }
     return status
@@ -488,7 +499,7 @@ async def registrar_feedback(feedback: dict):
         raise HTTPException(status_code=500, detail=f"Error al registrar feedback: {str(e)}")
 
 # =============================================================================
-# PROCESAMIENTO DE CHAT (INTACTO)
+# PROCESAMIENTO DE CHAT FRONTEND (PROPIEDAD INTELECTUAL - INTACTA)
 # =============================================================================
 async def process_chat_frontend(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
     fingerprint = chat_request.metadata.get("fingerprint") or http_request.headers.get("X-Fingerprint")
@@ -613,7 +624,7 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
     )
 
 # =============================================================================
-# GENERACIÓN DE TOKENS CON ADAPTADOR SDK
+# FUNCIÓN DE GENERACIÓN DE TOKENS (CON ADAPTADOR INGESTION API)
 # =============================================================================
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
@@ -627,7 +638,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
 
     # ============================
-    # 1. INSTRUMENTACIÓN CON SDK
+    # 1. INSTRUMENTACIÓN CON ADAPTADOR (INGESTION API)
     # ============================
     adapter = get_observability_adapter()
     trace_id_langfuse = None
@@ -645,13 +656,13 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             },
             input_data={"message": mensaje}
         )
-        print(f"Traza Langfuse creada vía SDK: {trace_id_langfuse}")
+        print(f"Traza Langfuse creada vía Ingestion API: {trace_id_langfuse}")
     except Exception as e:
-        print(f"❌ Error al crear traza vía SDK: {e}")
+        print(f"❌ Error al crear traza vía Ingestion API: {e}")
         trace_id_langfuse = None
 
     # ============================
-    # 2. PREPARAR SESIÓN Y ESTADO
+    # 2. PREPARAR SESIÓN Y ESTADO (PROPIEDAD INTELECTUAL - INTACTA)
     # ============================
     sesion_redis = None
     historial = []
@@ -736,7 +747,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     }
 
     # ============================
-    # 3. EJECUTAR GRAFO
+    # 3. EJECUTAR GRAFO - MEDIR TIEMPO
     # ============================
     start_time = datetime.now(timezone.utc)
     async with locks[thread_id]:
@@ -771,12 +782,15 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
         respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
+    # ============================
+    # LOGS DE DIAGNÓSTICO (MANTENIDOS)
+    # ============================
     print(f"🔍 Respuesta final: {respuesta_final[:100] if respuesta_final else 'VACÍA'}")
     if ultimo_aimessage:
         print(f"🔍 response_metadata: {ultimo_aimessage.response_metadata}")
 
     # ============================
-    # 4. CREAR GENERACIÓN (SDK)
+    # 4. CREAR GENERACIÓN (OBSERVACIÓN) CON INGESTION API
     # ============================
     if trace_id_langfuse and ultimo_aimessage:
         try:
@@ -809,7 +823,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             print(f"❌ Error al crear generación: {e}")
 
     # ============================
-    # 5. CREAR SCORES (SDK)
+    # 5. CREAR SCORES (ADAPTADOR)
     # ============================
     if trace_id_langfuse:
         try:
@@ -834,16 +848,16 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             print(f"Error al crear scores: {e}")
 
     # ============================
-    # 6. FLUSH
+    # 6. FLUSH (ENVÍA BATCH DE EVENTOS)
     # ============================
     try:
         adapter.flush()
-        print("✅ Flush completado")
+        print("✅ Flush completado (batch enviado)")
     except Exception as e:
         print(f"❌ Error en flush: {e}")
 
     # ============================
-    # 7. GUARDAR HISTORIAL Y THREAD EN BI
+    # 7. GUARDAR HISTORIAL Y THREAD EN BI (PROPIEDAD INTELECTUAL - INTACTA)
     # ============================
     if respuesta_final:
         await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
