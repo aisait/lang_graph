@@ -1,7 +1,7 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.0.24 – Usa /api/public/ingestion para trazas y observaciones
-Cumple con ISO/IEC 25010, 27001, DORA 28JUL2026.
+VERSIÓN 2.0.25 – Usa /api/public/ingestion con output en traza y tags
+Cumple con ISO/IEC 25010, 27001, DORA
 """
 import os
 import asyncio
@@ -83,7 +83,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.0.24 con ADAPTADOR INGESTION =====")
+print("===== JARVI API v2.0.25 con ADAPTADOR INGESTION =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -383,7 +383,7 @@ def get_db_url() -> str:
     raise RuntimeError("No se encontró DATABASE_URL ni CTFOM_DATABASE_URL.")
 
 # =============================================================================
-# CICLO DE VIDA DE LA APLICACIÓN (CON INICIALIZACIÓN DEL ADAPTADOR)
+# CICLO DE VIDA DE LA APLICACIÓN
 # =============================================================================
 graph = None
 redis_client = None
@@ -394,7 +394,6 @@ async def lifespan(app: FastAPI):
     print("=== INICIO DEL LIFESPAN ===")
     print("Usando Ingestion API de Langfuse (compatible con OSS)")
 
-    # Inicializar el adaptador
     get_observability_adapter()
 
     db_url = get_db_url()
@@ -419,7 +418,7 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.24",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.25",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -459,7 +458,7 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend",
-        "version": "2.0.24",
+        "version": "2.0.25",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
@@ -654,7 +653,8 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
                 "caso": caso,
                 "whatsapp": user_id
             },
-            input_data={"message": mensaje}
+            input_data={"message": mensaje},
+            tags=["production", "chat", "api"]  # <-- Tags añadidos
         )
         print(f"Traza Langfuse creada vía Ingestion API: {trace_id_langfuse}")
     except Exception as e:
@@ -782,9 +782,6 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
         respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
-    # ============================
-    # LOGS DE DIAGNÓSTICO (MANTENIDOS)
-    # ============================
     print(f"🔍 Respuesta final: {respuesta_final[:100] if respuesta_final else 'VACÍA'}")
     if ultimo_aimessage:
         print(f"🔍 response_metadata: {ultimo_aimessage.response_metadata}")
