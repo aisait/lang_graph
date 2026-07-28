@@ -28,9 +28,6 @@ async def get_db_connection(db_url: str, retries=3, delay=2):
                 raise
             await asyncio.sleep(delay * (attempt + 1))
 
-# =============================================================================
-# FUNCIÓN CORREGIDA (UPSERT) - EL RESTO DEL ARCHIVO PERMANECE IGUAL
-# =============================================================================
 async def actualizar_thread(
     thread_id: str,
     nombre: str,
@@ -42,10 +39,6 @@ async def actualizar_thread(
     cumulative_cost: Optional[float] = None,
     metadata_adicional: Optional[Dict[str, Any]] = None
 ) -> bool:
-    """
-    Actualiza o inserta un thread en BI usando UPSERT (ON CONFLICT).
-    Corregido para evitar violación de clave primaria (threads_pkey).
-    """
     conn = None
     try:
         _, whatsapp_norm = normalizar_contacto("", whatsapp, "")
@@ -61,7 +54,6 @@ async def actualizar_thread(
             logger.error(f"metadata_adicional no es dict: {type(metadata_adicional)}")
             metadata_adicional = {}
 
-        # Construir metadata base
         metadata = {
             "email": email,
             "productos": productos or [],
@@ -70,9 +62,7 @@ async def actualizar_thread(
         }
         metadata.update(metadata_adicional)
 
-        # Lógica de acumulación de costos (respetando la regla de negocio original)
         if cumulative_cost is not None:
-            # Obtener el costo actual de la metadata existente usando thread_id
             row = await conn.fetchrow(
                 "SELECT metadata FROM threads WHERE thread_id = $1",
                 thread_id
@@ -86,7 +76,6 @@ async def actualizar_thread(
             old_cost = old_meta.get("cumulative_cost", 0.0)
             metadata["cumulative_cost"] = old_cost + cumulative_cost
         else:
-            # Si no se pasa costo, mantener el existente o poner 0
             if "cumulative_cost" not in metadata:
                 row = await conn.fetchrow(
                     "SELECT metadata FROM threads WHERE thread_id = $1",
@@ -103,9 +92,6 @@ async def actualizar_thread(
                 else:
                     metadata["cumulative_cost"] = 0.0
 
-        # =============================================================
-        # UPSERT CORRECTO: ON CONFLICT (thread_id) DO UPDATE
-        # =============================================================
         await conn.execute(
             """
             INSERT INTO threads (thread_id, nombre_cliente, whatsapp_id, metadata)
@@ -130,9 +116,6 @@ async def actualizar_thread(
         if conn:
             await conn.close()
 
-# =============================================================================
-# FUNCIONES ORIGINALES (INTACTAS) - NO SE MODIFICAN
-# =============================================================================
 async def registrar_evento_auditoria(
     thread_id: str,
     trace_id: str,
