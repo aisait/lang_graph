@@ -1,6 +1,6 @@
 """
 observability.py - Adaptador REST para Langfuse OSS (v3.224.2)
-VERSIÓN 2.0.20 – Compatible con OSS: usa PUT /traces/{id} y POST /traces/{id}/observations
+VERSIÓN 2.0.21 – Estrategia combinada: PATCH, POST, fallback SDK
 """
 import os
 import json
@@ -42,18 +42,9 @@ class ObservabilityPort(ABC):
 
 
 # =============================================================================
-# ADAPTADOR REST – COMPATIBLE CON OSS
+# ADAPTADOR REST – ESTRATEGIA MÚLTIPLE
 # =============================================================================
 class LangfuseRESTAdapter(ObservabilityPort):
-    """
-    Adaptador REST que funciona con la versión OSS de Langfuse.
-    Estrategia:
-      1. POST /api/public/traces -> crea traza (ya funciona)
-      2. PUT /api/public/traces/{traceId} -> actualiza traza con output y usage
-      3. Si falla, intenta POST /api/public/traces/{traceId}/observations
-      4. POST /api/public/scores -> crea scores (ya funciona)
-    """
-
     def __init__(self, public_key: str, secret_key: str, host: str):
         self.public_key = public_key
         self.secret_key = secret_key
@@ -86,6 +77,9 @@ class LangfuseRESTAdapter(ObservabilityPort):
     def _post(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request('POST', endpoint, payload)
 
+    def _patch(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request('PATCH', endpoint, payload)
+
     def _put(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request('PUT', endpoint, payload)
 
@@ -112,14 +106,14 @@ class LangfuseRESTAdapter(ObservabilityPort):
         return trace_id
 
     # --------------------------------------------------------------------------
-    # 2. CREAR OBSERVACIÓN (GENERATION) – ESTRATEGIA OSS
+    # 2. CREAR OBSERVACIÓN (GENERATION) – ESTRATEGIAS MÚLTIPLES
     # --------------------------------------------------------------------------
     def create_generation(self, trace_id: str, name: str, model: str,
                           input_data: Dict[str, Any], output_data: Dict[str, Any],
                           usage: Dict[str, int], start_time: datetime,
                           end_time: datetime, metadata: Dict[str, Any]) -> None:
-        # Construir payload común
-        payload = {
+        # --- Estrategia 1: PATCH /api/public/traces/{traceId} ---
+        patch_payload = {
             "output": output_data,
             "usage": {
                 "input": usage.get("input", 0),
@@ -129,21 +123,27 @@ class LangfuseRESTAdapter(ObservabilityPort):
             },
             "metadata": metadata
         }
-        payload = {k: v for k, v in payload.items() if v is not None}
-
-        # ---- Estrategia 1: PUT /api/public/traces/{traceId} ----
-        # (Algunas versiones OSS permiten actualizar la traza con output)
+        patch_payload = {k: v for k, v in patch_payload.items() if v is not None}
         try:
-            self._put(f"api/public/traces/{trace_id}", payload)
-            logger.info(f"✅ Traza actualizada con output para {trace_id}")
+            self._patch(f"api/public/traces/{trace_id}", patch_payload)
+            logger.info(f"✅ Traza actualizada con output (PATCH) para {trace_id}")
             return
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"PUT a /traces falló: {e}. Intentando alternativa...")
+        except Exception as e:
+            logger.warning(f"PATCH a /traces falló: {e}. Intentando PUT...")
 
-        # ---- Estrategia 2: POST /api/public/traces/{traceId}/observations ----
+        # --- Estrategia 2: PUT /api/public/traces/{traceId} ---
+        try:
+            self._put(f"api/public/traces/{trace_id}", patch_payload)
+            logger.info(f"✅ Traza actualizada con output (PUT) para {trace_id}")
+            return
+        except Exception as e:
+            logger.warning(f"PUT a /traces falló: {e}. Intentando POST /observations...")
+
+        # --- Estrategia 3: POST /api/public/observations ---
         obs_payload = {
             "traceId": trace_id,
             "name": name,
+            "type": "GENERATION",      # Clave para diferenciar
             "model": model,
             "input": input_data,
             "output": output_data,
@@ -159,12 +159,44 @@ class LangfuseRESTAdapter(ObservabilityPort):
         }
         obs_payload = {k: v for k, v in obs_payload.items() if v is not None}
         try:
-            self._post(f"api/public/traces/{trace_id}/observations", obs_payload)
-            logger.info(f"✅ Observación creada para trace {trace_id}")
+            self._post("api/public/observations", obs_payload)
+            logger.info(f"✅ Observación creada para trace {trace_id} (POST /observations)")
             return
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ ERROR: No se pudo crear observación para {trace_id}: {e}")
-            # No lanzamos excepción para no interrumpir el flujo, pero queda registrado
+        except Exception as e:
+            logger.warning(f"POST /observations falló: {e}. Intentando SDK como último recurso...")
+
+        # --- Estrategia 4: SDK (si está disponible) ---
+        try:
+            from langfuse import Langfuse
+            client = Langfuse(
+                public_key=self.public_key,
+                secret_key=self.secret_key,
+                host=self.host
+            )
+            trace = client.get_trace(trace_id)
+            if trace:
+                trace.generation(
+                    name=name,
+                    model=model,
+                    input=input_data,
+                    output=output_data,
+                    usage=usage,
+                    start_time=start_time,
+                    end_time=end_time,
+                    metadata=metadata
+                )
+                client.flush()
+                logger.info(f"✅ Observación creada vía SDK para {trace_id}")
+                return
+            else:
+                logger.error(f"Traza {trace_id} no encontrada para SDK")
+        except ImportError:
+            logger.warning("SDK no instalado, no se pudo usar fallback")
+        except Exception as e:
+            logger.error(f"Error en SDK fallback: {e}")
+
+        # Si todo falla, registramos pero no interrumpimos el flujo
+        logger.error(f"❌ NO se pudo crear observación para {trace_id} con ningún método")
 
     # --------------------------------------------------------------------------
     # 3. CREAR SCORE
