@@ -1,7 +1,7 @@
 """
-api_v2.py - Servidor FastAPI con trazabilidad Langfuse v3 mediante API REST.
-VERSIÓN 2.0.18 – Logs de diagnóstico para depuración de Output y tokens.
-Cumple con ISO/IEC 25010, 27001, DORA 27JUL2026 1500.
+api_v2.py - Servidor FastAPI con trazabilidad Langfuse v4 mediante SDK nativo.
+VERSIÓN 2.0.18 – Instrumentación con SDK, sin CallbackHandler para evitar colisiones.
+Cumple con ISO/IEC 25010, 27001, DORA 27JUL2026.
 """
 import os
 import asyncio
@@ -11,7 +11,6 @@ import logging
 import re
 import uuid
 import base64
-import requests
 from collections import defaultdict
 from typing import AsyncGenerator, Optional
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
@@ -29,7 +28,10 @@ from pydantic import BaseModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
-from schemas import ChatRequest, AudioRequest, ImageRequest
+# SDK de Langfuse
+from langfuse import Langfuse
+
+from schemas import ChatRequest
 from agent_graph import create_graph, normalizar_contacto
 from ontology import obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
@@ -44,17 +46,33 @@ class TTSRequest(BaseModel):
     text: str
     voice: str | None = None
 
-
-print("===== JARVI API v2.0.18 con diagnóstico ACTIVADO =====")
-
 # =============================================================================
-# CONFIGURACIÓN DE LANGFUSE (SOLO PARA REST)
+# CONFIGURACIÓN DE LANGFUSE (DESDE settings)
 # =============================================================================
 LANGFUSE_HOST = settings.langfuse_host
 LANGFUSE_PUBLIC_KEY = settings.langfuse_public_key
 LANGFUSE_SECRET_KEY = settings.langfuse_secret_key
 LANGFUSE_PROJECT_ID = settings.langfuse_project_id
 LANGFUSE_ENVIRONMENT = settings.langfuse_tracing_environment
+
+# Inicialización del cliente Langfuse (se hace al inicio para que esté disponible)
+_langfuse_client = None
+
+def get_langfuse_client():
+    global _langfuse_client
+    if _langfuse_client is None:
+        _langfuse_client = Langfuse(
+            public_key=LANGFUSE_PUBLIC_KEY,
+            secret_key=LANGFUSE_SECRET_KEY,
+            host=LANGFUSE_HOST
+        )
+        logger.info("Langfuse client initialized")
+    return _langfuse_client
+
+# Feature flag para posible rollback (cambiar en entorno)
+USE_LANGFUSE_SDK = os.getenv("USE_LANGFUSE_SDK", "true").lower() == "true"
+
+print("===== JARVI API v2.0.18 con SDK ACTIVADO =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -73,150 +91,6 @@ def taxonomy_error(exc: Exception) -> str:
     if isinstance(exc, HTTPException):
         return f"SWR-API-MED-{exc.status_code}"
     return "SWR-API-UNKNOWN-000"
-
-# =============================================================================
-# FUNCIONES AUXILIARES REST PARA LANGFUSE v3 - CORREGIDAS
-# =============================================================================
-def langfuse_basic_auth() -> str:
-    credentials = f"{LANGFUSE_PUBLIC_KEY}:{LANGFUSE_SECRET_KEY}"
-    return base64.b64encode(credentials.encode()).decode()
-
-def crear_traza_langfuse(
-    trace_id: str,
-    name: str,
-    user_id: str,
-    session_id: str,
-    metadata: dict,
-    tags: list = None,
-    public: bool = False,
-    bookmarked: bool = False,
-    input: dict = None,
-    release: str = None
-) -> dict:
-    url = f"{LANGFUSE_HOST}/api/public/traces"
-    headers = {
-        "Authorization": f"Basic {langfuse_basic_auth()}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "id": trace_id,
-        "projectId": LANGFUSE_PROJECT_ID,
-        "name": name,
-        "userId": user_id,
-        "sessionId": session_id,
-        "metadata": metadata,
-        "tags": tags or [],
-        "public": public,
-        "bookmarked": bookmarked,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    }
-    if input is not None:
-        payload["input"] = input
-    if release:
-        payload["release"] = release
-    resp = requests.post(url, json=payload, headers=headers, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
-
-def actualizar_traza_langfuse(trace_id: str, output: dict, metadata: dict = None):
-    """
-    ACTUALIZACIÓN CORREGIDA: Se cambia PATCH → PUT y se añade projectId.
-    En Langfuse OSS, PUT está soportado para actualizar trazas.
-    """
-    url = f"{LANGFUSE_HOST}/api/public/traces/{trace_id}"
-    headers = {
-        "Authorization": f"Basic {langfuse_basic_auth()}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "projectId": LANGFUSE_PROJECT_ID,
-        "output": output,
-        "metadata": metadata or {}
-    }
-    try:
-        resp = requests.put(url, json=payload, headers=headers, timeout=10)
-        resp.raise_for_status()
-        print(f"✅ Traza {trace_id} actualizada con éxito (PUT)")
-        return resp.json()
-    except Exception as e:
-        print(f"❌ Error al actualizar traza {trace_id}: {e}")
-        if hasattr(e, 'response') and e.response:
-            print(f"   Código: {e.response.status_code}")
-            print(f"   Respuesta: {e.response.text}")
-        raise
-
-def crear_observacion_generacion(
-    trace_id: str,
-    name: str,
-    model: str,
-    input_tokens: int,
-    output_tokens: int,
-    total_tokens: int,
-    input_data: dict = None,
-    output_data: dict = None,
-    start_time: datetime = None,
-    end_time: datetime = None,
-    metadata: dict = None
-) -> dict:
-    """
-    CREACIÓN DE OBSERVACIÓN CORREGIDA: Se añade projectId.
-    """
-    url = f"{LANGFUSE_HOST}/api/public/observations"
-    headers = {
-        "Authorization": f"Basic {langfuse_basic_auth()}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "traceId": trace_id,
-        "projectId": LANGFUSE_PROJECT_ID,
-        "name": name,
-        "type": "GENERATION",
-        "model": model,
-        "startTime": start_time.isoformat() if start_time else datetime.now(timezone.utc).isoformat(),
-        "endTime": end_time.isoformat() if end_time else datetime.now(timezone.utc).isoformat(),
-        "usage": {
-            "input": input_tokens,
-            "output": output_tokens,
-            "total": total_tokens
-        }
-    }
-    if input_data is not None:
-        payload["input"] = input_data
-    if output_data is not None:
-        payload["output"] = output_data
-    if metadata:
-        payload["metadata"] = metadata
-
-    try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=10)
-        resp.raise_for_status()
-        print(f"✅ Observación GENERATION creada para trace {trace_id}")
-        return resp.json()
-    except Exception as e:
-        print(f"❌ Error al crear observación GENERATION: {e}")
-        if hasattr(e, 'response') and e.response:
-            print(f"   Código: {e.response.status_code}")
-            print(f"   Respuesta: {e.response.text}")
-        raise
-
-def crear_score_langfuse(trace_id: str, name: str, value, comment: str = None, data_type: str = "NUMERIC"):
-    url = f"{LANGFUSE_HOST}/api/public/scores"
-    headers = {
-        "Authorization": f"Basic {langfuse_basic_auth()}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "traceId": trace_id,
-        "projectId": LANGFUSE_PROJECT_ID,
-        "name": name,
-        "value": float(value) if isinstance(value, (int, float)) else str(value),
-        "comment": comment,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    }
-    if data_type:
-        payload["dataType"] = data_type
-    resp = requests.post(url, json=payload, headers=headers, timeout=10)
-    resp.raise_for_status()
 
 # =============================================================================
 # FUNCIONES AUXILIARES PARA CÁLCULO DE SCORE (NEGOCIO) - INTACTAS
@@ -506,7 +380,7 @@ def get_db_url() -> str:
     raise RuntimeError("No se encontró DATABASE_URL ni CTFOM_DATABASE_URL.")
 
 # =============================================================================
-# CICLO DE VIDA DE LA APLICACIÓN (SIN LANGFUSE CLIENT)
+# CICLO DE VIDA DE LA APLICACIÓN (CON INICIALIZACIÓN DEL SDK)
 # =============================================================================
 graph = None
 redis_client = None
@@ -515,7 +389,10 @@ redis_client = None
 async def lifespan(app: FastAPI):
     global graph, redis_client
     print("=== INICIO DEL LIFESPAN ===")
-    print("OpenTelemetry desactivado. Usando Langfuse REST v3.")
+    print("OpenTelemetry desactivado. Usando Langfuse SDK v3.9.0.")
+
+    # Inicializar cliente Langfuse (se hace aquí para que esté disponible)
+    get_langfuse_client()
 
     db_url = get_db_url()
     print(f"DB URL (sanitizada): {db_url[:50]}...")
@@ -582,7 +459,7 @@ async def health_check():
         "version": "2.0.18",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
-        "langfuse": "healthy (REST v3)",
+        "langfuse": "healthy (SDK v3.9.0)",
         "status": "ok"
     }
     return status
@@ -603,13 +480,16 @@ async def registrar_feedback(feedback: dict):
     if "trace_id" not in feedback or "value" not in feedback:
         raise HTTPException(status_code=422, detail="trace_id y value son requeridos")
     try:
-        crear_score_langfuse(
+        # Usamos el SDK para crear el score (o la función REST antigua si se prefiere, pero mejor usar SDK)
+        langfuse = get_langfuse_client()
+        langfuse.score(
             trace_id=feedback["trace_id"],
             name=feedback.get("name", "satisfaccion"),
             value=float(feedback["value"]),
-            comment=feedback.get("comment"),
-            data_type="NUMERIC"
+            data_type="NUMERIC",
+            comment=feedback.get("comment")
         )
+        langfuse.flush()
         print(f"Feedback registrado para trace_id {feedback['trace_id']}")
         return {"status": "ok", "trace_id": feedback["trace_id"]}
     except Exception as e:
@@ -742,7 +622,7 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
     )
 
 # =============================================================================
-# FUNCIÓN DE GENERACIÓN DE TOKENS (CON API REST ENRIQUECIDA Y OBSERVACIÓN GENERATION)
+# FUNCIÓN DE GENERACIÓN DE TOKENS (CON SDK)
 # =============================================================================
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
@@ -756,32 +636,39 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
 
     # ============================
-    # 1. CREAR TRAZA VÍA API REST ENRIQUECIDA
+    # 1. INSTRUMENTACIÓN CON SDK (SOLO SI EL FEATURE FLAG ESTÁ ACTIVO)
     # ============================
-    trace_id_langfuse = str(uuid.uuid4())
-    try:
-        crear_traza_langfuse(
-            trace_id=trace_id_langfuse,
-            name=f"chat_{caso}",
-            user_id=user_id,
-            session_id=thread_id,
-            metadata={
-                "chat_id": chat_id,
-                "origen": origen,
-                "fingerprint": fingerprint or "",
-                "caso": caso,
-                "whatsapp": user_id
-            },
-            tags=["production", origen],
-            public=False,
-            bookmarked=False,
-            input={"message": mensaje},
-            release=settings.release_version
-        )
-        print(f"Traza Langfuse creada vía REST: {trace_id_langfuse}")
-    except Exception as e:
-        print(f"❌ Error al crear traza vía REST: {e}")
-        trace_id_langfuse = None
+    trace = None
+    langfuse = None
+    trace_id_langfuse = None
+
+    if USE_LANGFUSE_SDK:
+        try:
+            langfuse = get_langfuse_client()
+            trace = langfuse.trace(
+                name=f"chat_{caso}",
+                user_id=user_id,
+                session_id=thread_id,
+                metadata={
+                    "chat_id": chat_id,
+                    "origen": origen,
+                    "fingerprint": fingerprint or "",
+                    "caso": caso,
+                    "whatsapp": user_id
+                },
+                tags=["production", origen],
+                public=False,
+                bookmarked=False,
+                input={"message": mensaje}
+            )
+            trace_id_langfuse = trace.id
+            print(f"Traza Langfuse creada vía SDK: {trace_id_langfuse}")
+        except Exception as e:
+            print(f"❌ Error al crear traza vía SDK: {e}")
+            trace = None
+            trace_id_langfuse = None
+    else:
+        print("⚠️ SDK desactivado por feature flag. No se registrará en Langfuse.")
 
     # ============================
     # 2. PREPARAR SESIÓN Y ESTADO (PROPIEDAD INTELECTUAL - INTACTA)
@@ -869,7 +756,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     }
 
     # ============================
-    # 3. EJECUTAR GRAFO (SIN CALLBACKS) - MEDIR TIEMPO
+    # 3. EJECUTAR GRAFO - MEDIR TIEMPO
     # ============================
     start_time = datetime.now(timezone.utc)
     async with locks[thread_id]:
@@ -905,7 +792,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
     # ============================
-    # LOGS DE DIAGNÓSTICO (NUEVOS)
+    # LOGS DE DIAGNÓSTICO (MANTENIDOS)
     # ============================
     print(f"🔍 Respuesta final: {respuesta_final[:100] if respuesta_final else 'VACÍA'}")
     print(f"🔍 ultimo_aimessage: {ultimo_aimessage is not None}")
@@ -913,9 +800,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         print(f"🔍 response_metadata: {ultimo_aimessage.response_metadata}")
 
     # ============================
-    # 4. CREAR OBSERVACIÓN GENERATION CON TOKENS Y LATENCIA
+    # 4. CREAR OBSERVACIÓN GENERATION CON SDK (SI HAY TRACE)
     # ============================
-    if trace_id_langfuse and ultimo_aimessage:
+    if trace and ultimo_aimessage:
         try:
             usage = ultimo_aimessage.response_metadata.get('token_usage', {})
             input_tokens = usage.get('prompt_tokens', 0)
@@ -924,15 +811,16 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             model = "gpt-4o-mini"
 
             if total_tokens > 0:
-                crear_observacion_generacion(
-                    trace_id=trace_id_langfuse,
+                trace.generation(
                     name=f"LLM Generation {caso}",
                     model=model,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    total_tokens=total_tokens,
-                    input_data={"messages": mensaje},
-                    output_data={"response": respuesta_final},
+                    input={"messages": mensaje},
+                    output={"response": respuesta_final},
+                    usage={
+                        "input": input_tokens,
+                        "output": output_tokens,
+                        "total": total_tokens
+                    },
                     start_time=start_time,
                     end_time=end_time,
                     metadata={"chat_id": chat_id, "origen": origen}
@@ -944,55 +832,53 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             print(f"❌ Error al crear observación GENERATION: {e}")
 
     # ============================
-    # 5. ACTUALIZAR TRAZA CON OUTPUT (REST)
+    # 5. ACTUALIZAR TRAZA CON OUTPUT (SDK)
     # ============================
-    if trace_id_langfuse and respuesta_final:
-        print(f"🔄 Actualizando traza {trace_id_langfuse} con output...")
+    if trace and respuesta_final:
+        print(f"🔄 Actualizando traza {trace.id} con output...")
         try:
-            actualizar_traza_langfuse(
-                trace_id=trace_id_langfuse,
-                output={"response": respuesta_final},
-                metadata={
-                    "chat_id": chat_id,
-                    "origen": origen,
-                    "caso": caso,
-                    "nombre": ctx.get("nombre"),
-                    "whatsapp": user_id,
-                    "topologia": ctx.get("topologia"),
-                    "tipo_producto": ctx.get("tipo_producto")
-                }
-            )
-            print(f"✅ Traza {trace_id_langfuse} actualizada con respuesta final")
+            trace.update(output={"response": respuesta_final})
+            print(f"✅ Traza {trace.id} actualizada con respuesta final")
         except Exception as e:
             print(f"❌ Error al actualizar traza: {e}")
 
     # ============================
-    # 6. CREAR SCORES NATIVOS (REST)
+    # 6. CREAR SCORES (SDK)
     # ============================
-    if trace_id_langfuse:
+    if trace:
         try:
             puntaje = calcular_puntaje_completitud(ctx)
             accion = "Calificado" if puntaje >= 60 else "No Calificado"
 
-            crear_score_langfuse(
-                trace_id=trace_id_langfuse,
+            langfuse.score(
+                trace_id=trace.id,
                 name="Completitud Lead",
                 value=puntaje,
                 data_type="NUMERIC",
                 comment=f"Basado en {sum(1 for c in CAMPOS_SCORE if ctx.get(c))} de {len(CAMPOS_SCORE)} campos"
             )
-            crear_score_langfuse(
-                trace_id=trace_id_langfuse,
+            langfuse.score(
+                trace_id=trace.id,
                 name="Acción Lead",
                 value=accion,
                 data_type="CATEGORICAL"
             )
-            print(f"Scores registrados para trace {trace_id_langfuse}: Completitud={puntaje}%, Acción={accion}")
+            print(f"Scores registrados para trace {trace.id}: Completitud={puntaje}%, Acción={accion}")
         except Exception as e:
             print(f"Error al crear scores: {e}")
 
     # ============================
-    # 7. GUARDAR HISTORIAL Y THREAD EN BI (PROPIEDAD INTELECTUAL - INTACTA)
+    # 7. FLUSH PARA GARANTIZAR ENVÍO
+    # ============================
+    if langfuse:
+        try:
+            langfuse.flush()
+            print("✅ Flush completado")
+        except Exception as e:
+            print(f"❌ Error en flush: {e}")
+
+    # ============================
+    # 8. GUARDAR HISTORIAL Y THREAD EN BI (PROPIEDAD INTELECTUAL - INTACTA)
     # ============================
     if respuesta_final:
         await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
@@ -1009,7 +895,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         )
 
     # ============================
-    # 8. STREAMING DE RESPUESTA
+    # 9. STREAMING DE RESPUESTA
     # ============================
     if respuesta_final:
         tokens = respuesta_final.split()
