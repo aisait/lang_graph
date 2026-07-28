@@ -1,5 +1,5 @@
 # JARVI 2.0.18 | Agente Cognitivo de Preventa Técnica para AISA Solar  
-## LangGraph + Langfuse v4.14.1 (SDK Nativo) + OpenTelemetry (Infraestructura)
+## LangGraph + Langfuse v3.09.0 (SDK Nativo) + OpenTelemetry (Infraestructura)
 
 > **Arquitectura de agente cognitivo con persistencia de estado serializable, orquestación mediante grafos deterministas, gobernanza forense de eventos auditables, canales de consumo desacoplados y telemetría cognitiva de grado industrial. Diseñado para operar en entornos de misión crítica con separación de contextos de datos, resiliencia operacional y trazabilidad completa bajo los estándares ISO/IEC 25010, 27001, 29119 y principios DORA.**
 
