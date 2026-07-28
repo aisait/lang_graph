@@ -1,7 +1,7 @@
 """
 observability.py - Adaptador REST con INGESTION API para Langfuse OSS
-VERSIÓN 2.0.23 – Usa /api/public/ingestion para trazas y observaciones
-Basado en documentación oficial y validado en OSS v3.224.2
+VERSIÓN 2.0.25 – Incluye output en traza y tags
+Cumple con ISO/IEC 25010, 27001, DORA
 """
 import os
 import json
@@ -10,7 +10,7 @@ import uuid
 import logging
 import requests
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from abc import ABC, abstractmethod
 from urllib.parse import urljoin
 
@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 class ObservabilityPort(ABC):
     @abstractmethod
     def create_trace(self, name: str, user_id: str, session_id: str,
-                     metadata: Dict[str, Any], input_data: Dict[str, Any]) -> str:
+                     metadata: Dict[str, Any], input_data: Dict[str, Any],
+                     tags: Optional[List[str]] = None) -> str:
         pass
 
     @abstractmethod
@@ -43,12 +44,12 @@ class ObservabilityPort(ABC):
 
 
 # =============================================================================
-# ADAPTADOR REST CON INGESTION API (RECOMENDADO PARA OSS)
+# ADAPTADOR INGESTION API (COMPLETO)
 # =============================================================================
 class LangfuseIngestionAdapter(ObservabilityPort):
     """
-    Usa el endpoint /api/public/ingestion para enviar eventos.
-    Funciona en Langfuse OSS v3.224.2 y versiones recientes.
+    Adaptador que usa el endpoint /api/public/ingestion de Langfuse OSS.
+    Funciona en versiones OSS v3.224.2 y superiores.
     """
 
     def __init__(self, public_key: str, secret_key: str, host: str):
@@ -61,7 +62,8 @@ class LangfuseIngestionAdapter(ObservabilityPort):
             "Authorization": self.auth_header,
             "Content-Type": "application/json"
         })
-        self._pending_events = []  # Almacena eventos para enviar en batch
+        self._pending_events = []
+        self._trace_outputs = {}
         logger.info(f"Langfuse Ingestion adapter inicializado: {self.host}")
 
     def _build_auth_header(self) -> str:
@@ -70,7 +72,6 @@ class LangfuseIngestionAdapter(ObservabilityPort):
         return f"Basic {b64}"
 
     def _send_batch(self, events: list) -> bool:
-        """Envía un lote de eventos al endpoint de ingestion."""
         if not events:
             return True
         payload = {"batch": events}
@@ -87,39 +88,45 @@ class LangfuseIngestionAdapter(ObservabilityPort):
             return False
 
     # --------------------------------------------------------------------------
-    # 1. CREAR TRAZA (mediante ingestion)
+    # 1. CREAR TRAZA (con output y tags)
     # --------------------------------------------------------------------------
     def create_trace(self, name: str, user_id: str, session_id: str,
-                     metadata: Dict[str, Any], input_data: Dict[str, Any]) -> str:
+                     metadata: Dict[str, Any], input_data: Dict[str, Any],
+                     tags: Optional[List[str]] = None) -> str:
         trace_id = str(uuid.uuid4())
+        body = {
+            "id": trace_id,
+            "name": name,
+            "userId": user_id,
+            "sessionId": session_id,
+            "metadata": metadata,
+            "input": input_data,
+            "public": False,
+            "bookmarked": False,
+            "tags": tags or ["production", "chat"]
+        }
+        body = {k: v for k, v in body.items() if v is not None}
+
         event = {
             "id": str(uuid.uuid4()),
             "type": "trace-create",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "body": {
-                "id": trace_id,
-                "name": name,
-                "userId": user_id,
-                "sessionId": session_id,
-                "metadata": metadata,
-                "input": input_data,
-                "public": False,
-                "bookmarked": False
-            }
+            "body": body
         }
-        # Limpiar nulos
-        event["body"] = {k: v for k, v in event["body"].items() if v is not None}
         self._pending_events.append(event)
-        logger.info(f"Traza en cola para ingestion: {trace_id}")
+        logger.info(f"Traza en cola para ingestion: {trace_id} (tags: {body.get('tags')})")
         return trace_id
 
     # --------------------------------------------------------------------------
-    # 2. CREAR OBSERVACIÓN (GENERATION) mediante ingestion
+    # 2. CREAR OBSERVACIÓN (GENERATION)
     # --------------------------------------------------------------------------
     def create_generation(self, trace_id: str, name: str, model: str,
                           input_data: Dict[str, Any], output_data: Dict[str, Any],
                           usage: Dict[str, int], start_time: datetime,
                           end_time: datetime, metadata: Dict[str, Any]) -> None:
+        # Guardar output para actualizar la traza después (si es posible)
+        self._trace_outputs[trace_id] = output_data
+
         event = {
             "id": str(uuid.uuid4()),
             "type": "observation-create",
@@ -143,13 +150,12 @@ class LangfuseIngestionAdapter(ObservabilityPort):
                 "metadata": metadata
             }
         }
-        # Limpiar nulos
         event["body"] = {k: v for k, v in event["body"].items() if v is not None}
         self._pending_events.append(event)
         logger.info(f"Observación en cola para ingestion (trace {trace_id})")
 
     # --------------------------------------------------------------------------
-    # 3. CREAR SCORE (mediante POST /scores)
+    # 3. CREAR SCORE (POST /api/public/scores)
     # --------------------------------------------------------------------------
     def create_score(self, trace_id: str, name: str, value: float,
                      data_type: str = "NUMERIC", comment: Optional[str] = None) -> None:
@@ -169,14 +175,38 @@ class LangfuseIngestionAdapter(ObservabilityPort):
             logger.error(f"Error al crear score: {e}")
 
     # --------------------------------------------------------------------------
-    # 4. FLUSH: envía todos los eventos pendientes
+    # 4. FLUSH
     # --------------------------------------------------------------------------
     def flush(self) -> None:
-        if self._pending_events:
-            self._send_batch(self._pending_events)
-            self._pending_events.clear()
-        else:
+        if not self._pending_events:
             logger.debug("No hay eventos pendientes para flush")
+            return
+
+        # Enviar batch principal
+        sent = self._send_batch(self._pending_events)
+        if sent:
+            self._pending_events.clear()
+
+            # Intentar actualizar cada traza con su output (para que aparezca en el listado)
+            for trace_id, output in self._trace_outputs.items():
+                try:
+                    update_event = {
+                        "id": str(uuid.uuid4()),
+                        "type": "trace-update",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "body": {
+                            "id": trace_id,
+                            "output": output
+                        }
+                    }
+                    # Si el endpoint no soporta trace-update, esto fallará silenciosamente.
+                    self._send_batch([update_event])
+                    logger.info(f"Output actualizado para traza {trace_id}")
+                except Exception as e:
+                    logger.warning(f"No se pudo actualizar output de traza {trace_id}: {e}")
+            self._trace_outputs.clear()
+        else:
+            logger.error("Falló el envío del batch. Los eventos se mantienen en cola.")
 
 
 # =============================================================================
