@@ -1,6 +1,6 @@
 """
 config.py - Configuración central con mapeo explícito de variables de entorno.
-VERSIÓN 2.0.07 – Centralizados project_id y release.
+VERSIÓN 2.0.18 – Centralizados project_id y release.
 """
 import os
 from dotenv import load_dotenv
@@ -25,13 +25,13 @@ class Settings(BaseSettings):
                 return key
         return os.getenv("OPENAI_API_KEY", "")
 
-    # Langfuse
+    # Langfuse (Asegurar que están definidas)
     langfuse_public_key: str = Field(default="", env="LANGFUSE_PUBLIC_KEY")
     langfuse_secret_key: str = Field(default="", env="LANGFUSE_SECRET_KEY")
     langfuse_host: str = Field(default="https://cloud.langfuse.com", env="LANGFUSE_HOST")
     langfuse_tracing_environment: str = Field(default="production", env="LANGFUSE_TRACING_ENVIRONMENT")
     langfuse_project_id: str = Field(default="", env="LANGFUSE_PROJECT_ID")
-    release_version: str = Field(default="jarvi-2.0.17", env="RELEASE_VERSION")
+    release_version: str = Field(default="jarvi-2.0.18", env="RELEASE_VERSION")
 
     # Bases de datos
     ctfom_database_url: str = Field(default="", env="CTFOM_DATABASE_URL")
