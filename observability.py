@@ -1,20 +1,18 @@
 """
-observability.py - Adaptador SDK para Langfuse (versión 3.9.0)
-VERSIÓN 2.0.22 – Sintaxis correcta: client.trace() + trace.generation()
-Basado en investigación científica y documentación oficial.
+observability.py - Adaptador REST con INGESTION API para Langfuse OSS
+VERSIÓN 2.0.23 – Usa /api/public/ingestion para trazas y observaciones
+Basado en documentación oficial y validado en OSS v3.224.2
 """
 import os
+import json
+import base64
 import uuid
 import logging
+import requests
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
-from datetime import datetime
 from abc import ABC, abstractmethod
-
-# Intentar importar el SDK
-try:
-    from langfuse import Langfuse
-except ImportError:
-    Langfuse = None
+from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
 
@@ -45,105 +43,140 @@ class ObservabilityPort(ABC):
 
 
 # =============================================================================
-# ADAPTADOR SDK (NATIVO) – SINTAXIS CORRECTA
+# ADAPTADOR REST CON INGESTION API (RECOMENDADO PARA OSS)
 # =============================================================================
-class LangfuseSDKAdapter(ObservabilityPort):
+class LangfuseIngestionAdapter(ObservabilityPort):
     """
-    Usa el SDK oficial de Langfuse (versión >= 3.0.0).
-    IMPORTANTE: 
-      - client.trace() retorna un objeto trace con método .generation()
-      - NO usar client.get_trace() (no existe en v3+)
-      - NO usar REST para actualizaciones (no soportado en OSS)
+    Usa el endpoint /api/public/ingestion para enviar eventos.
+    Funciona en Langfuse OSS v3.224.2 y versiones recientes.
     """
 
     def __init__(self, public_key: str, secret_key: str, host: str):
-        if Langfuse is None:
-            raise RuntimeError("Langfuse SDK no está instalado. Ejecute: pip install langfuse>=3.0.0")
-        self.client = Langfuse(public_key=public_key, secret_key=secret_key, host=host)
-        self._traces_cache = {}  # Guarda objetos trace para reutilizar
-        self._check_version()
-        logger.info("Langfuse SDK adapter inicializado correctamente")
+        self.public_key = public_key
+        self.secret_key = secret_key
+        self.host = host.rstrip('/')
+        self.auth_header = self._build_auth_header()
+        self.session = requests.Session()
+        self.session.headers.update({
+            "Authorization": self.auth_header,
+            "Content-Type": "application/json"
+        })
+        self._pending_events = []  # Almacena eventos para enviar en batch
+        logger.info(f"Langfuse Ingestion adapter inicializado: {self.host}")
 
-    def _check_version(self):
-        """Verifica que el SDK tenga el método 'trace' (versión >= 3.0)."""
-        if not hasattr(self.client, 'trace'):
-            raise RuntimeError(
-                "Versión del SDK de Langfuse demasiado antigua. "
-                "Actualice a >= 3.0.0 (ej. pip install langfuse>=3.0.0)"
-            )
-        logger.info("Langfuse SDK versión compatible (>= 3.0.0)")
+    def _build_auth_header(self) -> str:
+        credentials = f"{self.public_key}:{self.secret_key}"
+        b64 = base64.b64encode(credentials.encode()).decode()
+        return f"Basic {b64}"
+
+    def _send_batch(self, events: list) -> bool:
+        """Envía un lote de eventos al endpoint de ingestion."""
+        if not events:
+            return True
+        payload = {"batch": events}
+        url = urljoin(self.host + '/', "api/public/ingestion")
+        try:
+            resp = self.session.post(url, json=payload, timeout=10)
+            resp.raise_for_status()
+            logger.info(f"✅ Ingestion batch enviado: {len(events)} eventos")
+            return True
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error en ingestion: {e}")
+            if hasattr(e, 'response') and e.response:
+                logger.error(f"Status: {e.response.status_code} - Respuesta: {e.response.text[:500]}")
+            return False
 
     # --------------------------------------------------------------------------
-    # 1. CREAR TRAZA
+    # 1. CREAR TRAZA (mediante ingestion)
     # --------------------------------------------------------------------------
     def create_trace(self, name: str, user_id: str, session_id: str,
                      metadata: Dict[str, Any], input_data: Dict[str, Any]) -> str:
-        trace = self.client.trace(
-            name=name,
-            user_id=user_id,
-            session_id=session_id,
-            metadata=metadata,
-            input=input_data
-        )
-        self._traces_cache[trace.id] = trace
-        logger.info(f"Traza SDK creada: {trace.id}")
-        return trace.id
+        trace_id = str(uuid.uuid4())
+        event = {
+            "id": str(uuid.uuid4()),
+            "type": "trace-create",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "body": {
+                "id": trace_id,
+                "name": name,
+                "userId": user_id,
+                "sessionId": session_id,
+                "metadata": metadata,
+                "input": input_data,
+                "public": False,
+                "bookmarked": False
+            }
+        }
+        # Limpiar nulos
+        event["body"] = {k: v for k, v in event["body"].items() if v is not None}
+        self._pending_events.append(event)
+        logger.info(f"Traza en cola para ingestion: {trace_id}")
+        return trace_id
 
     # --------------------------------------------------------------------------
-    # 2. CREAR GENERACIÓN (OBSERVACIÓN)
+    # 2. CREAR OBSERVACIÓN (GENERATION) mediante ingestion
     # --------------------------------------------------------------------------
     def create_generation(self, trace_id: str, name: str, model: str,
                           input_data: Dict[str, Any], output_data: Dict[str, Any],
                           usage: Dict[str, int], start_time: datetime,
                           end_time: datetime, metadata: Dict[str, Any]) -> None:
-        # Obtener el objeto trace del caché
-        trace = self._traces_cache.get(trace_id)
-        if not trace:
-            # Si no está en caché, no podemos obtenerlo (get_trace no existe)
-            logger.error(f"No se encontró la traza {trace_id} en caché. No se puede crear generación.")
-            return
-
-        try:
-            trace.generation(
-                name=name,
-                model=model,
-                input=input_data,
-                output=output_data,
-                usage=usage,
-                start_time=start_time,
-                end_time=end_time,
-                metadata=metadata
-            )
-            logger.info(f"✅ Generación creada para trace {trace_id}")
-        except Exception as e:
-            logger.error(f"Error al crear generación: {e}")
+        event = {
+            "id": str(uuid.uuid4()),
+            "type": "observation-create",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "body": {
+                "id": str(uuid.uuid4()),
+                "traceId": trace_id,
+                "name": name,
+                "type": "GENERATION",
+                "model": model,
+                "input": input_data,
+                "output": output_data,
+                "usage": {
+                    "input": usage.get("input", 0),
+                    "output": usage.get("output", 0),
+                    "total": usage.get("total", 0),
+                    "unit": "TOKENS"
+                },
+                "startTime": start_time.isoformat(),
+                "endTime": end_time.isoformat(),
+                "metadata": metadata
+            }
+        }
+        # Limpiar nulos
+        event["body"] = {k: v for k, v in event["body"].items() if v is not None}
+        self._pending_events.append(event)
+        logger.info(f"Observación en cola para ingestion (trace {trace_id})")
 
     # --------------------------------------------------------------------------
-    # 3. CREAR SCORE
+    # 3. CREAR SCORE (mediante POST /scores)
     # --------------------------------------------------------------------------
     def create_score(self, trace_id: str, name: str, value: float,
                      data_type: str = "NUMERIC", comment: Optional[str] = None) -> None:
+        payload = {
+            "traceId": trace_id,
+            "name": name,
+            "value": value,
+            "dataType": data_type,
+            "comment": comment
+        }
+        payload = {k: v for k, v in payload.items() if v is not None}
+        url = urljoin(self.host + '/', "api/public/scores")
         try:
-            self.client.score(
-                trace_id=trace_id,
-                name=name,
-                value=value,
-                data_type=data_type,
-                comment=comment
-            )
+            self.session.post(url, json=payload, timeout=10).raise_for_status()
             logger.info(f"Score '{name}' = {value} registrado para trace {trace_id}")
         except Exception as e:
             logger.error(f"Error al crear score: {e}")
 
     # --------------------------------------------------------------------------
-    # 4. FLUSH
+    # 4. FLUSH: envía todos los eventos pendientes
     # --------------------------------------------------------------------------
     def flush(self) -> None:
-        try:
-            self.client.flush()
-            logger.debug("Flush SDK completado")
-        except Exception as e:
-            logger.error(f"Error en flush: {e}")
+        if self._pending_events:
+            self._send_batch(self._pending_events)
+            self._pending_events.clear()
+        else:
+            logger.debug("No hay eventos pendientes para flush")
 
 
 # =============================================================================
