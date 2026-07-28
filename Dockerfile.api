@@ -2,7 +2,7 @@
 # JARVI 2.0.18 | Dockerfile.api CON INVALIDACIÓN DE CACHÉ FORZADA
 # =============================================================================
 # Cambiar CACHE_BUST en cada despliegue para forzar rebuild limpio
-ARG CACHE_BUST=20260728_SDK_FINAL_V2
+ARG CACHE_BUST=20260728_SDK_FINAL_V3
 
 FROM python:3.11-slim
 
