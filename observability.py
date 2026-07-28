@@ -1,6 +1,6 @@
 """
 observability.py - Adaptador REST para Langfuse (sin SDK).
-VERSIÓN 2.0.19 – Estable, compatible con Langfuse OSS.
+VERSIÓN 2.0.19 – Estable, compatible con Langfuse OSS V3.
 """
 import os
 import json
