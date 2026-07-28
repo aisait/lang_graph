@@ -1,6 +1,7 @@
 """
-observability.py - Adaptador REST con INGESTION API para Langfuse OSS
-VERSIÓN 2.0.26 – ESTABLE: solo trace-create y observation-create, sin trace-update
+observability.py - Adaptador INGESTION API para Langfuse OSS
+VERSIÓN 2.0.27 – ESTABLE: Solo trace-create y observation-create
+Funciona en Langfuse OSS v3.224.2
 """
 import os
 import json
@@ -9,7 +10,7 @@ import uuid
 import logging
 import requests
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from abc import ABC, abstractmethod
 from urllib.parse import urljoin
 
@@ -45,6 +46,12 @@ class ObservabilityPort(ABC):
 # ADAPTADOR INGESTION API (ESTABLE)
 # =============================================================================
 class LangfuseIngestionAdapter(ObservabilityPort):
+    """
+    Adaptador estable para Langfuse OSS usando /api/public/ingestion.
+    NO utiliza trace-update (no soportado en OSS).
+    NO utiliza tags (para evitar complejidades).
+    """
+
     def __init__(self, public_key: str, secret_key: str, host: str):
         self.public_key = public_key
         self.secret_key = secret_key
@@ -56,7 +63,7 @@ class LangfuseIngestionAdapter(ObservabilityPort):
             "Content-Type": "application/json"
         })
         self._pending_events = []
-        logger.info(f"Langfuse Ingestion adapter inicializado: {self.host}")
+        logger.info(f"Langfuse Ingestion adapter (ESTABLE) inicializado: {self.host}")
 
     def _build_auth_header(self) -> str:
         credentials = f"{self.public_key}:{self.secret_key}"
@@ -80,7 +87,7 @@ class LangfuseIngestionAdapter(ObservabilityPort):
             return False
 
     # --------------------------------------------------------------------------
-    # 1. CREAR TRAZA (sin tags ni output)
+    # 1. CREAR TRAZA (evento trace-create)
     # --------------------------------------------------------------------------
     def create_trace(self, name: str, user_id: str, session_id: str,
                      metadata: Dict[str, Any], input_data: Dict[str, Any]) -> str:
@@ -108,7 +115,7 @@ class LangfuseIngestionAdapter(ObservabilityPort):
         return trace_id
 
     # --------------------------------------------------------------------------
-    # 2. CREAR OBSERVACIÓN (GENERATION)
+    # 2. CREAR OBSERVACIÓN (evento observation-create)
     # --------------------------------------------------------------------------
     def create_generation(self, trace_id: str, name: str, model: str,
                           input_data: Dict[str, Any], output_data: Dict[str, Any],
