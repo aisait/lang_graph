@@ -1,5 +1,5 @@
 """
-api_new.py - Servidor FastAPI con trazabilidad Langfuse v3 mediante API REST.
+api_v2.py - Servidor FastAPI con trazabilidad Langfuse v3 mediante API REST.
 VERSIÓN 2.0.18 – Logs de diagnóstico para depuración de Output y tokens.
 Cumple con ISO/IEC 25010, 27001, DORA 27JUL2026 1500.
 """
@@ -75,7 +75,7 @@ def taxonomy_error(exc: Exception) -> str:
     return "SWR-API-UNKNOWN-000"
 
 # =============================================================================
-# FUNCIONES AUXILIARES REST PARA LANGFUSE v3 (ENRIQUECIDAS)
+# FUNCIONES AUXILIARES REST PARA LANGFUSE v3 - CORREGIDAS
 # =============================================================================
 def langfuse_basic_auth() -> str:
     credentials = f"{LANGFUSE_PUBLIC_KEY}:{LANGFUSE_SECRET_KEY}"
@@ -119,23 +119,29 @@ def crear_traza_langfuse(
     return resp.json()
 
 def actualizar_traza_langfuse(trace_id: str, output: dict, metadata: dict = None):
+    """
+    ACTUALIZACIÓN CORREGIDA: Se cambia PATCH → PUT y se añade projectId.
+    En Langfuse OSS, PUT está soportado para actualizar trazas.
+    """
     url = f"{LANGFUSE_HOST}/api/public/traces/{trace_id}"
     headers = {
         "Authorization": f"Basic {langfuse_basic_auth()}",
         "Content-Type": "application/json"
     }
     payload = {
+        "projectId": LANGFUSE_PROJECT_ID,
         "output": output,
         "metadata": metadata or {}
     }
     try:
-        resp = requests.patch(url, json=payload, headers=headers, timeout=10)
+        resp = requests.put(url, json=payload, headers=headers, timeout=10)
         resp.raise_for_status()
-        print(f"✅ Traza {trace_id} actualizada con éxito")
+        print(f"✅ Traza {trace_id} actualizada con éxito (PUT)")
         return resp.json()
     except Exception as e:
         print(f"❌ Error al actualizar traza {trace_id}: {e}")
         if hasattr(e, 'response') and e.response:
+            print(f"   Código: {e.response.status_code}")
             print(f"   Respuesta: {e.response.text}")
         raise
 
@@ -152,6 +158,9 @@ def crear_observacion_generacion(
     end_time: datetime = None,
     metadata: dict = None
 ) -> dict:
+    """
+    CREACIÓN DE OBSERVACIÓN CORREGIDA: Se añade projectId.
+    """
     url = f"{LANGFUSE_HOST}/api/public/observations"
     headers = {
         "Authorization": f"Basic {langfuse_basic_auth()}",
@@ -159,6 +168,7 @@ def crear_observacion_generacion(
     }
     payload = {
         "traceId": trace_id,
+        "projectId": LANGFUSE_PROJECT_ID,
         "name": name,
         "type": "GENERATION",
         "model": model,
@@ -185,6 +195,7 @@ def crear_observacion_generacion(
     except Exception as e:
         print(f"❌ Error al crear observación GENERATION: {e}")
         if hasattr(e, 'response') and e.response:
+            print(f"   Código: {e.response.status_code}")
             print(f"   Respuesta: {e.response.text}")
         raise
 
@@ -208,7 +219,7 @@ def crear_score_langfuse(trace_id: str, name: str, value, comment: str = None, d
     resp.raise_for_status()
 
 # =============================================================================
-# FUNCIONES AUXILIARES PARA CÁLCULO DE SCORE (NEGOCIO)
+# FUNCIONES AUXILIARES PARA CÁLCULO DE SCORE (NEGOCIO) - INTACTAS
 # =============================================================================
 CAMPOS_SCORE = [
     "ciudad", "empresa_electrica", "tarifa_base_gtq", "topologia",
