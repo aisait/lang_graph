@@ -1,5 +1,5 @@
 # =============================================================================
-# requirements.txt - JARVI 2.0.18 - Versión estabilizada con SDK 28JUL2026
+# requirements.txt - JARVI 2.0.18 - Versión estabilizada con SDK 28JUL2026 1
 # =============================================================================
 
 fastapi==0.115.0
