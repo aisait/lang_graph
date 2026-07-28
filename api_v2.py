@@ -1,6 +1,6 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse v4 mediante SDK nativo.
-VERSIÓN 2.0.18 – Instrumentación con SDK, sin CallbackHandler para evitar colisiones.
+VERSIÓN 2.0.18 – Refactorización con arquitectura limpia y adaptador.
 Cumple con ISO/IEC 25010, 27001, DORA 27JUL2026.
 """
 import os
@@ -28,9 +28,14 @@ from pydantic import BaseModel
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
-# SDK de Langfuse
-from langfuse import Langfuse
+# =============================================================================
+# IMPORTACIÓN DEL ADAPTADOR DE OBSERVABILIDAD
+# =============================================================================
+from observability import ObservabilityPort, LangfuseSDKAdapter
 
+# =============================================================================
+# IMPORTACIONES EXISTENTES DEL SISTEMA
+# =============================================================================
 from schemas import ChatRequest
 from agent_graph import create_graph, normalizar_contacto
 from ontology import obtener_productos_relevantes
@@ -55,24 +60,42 @@ LANGFUSE_SECRET_KEY = settings.langfuse_secret_key
 LANGFUSE_PROJECT_ID = settings.langfuse_project_id
 LANGFUSE_ENVIRONMENT = settings.langfuse_tracing_environment
 
-# Inicialización del cliente Langfuse (se hace al inicio para que esté disponible)
-_langfuse_client = None
+# =============================================================================
+# INICIALIZACIÓN DEL ADAPTADOR DE OBSERVABILIDAD
+# =============================================================================
+_observability_adapter: Optional[ObservabilityPort] = None
 
-def get_langfuse_client():
-    global _langfuse_client
-    if _langfuse_client is None:
-        _langfuse_client = Langfuse(
-            public_key=LANGFUSE_PUBLIC_KEY,
-            secret_key=LANGFUSE_SECRET_KEY,
-            host=LANGFUSE_HOST
-        )
-        logger.info("Langfuse client initialized")
-    return _langfuse_client
+def get_observability_adapter() -> ObservabilityPort:
+    global _observability_adapter
+    if _observability_adapter is None:
+        try:
+            _observability_adapter = LangfuseSDKAdapter(
+                public_key=LANGFUSE_PUBLIC_KEY,
+                secret_key=LANGFUSE_SECRET_KEY,
+                host=LANGFUSE_HOST
+            )
+            logger.info("Langfuse SDK adapter initialized")
+        except Exception as e:
+            logger.critical(f"Failed to initialize Langfuse adapter: {e}")
+            # Si falla, se puede usar un adaptador nulo (no-op) o lanzar la excepción.
+            # Para evitar romper el sistema, usamos un adaptador nulo que registra en logs.
+            _observability_adapter = NullObservabilityAdapter()
+            logger.warning("Using NullObservabilityAdapter. Traces will not be sent.")
+    return _observability_adapter
 
-# Feature flag para posible rollback (cambiar en entorno)
-USE_LANGFUSE_SDK = os.getenv("USE_LANGFUSE_SDK", "true").lower() == "true"
+class NullObservabilityAdapter(ObservabilityPort):
+    """Adaptador nulo para cuando el SDK falla, no hace nada pero no rompe el flujo."""
+    def create_trace(self, *args, **kwargs):
+        logger.warning("NullObservabilityAdapter: create_trace called (no-op)")
+        return str(uuid.uuid4())
+    def create_generation(self, *args, **kwargs):
+        logger.warning("NullObservabilityAdapter: create_generation called (no-op)")
+    def create_score(self, *args, **kwargs):
+        logger.warning("NullObservabilityAdapter: create_score called (no-op)")
+    def flush(self):
+        pass
 
-print("===== JARVI API v2.0.18 con SDK ACTIVADO =====")
+print("===== JARVI API v2.0.18 con ADAPTADOR SDK ACTIVADO =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -380,7 +403,7 @@ def get_db_url() -> str:
     raise RuntimeError("No se encontró DATABASE_URL ni CTFOM_DATABASE_URL.")
 
 # =============================================================================
-# CICLO DE VIDA DE LA APLICACIÓN (CON INICIALIZACIÓN DEL SDK)
+# CICLO DE VIDA DE LA APLICACIÓN (CON INICIALIZACIÓN DEL ADAPTADOR)
 # =============================================================================
 graph = None
 redis_client = None
@@ -389,10 +412,10 @@ redis_client = None
 async def lifespan(app: FastAPI):
     global graph, redis_client
     print("=== INICIO DEL LIFESPAN ===")
-    print("OpenTelemetry desactivado. Usando Langfuse SDK v3.9.0.")
+    print("OpenTelemetry desactivado. Usando Langfuse SDK v3.9.0 a través de adaptador.")
 
-    # Inicializar cliente Langfuse (se hace aquí para que esté disponible)
-    get_langfuse_client()
+    # Inicializar el adaptador de observabilidad (se hará bajo demanda, pero forzamos aquí)
+    get_observability_adapter()
 
     db_url = get_db_url()
     print(f"DB URL (sanitizada): {db_url[:50]}...")
@@ -459,7 +482,7 @@ async def health_check():
         "version": "2.0.18",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
-        "langfuse": "healthy (SDK v3.9.0)",
+        "langfuse": "healthy (SDK adapter)",
         "status": "ok"
     }
     return status
@@ -480,16 +503,15 @@ async def registrar_feedback(feedback: dict):
     if "trace_id" not in feedback or "value" not in feedback:
         raise HTTPException(status_code=422, detail="trace_id y value son requeridos")
     try:
-        # Usamos el SDK para crear el score (o la función REST antigua si se prefiere, pero mejor usar SDK)
-        langfuse = get_langfuse_client()
-        langfuse.score(
+        adapter = get_observability_adapter()
+        adapter.create_score(
             trace_id=feedback["trace_id"],
             name=feedback.get("name", "satisfaccion"),
             value=float(feedback["value"]),
             data_type="NUMERIC",
             comment=feedback.get("comment")
         )
-        langfuse.flush()
+        adapter.flush()
         print(f"Feedback registrado para trace_id {feedback['trace_id']}")
         return {"status": "ok", "trace_id": feedback["trace_id"]}
     except Exception as e:
@@ -622,7 +644,7 @@ async def process_chat_frontend(chat_request: ChatRequest, http_request: Request
     )
 
 # =============================================================================
-# FUNCIÓN DE GENERACIÓN DE TOKENS (CON SDK)
+# FUNCIÓN DE GENERACIÓN DE TOKENS (CON ADAPTADOR DE OBSERVABILIDAD)
 # =============================================================================
 async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
                          nuevo_whatsapp: str | None = None, origen: str = "desconocido",
@@ -636,39 +658,28 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
     user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
 
     # ============================
-    # 1. INSTRUMENTACIÓN CON SDK (SOLO SI EL FEATURE FLAG ESTÁ ACTIVO)
+    # 1. INSTRUMENTACIÓN CON ADAPTADOR (SDK)
     # ============================
-    trace = None
-    langfuse = None
+    adapter = get_observability_adapter()
     trace_id_langfuse = None
-
-    if USE_LANGFUSE_SDK:
-        try:
-            langfuse = get_langfuse_client()
-            trace = langfuse.trace(
-                name=f"chat_{caso}",
-                user_id=user_id,
-                session_id=thread_id,
-                metadata={
-                    "chat_id": chat_id,
-                    "origen": origen,
-                    "fingerprint": fingerprint or "",
-                    "caso": caso,
-                    "whatsapp": user_id
-                },
-                tags=["production", origen],
-                public=False,
-                bookmarked=False,
-                input={"message": mensaje}
-            )
-            trace_id_langfuse = trace.id
-            print(f"Traza Langfuse creada vía SDK: {trace_id_langfuse}")
-        except Exception as e:
-            print(f"❌ Error al crear traza vía SDK: {e}")
-            trace = None
-            trace_id_langfuse = None
-    else:
-        print("⚠️ SDK desactivado por feature flag. No se registrará en Langfuse.")
+    try:
+        trace_id_langfuse = adapter.create_trace(
+            name=f"chat_{caso}",
+            user_id=user_id,
+            session_id=thread_id,
+            metadata={
+                "chat_id": chat_id,
+                "origen": origen,
+                "fingerprint": fingerprint or "",
+                "caso": caso,
+                "whatsapp": user_id
+            },
+            input_data={"message": mensaje}
+        )
+        print(f"Traza Langfuse creada vía SDK: {trace_id_langfuse}")
+    except Exception as e:
+        print(f"❌ Error al crear traza vía SDK: {e}")
+        trace_id_langfuse = None
 
     # ============================
     # 2. PREPARAR SESIÓN Y ESTADO (PROPIEDAD INTELECTUAL - INTACTA)
@@ -800,9 +811,9 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         print(f"🔍 response_metadata: {ultimo_aimessage.response_metadata}")
 
     # ============================
-    # 4. CREAR OBSERVACIÓN GENERATION CON SDK (SI HAY TRACE)
+    # 4. CREAR OBSERVACIÓN GENERATION CON ADAPTADOR (SI HAY TRACE Y AIMESSAGE)
     # ============================
-    if trace and ultimo_aimessage:
+    if trace_id_langfuse and ultimo_aimessage:
         try:
             usage = ultimo_aimessage.response_metadata.get('token_usage', {})
             input_tokens = usage.get('prompt_tokens', 0)
@@ -811,11 +822,12 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             model = "gpt-4o-mini"
 
             if total_tokens > 0:
-                trace.generation(
+                adapter.create_generation(
+                    trace_id=trace_id_langfuse,
                     name=f"LLM Generation {caso}",
                     model=model,
-                    input={"messages": mensaje},
-                    output={"response": respuesta_final},
+                    input_data={"messages": mensaje},
+                    output_data={"response": respuesta_final},
                     usage={
                         "input": input_tokens,
                         "output": output_tokens,
@@ -832,53 +844,41 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
             print(f"❌ Error al crear observación GENERATION: {e}")
 
     # ============================
-    # 5. ACTUALIZAR TRAZA CON OUTPUT (SDK)
+    # 5. CREAR SCORES (ADAPTADOR)
     # ============================
-    if trace and respuesta_final:
-        print(f"🔄 Actualizando traza {trace.id} con output...")
-        try:
-            trace.update(output={"response": respuesta_final})
-            print(f"✅ Traza {trace.id} actualizada con respuesta final")
-        except Exception as e:
-            print(f"❌ Error al actualizar traza: {e}")
-
-    # ============================
-    # 6. CREAR SCORES (SDK)
-    # ============================
-    if trace:
+    if trace_id_langfuse:
         try:
             puntaje = calcular_puntaje_completitud(ctx)
             accion = "Calificado" if puntaje >= 60 else "No Calificado"
 
-            langfuse.score(
-                trace_id=trace.id,
+            adapter.create_score(
+                trace_id=trace_id_langfuse,
                 name="Completitud Lead",
                 value=puntaje,
                 data_type="NUMERIC",
                 comment=f"Basado en {sum(1 for c in CAMPOS_SCORE if ctx.get(c))} de {len(CAMPOS_SCORE)} campos"
             )
-            langfuse.score(
-                trace_id=trace.id,
+            adapter.create_score(
+                trace_id=trace_id_langfuse,
                 name="Acción Lead",
                 value=accion,
                 data_type="CATEGORICAL"
             )
-            print(f"Scores registrados para trace {trace.id}: Completitud={puntaje}%, Acción={accion}")
+            print(f"Scores registrados para trace {trace_id_langfuse}: Completitud={puntaje}%, Acción={accion}")
         except Exception as e:
             print(f"Error al crear scores: {e}")
 
     # ============================
-    # 7. FLUSH PARA GARANTIZAR ENVÍO
+    # 6. FLUSH PARA GARANTIZAR ENVÍO
     # ============================
-    if langfuse:
-        try:
-            langfuse.flush()
-            print("✅ Flush completado")
-        except Exception as e:
-            print(f"❌ Error en flush: {e}")
+    try:
+        adapter.flush()
+        print("✅ Flush completado")
+    except Exception as e:
+        print(f"❌ Error en flush: {e}")
 
     # ============================
-    # 8. GUARDAR HISTORIAL Y THREAD EN BI (PROPIEDAD INTELECTUAL - INTACTA)
+    # 7. GUARDAR HISTORIAL Y THREAD EN BI (PROPIEDAD INTELECTUAL - INTACTA)
     # ============================
     if respuesta_final:
         await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
@@ -895,7 +895,7 @@ async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: s
         )
 
     # ============================
-    # 9. STREAMING DE RESPUESTA
+    # 8. STREAMING DE RESPUESTA
     # ============================
     if respuesta_final:
         tokens = respuesta_final.split()
