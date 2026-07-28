@@ -2,7 +2,7 @@
 # JARVI 2.0.18 | Dockerfile.api CON INVALIDACIÓN DE CACHÉ
 # =============================================================================
 
-ARG CACHE_BUST=20260728_SDK
+ARG CACHE_BUST=20260728_SDK_FINAL
 
 FROM python:3.11-slim
 
@@ -27,8 +27,9 @@ COPY . .
 RUN rm -f /app/api.py /app/api_server.py /app/api_buffer.py 2>/dev/null || true
 RUN find . -type d -name __pycache__ -exec rm -rf {} + || true
 
-RUN grep -q "🔍 Respuesta final:" /app/api_v2.py && echo "✅ api_v2.py contiene diagnóstico" || echo "❌ api_v2.py NO contiene diagnóstico"
-RUN grep -q "langfuse" /app/api_v2.py && echo "✅ api_v2.py tiene SDK" || echo "❌ api_v2.py sin SDK"
+RUN grep -q "ObservabilityPort" /app/observability.py && echo "✅ observability.py tiene interfaz" || echo "❌ observability.py falta"
+RUN grep -q "LangfuseSDKAdapter" /app/observability.py && echo "✅ observability.py tiene adaptador" || echo "❌ observability.py sin adaptador"
+RUN grep -q "get_observability_adapter" /app/api_v2.py && echo "✅ api_v2.py usa adaptador" || echo "❌ api_v2.py sin adaptador"
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD python -c "import langfuse, asyncpg, redis" || exit 1
