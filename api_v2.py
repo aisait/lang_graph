@@ -1,6 +1,6 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.0.27 – UNIFICACIÓN FINAL: solo endpoint /chat, eliminado debug, integración de audio, inyección de datos desde n8n.
+VERSIÓN 2.0.28 – UNIFICACIÓN FINAL: solo endpoint /chat, integración de audio, inyección de datos desde n8n, persistencia de contexto SMART.
 """
 import os
 import asyncio
@@ -83,7 +83,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.0.27 FINAL (UNIFICADO) =====")
+print("===== JARVI API v2.0.28 FINAL (UNIFICADO) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -428,23 +428,23 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
             )
     end_time = datetime.now(timezone.utc)
 
-# 13. Extraer respuesta
-respuesta_final = ""
-ultimo_aimessage = None
-ctx = resultado.get("contexto_tecnico", {})
-for msg in reversed(resultado.get("messages", [])):
-    if isinstance(msg, AIMessage):
-        respuesta_final = msg.content
-        ultimo_aimessage = msg
-        break
+    # 13. Extraer respuesta
+    respuesta_final = ""
+    ultimo_aimessage = None
+    ctx = resultado.get("contexto_tecnico", {})
+    for msg in reversed(resultado.get("messages", [])):
+        if isinstance(msg, AIMessage):
+            respuesta_final = msg.content
+            ultimo_aimessage = msg
+            break
 
-# ===== NUEVO: Guardar el contexto actualizado en Redis =====
-sesion["contexto_tecnico"] = ctx
-await guardar_sesion_redis(redis_client, chat_id, sesion)
-# ==========================================================
+    # ===== ACTUALIZAR SESIÓN EN REDIS CON EL NUEVO CONTEXTO =====
+    sesion["contexto_tecnico"] = ctx
+    await guardar_sesion_redis(redis_client, chat_id, sesion)
+    # ============================================================
 
-if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
-    respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
+    if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
+        respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
     # 14. Instrumentación Langfuse (traza y observación)
     adapter = get_observability_adapter()
@@ -574,7 +574,7 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.27",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.28",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -614,7 +614,7 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend-production",
-        "version": "2.0.27",
+        "version": "2.0.28",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
