@@ -1,5 +1,5 @@
 {
-  "__comentario_iso": "Archivo de ontología de catálogo de productos AISA Solar. Define 86 categorías con etiquetas, nombres, URLs, palabras clave y tipo (sistema/unitario). Propósito: servir como fuente de verdad referencial para el enrutamiento epistemológico del agente (ontology.py).\n\nEstándares aplicados:\n- ISO/IEC 26514:2021 (Documentación de software): cada entrada describe un producto con metadatos claros.\n- ISO/IEC 25010:2011 (Calidad del producto): las palabras clave permiten emparejamiento preciso con la intención del usuario, mejorando la adecuación funcional.\n- ISO/IEC 29119:2022 (Pruebas de software - caja negra):\n  Pruebas sugeridas:\n  1. Carga del archivo: verificar que la función cargar_ontologia() retorna un diccionario con 86 claves numéricas y un campo '__comentario_iso'.\n  2. Búsqueda de bloques: invocar obtener_fragmento_ontologia('On-Grid') y comprobar que se incluyen los bloques 1-10, 20, 35, 37, 38, 60, 61, 64, 79, 80, 81, 85.\n  3. Integridad: cada entrada debe contener 'tag', 'nombre', 'url', 'tipo' y 'keywords' (lista de 10 cadenas). La URL debe ser válida y pertenecer al dominio aisa.com.gt.\n  4. Rendimiento: la carga desde disco debe ser instantánea (<10ms) gracias al caché en memoria.\n- ISO/IEC/IEEE 12207:2008 (Ciclo de vida): este archivo es un ítem de configuración del sistema, mantenido bajo control de cambios.",
+  "__comentario_iso": "Archivo de ontología de catálogo de productos AISA Solar. Define 86 categorías con etiquetas, nombres, URLs, palabras clave, tipo (sistema/unitario) y requisitos de configuración (requirements). Propósito: servir como fuente de verdad referencial para el enrutamiento epistemológico del agente (ontology.py).\n\nEstándares aplicados:\n- ISO/IEC 26514:2021 (Documentación de software): cada entrada describe un producto con metadatos claros.\n- ISO/IEC 25010:2011 (Calidad del producto): las palabras clave permiten emparejamiento preciso con la intención del usuario, mejorando la adecuación funcional.\n- ISO/IEC 29119:2022 (Pruebas de software - caja negra):\n  Pruebas sugeridas:\n  1. Carga del archivo: verificar que la función cargar_ontologia() retorna un diccionario con 86 claves numéricas y un campo '__comentario_iso'.\n  2. Búsqueda de bloques: invocar obtener_fragmento_ontologia('On-Grid') y comprobar que se incluyen los bloques 1-10, 20, 35, 37, 38, 60, 61, 64, 79, 80, 81, 85.\n  3. Integridad: cada entrada debe contener 'tag', 'nombre', 'url', 'tipo' y 'keywords' (lista de 10 cadenas). La URL debe ser válida y pertenecer al dominio aisa.com.gt.\n  4. Rendimiento: la carga desde disco debe ser instantánea (<10ms) gracias al caché en memoria.\n- ISO/IEC/IEEE 12207:2008 (Ciclo de vida): este archivo es un ítem de configuración del sistema, mantenido bajo control de cambios.\n\nVersión: 2.1.0 – Se añade campo 'requirements' para guiar el diálogo imperceptible (Julio 2026).",
   "1": {
     "tag": "sistemas-solares-on-grid",
     "nombre": "SISTEMAS SOLARES CONECTADOS A LA RED ELECTRICA ON-GRID",
@@ -16,6 +16,11 @@
       "microinversor solar enphase",
       "inversor string trifasico",
       "norma ieee 1547 interconexion"
+    ],
+    "requirements": [
+      {"field": "consumo_mensual_kwh", "question": "Para dimensionar su sistema, ¿cuál es su consumo eléctrico mensual en kWh? (puede revisar su factura de luz)", "type": "number"},
+      {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene actualmente? (ej. T-1, T-2, o el monto en quetzales por kWh)", "type": "string"},
+      {"field": "espacio_techo", "question": "¿Cuántos metros cuadrados disponibles tiene en el techo para los paneles?", "type": "number"}
     ]
   },
   "2": {
@@ -34,6 +39,9 @@
       "dimensionamiento fotovoltaico vivienda",
       "balance neto energia electrica",
       "proteccion termomagnetica dc"
+    ],
+    "requirements": [
+      {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo eléctrico mensual en kWh?", "type": "number"}
     ]
   },
   "3": {
@@ -52,6 +60,10 @@
       "estudio de sombras fotovoltaico",
       "factor de potencia inversor solar",
       "proteccion contra sobretensiones dc"
+    ],
+    "requirements": [
+      {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"},
+      {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene?", "type": "string"}
     ]
   },
   "4": {
@@ -70,6 +82,10 @@
       "thd inversor fotovoltaico",
       "cumplimiento normativa iec 62109",
       "curva de rendimiento inversor solar"
+    ],
+    "requirements": [
+      {"field": "potencia_inversor", "question": "¿Qué potencia en kW necesita para el inversor?", "type": "number"},
+      {"field": "tipo_instalacion", "question": "¿El inversor será instalado en interiores o exteriores?", "type": "string"}
     ]
   },
   "5": {
@@ -88,6 +104,11 @@
       "analisis de retorno de inversion solar",
       "perdidas por temperatura en modulos",
       "proteccion dc sobretension transitoria"
+    ],
+    "requirements": [
+      {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"},
+      {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene?", "type": "string"},
+      {"field": "espacio_techo", "question": "¿Cuántos metros cuadrados de techo tiene disponibles?", "type": "number"}
     ]
   },
   "6": {
@@ -106,6 +127,10 @@
       "vertido cero excedentes solar",
       "estudio de calidad de energia",
       "coordinacion de protecciones electricas"
+    ],
+    "requirements": [
+      {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"},
+      {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene?", "type": "string"}
     ]
   },
   "7": {
@@ -124,6 +149,11 @@
       "analisis de curvas i‑v string",
       "armonicos en inversores fotovoltaicos",
       "cumplimiento resolucion cnee 227"
+    ],
+    "requirements": [
+      {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"},
+      {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene?", "type": "string"},
+      {"field": "area_disponible", "question": "¿Cuántos metros cuadrados tiene disponibles para la instalación?", "type": "number"}
     ]
   },
   "8": {
@@ -142,6 +172,10 @@
       "estudio de recurso solar local",
       "eficiencia global del sistema fotovoltaico",
       "conexion a red de baja tension"
+    ],
+    "requirements": [
+      {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"},
+      {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene?", "type": "string"}
     ]
   },
   "9": {
@@ -160,6 +194,10 @@
       "cumplimiento normativa iec 62116",
       "factor de desplazamiento de fase inversor",
       "curvas de rendimiento trifasico"
+    ],
+    "requirements": [
+      {"field": "potencia_inversor", "question": "¿Qué potencia en kW necesita para el inversor?", "type": "number"},
+      {"field": "tipo_instalacion", "question": "¿El inversor será instalado en interiores o exteriores?", "type": "string"}
     ]
   },
   "10": {
@@ -178,6 +216,9 @@
       "dimensionamiento solar pymes",
       "rentabilidad solar comercio",
       "normativa conexion red baja tension"
+    ],
+    "requirements": [
+      {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"}
     ]
   },
   "11": {
@@ -196,6 +237,10 @@
       "eficiencia colector solar selectivo",
       "curva de rendimiento termico",
       "norma srcc og‑300"
+    ],
+    "requirements": [
+      {"field": "numero_personas", "question": "¿Para cuántas personas necesita agua caliente en su hogar?", "type": "number"},
+      {"field": "tipo_instalacion", "question": "¿El calentador será instalado en un techo plano o inclinado?", "type": "string"}
     ]
   },
   "12": {
@@ -214,7 +259,8 @@
       "coeficiente de dilatacion termica cpvc",
       "presion nominal tuberia pn10",
       "norma astm d2846"
-    ]
+    ],
+    "requirements": []
   },
   "13": {
     "tag": "accesorios-valvulas-tuberia",
@@ -232,7 +278,8 @@
       "material polipropileno random",
       "presion de trabajo valvula pvc",
       "norma iso 1452"
-    ]
+    ],
+    "requirements": []
   },
   "14": {
     "tag": "iluminacion-led-dc",
@@ -250,7 +297,8 @@
       "temperatura de color 3000k",
       "proteccion ip65 iluminacion exterior",
       "norma ies lm‑79"
-    ]
+    ],
+    "requirements": []
   },
   "15": {
     "tag": "bombas-perifericas-agua",
@@ -268,7 +316,8 @@
       "sello mecanico bomba agua",
       "material impulsor bronce",
       "norma iso 9905"
-    ]
+    ],
+    "requirements": []
   },
   "16": {
     "tag": "bombas-sumergibles-bajo-caudal",
@@ -286,7 +335,8 @@
       "material acero inoxidable aisi 304",
       "curva q‑h bomba 12v",
       "norma iso 9906"
-    ]
+    ],
+    "requirements": []
   },
   "17": {
     "tag": "bombas-calor-calefaccion",
@@ -304,7 +354,8 @@
       "curva de rendimiento estacional scop",
       "norma en 14511",
       "sistema de expansion termostatica"
-    ]
+    ],
+    "requirements": []
   },
   "18": {
     "tag": "refrigeracion-solar-aislada",
@@ -322,7 +373,8 @@
       "consumo energetico nevera solar kwh/dia",
       "norma ashrae 117",
       "refrigerante r134a solar"
-    ]
+    ],
+    "requirements": []
   },
   "19": {
     "tag": "sistemas-aislados-baterias",
@@ -340,6 +392,10 @@
       "autonomia bateria dias sin sol",
       "profundidad de descarga dod bateria",
       "norma iec 61427"
+    ],
+    "requirements": [
+      {"field": "autonomia_dias", "question": "¿Cuántos días de autonomía necesita sin sol (baterías)?", "type": "number"},
+      {"field": "potencia_pico", "question": "¿Qué potencia pico (en watts) necesita para sus equipos?", "type": "number"}
     ]
   },
   "20": {
@@ -358,7 +414,8 @@
       "certificacion iec 61215",
       "clase de proteccion class ii",
       "curva i‑v panel solar"
-    ]
+    ],
+    "requirements": []
   },
   "21": {
     "tag": "resistencias-calentadores-solares",
@@ -376,7 +433,8 @@
       "termostato seguridad reiniciable",
       "norma nema wc 8",
       "grado de proteccion ipx4"
-    ]
+    ],
+    "requirements": []
   },
   "22": {
     "tag": "turbinas-eolicas-pequenas",
@@ -394,6 +452,10 @@
       "freno electrico aerogenerador",
       "norma iec 61400‑2",
       "clase de viento i‑ii"
+    ],
+    "requirements": [
+      {"field": "velocidad_viento", "question": "¿Cuál es la velocidad promedio del viento en su ubicación? (m/s)", "type": "number"},
+      {"field": "altura_torre", "question": "¿Qué altura de torre tiene disponible? (metros)", "type": "number"}
     ]
   },
   "23": {
@@ -412,7 +474,8 @@
       "resistencia interna bateria mohm",
       "norma iec 60896‑21",
       "curva de descarga c20"
-    ]
+    ],
+    "requirements": []
   },
   "24": {
     "tag": "baterias-gel-selladas",
@@ -430,7 +493,8 @@
       "vida de flotacion bateria gel",
       "norma iec 61427",
       "curva de carga cc/cv gel"
-    ]
+    ],
+    "requirements": []
   },
   "25": {
     "tag": "baterias-ups-respaldo",
@@ -448,7 +512,8 @@
       "mantenimiento bateria ups",
       "norma iec 62040",
       "resistencia de contacto terminal"
-    ]
+    ],
+    "requirements": []
   },
   "26": {
     "tag": "baterias-acido-plomo-abiertas",
@@ -466,7 +531,8 @@
       "emision de gases hidrogeno bateria",
       "norma iec 61427 inundada",
       "curva de carga iui"
-    ]
+    ],
+    "requirements": []
   },
   "27": {
     "tag": "baterias-backup-emergencia",
@@ -484,7 +550,8 @@
       "celdas lifepo4 3.2v",
       "bms sistema de gestion bateria",
       "norma un38.3 transporte litio"
-    ]
+    ],
+    "requirements": []
   },
   "28": {
     "tag": "baterias-hibridos-aislados",
@@ -502,7 +569,8 @@
       "comunicacion can bus bateria",
       "norma iec 62619 seguridad litio",
       "curva de carga cc‑cv"
-    ]
+    ],
+    "requirements": []
   },
   "29": {
     "tag": "baterias-telecomunicaciones",
@@ -520,7 +588,8 @@
       "prueba de capacidad c10",
       "norma iec 60896‑22",
       "curva de descarga estacionaria"
-    ]
+    ],
+    "requirements": []
   },
   "30": {
     "tag": "baterias-alarma-seguridad",
@@ -538,7 +607,8 @@
       "tension de flotacion 13.5v",
       "norma ul 1642",
       "terminal faston 4.8mm"
-    ]
+    ],
+    "requirements": []
   },
   "31": {
     "tag": "baterias-videovigilancia-camaras",
@@ -556,7 +626,8 @@
       "bateria agm profundo videovigilancia",
       "norma iec 62133",
       "proteccion sobrecarga descarga"
-    ]
+    ],
+    "requirements": []
   },
   "32": {
     "tag": "baterias-iluminacion-portatil",
@@ -574,7 +645,8 @@
       "ciclo de carga bateria linterna",
       "norma iec 61960 celda litio",
       "tasa de autodescarga baja"
-    ]
+    ],
+    "requirements": []
   },
   "33": {
     "tag": "baterias-vehiculos-electricos",
@@ -592,7 +664,8 @@
       "curva de carga cc‑cv 54.6v",
       "norma ul 2271 vehiculo electrico ligero",
       "celdas 18650 panasonic"
-    ]
+    ],
+    "requirements": []
   },
   "34": {
     "tag": "baterias-usos-especiales",
@@ -610,7 +683,8 @@
       "certificacion msds transporte litio",
       "norma iec 62133‑2",
       "proteccion cortocircuito ptc"
-    ]
+    ],
+    "requirements": []
   },
   "35": {
     "tag": "inversores-corriente-solar",
@@ -628,6 +702,10 @@
       "potencia pico inversor sobrecarga",
       "norma iec 62093",
       "curva de rendimiento inversor"
+    ],
+    "requirements": [
+      {"field": "potencia_inversor", "question": "¿Qué potencia en watts necesita para el inversor?", "type": "number"},
+      {"field": "tension_bateria", "question": "¿Qué voltaje de batería tiene? (12V, 24V, 48V)", "type": "string"}
     ]
   },
   "36": {
@@ -646,6 +724,10 @@
       "rendimiento anual fsc",
       "norma en 12975",
       "certificacion solar keymark"
+    ],
+    "requirements": [
+      {"field": "numero_personas", "question": "¿Para cuántas personas necesita agua caliente?", "type": "number"},
+      {"field": "tipo_instalacion", "question": "¿El calentador será instalado en un techo plano o inclinado?", "type": "string"}
     ]
   },
   "37": {
@@ -664,6 +746,9 @@
       "portal web monitoreo energia solar",
       "norma iec 61724 monitorizacion",
       "curva iv online"
+    ],
+    "requirements": [
+      {"field": "tipo_monitoreo", "question": "¿Qué tipo de monitoreo prefiere? (Web, App, Modbus)", "type": "string"}
     ]
   },
   "38": {
@@ -682,6 +767,10 @@
       "norma nec 690 instalacion solar",
       "seguridad trabajo en alturas",
       "planimetria sistema solar"
+    ],
+    "requirements": [
+      {"field": "tipo_techo", "question": "¿El techo es de lámina, teja o concreto?", "type": "string"},
+      {"field": "acceso_techo", "question": "¿Hay fácil acceso al techo? (Sí/No)", "type": "string"}
     ]
   },
   "39": {
@@ -700,7 +789,8 @@
       "material rotor ceramico",
       "norma en 1151 bombas circuladoras",
       "clase de eficiencia energetica a"
-    ]
+    ],
+    "requirements": []
   },
   "40": {
     "tag": "unidades-recirculacion-silenciosa",
@@ -718,7 +808,8 @@
       "material cuerpo hierro fundido",
       "norma en 16297",
       "etiqueta energetica erp"
-    ]
+    ],
+    "requirements": []
   },
   "41": {
     "tag": "sistemas-recirculacion-termico",
@@ -736,7 +827,8 @@
       "termostato de seguridad stb",
       "norma en 12828",
       "presion maxima sistema bar"
-    ]
+    ],
+    "requirements": []
   },
   "42": {
     "tag": "bombas-presurizadoras-agua",
@@ -754,7 +846,8 @@
       "material cuerpo acero inoxidable",
       "norma iso 5199 bombas",
       "grado proteccion ip44"
-    ]
+    ],
+    "requirements": []
   },
   "43": {
     "tag": "bombillas-led-alta-eficiencia",
@@ -772,7 +865,8 @@
       "vida util 25000 horas",
       "norma energy star",
       "factor de potencia >0.9"
-    ]
+    ],
+    "requirements": []
   },
   "44": {
     "tag": "congeladores-horizontales-electricos",
@@ -790,7 +884,8 @@
       "consumo kwh/ano congelador",
       "norma energy star congelador",
       "descongelacion manual"
-    ]
+    ],
+    "requirements": []
   },
   "45": {
     "tag": "controladores-mppt-alta-eficiencia",
@@ -808,6 +903,10 @@
       "carga ecualizacion bateria",
       "norma iec 62509 controladores",
       "curva de carga 4 etapas"
+    ],
+    "requirements": [
+      {"field": "tension_bateria", "question": "¿Qué voltaje de batería tiene? (12V, 24V, 48V)", "type": "string"},
+      {"field": "corriente_maxima", "question": "¿Qué corriente máxima necesita? (amperios)", "type": "number"}
     ]
   },
   "46": {
@@ -826,6 +925,10 @@
       "tecnologia modulacion ancho pulso",
       "norma iec 60068 ambiental",
       "temperatura operacion -20 a 55°c"
+    ],
+    "requirements": [
+      {"field": "tension_bateria", "question": "¿Qué voltaje de batería tiene? (12V o 24V)", "type": "string"},
+      {"field": "corriente_maxima", "question": "¿Qué corriente máxima necesita? (amperios)", "type": "number"}
     ]
   },
   "47": {
@@ -844,7 +947,8 @@
       "material acero vitrificado",
       "norma ansi z21.10.1",
       "presion maxima trabajo 150psi"
-    ]
+    ],
+    "requirements": []
   },
   "48": {
     "tag": "inversores-auto-onda-modificada",
@@ -862,7 +966,8 @@
       "eficiencia conversion 85%",
       "norma ul 458 inversores moviles",
       "ventilador refrigeracion forzada"
-    ]
+    ],
+    "requirements": []
   },
   "49": {
     "tag": "inversores-onda-pura-profesional",
@@ -880,7 +985,8 @@
       "proteccion cortocircuito electronica",
       "norma iec 62040‑3 ups",
       "curva de rendimiento vs carga"
-    ]
+    ],
+    "requirements": []
   },
   "50": {
     "tag": "mini-kits-solares-iluminacion",
@@ -898,6 +1004,10 @@
       "autonomia 4 horas iluminacion",
       "norma iec 62257‑2 kits solares",
       "pico solar 4 horas"
+    ],
+    "requirements": [
+      {"field": "numero_luces", "question": "¿Cuántas luces necesita alimentar?", "type": "number"},
+      {"field": "horas_uso", "question": "¿Cuántas horas al día necesita iluminación?", "type": "number"}
     ]
   },
   "51": {
@@ -916,6 +1026,10 @@
       "consumo tv led 30w",
       "norma iec 62257‑3",
       "dias de autonomia 1 dia"
+    ],
+    "requirements": [
+      {"field": "numero_equipos", "question": "¿Qué equipos necesita alimentar? (ej. TV, luces, cargador)", "type": "string"},
+      {"field": "horas_uso", "question": "¿Cuántas horas al día los usará?", "type": "number"}
     ]
   },
   "52": {
@@ -934,6 +1048,10 @@
       "consumo diario 800wh",
       "norma iec 62257‑4",
       "orientacion paneles sur"
+    ],
+    "requirements": [
+      {"field": "electrodomesticos", "question": "¿Qué electrodomésticos planea usar? (nevera, TV, luces, etc.)", "type": "string"},
+      {"field": "dias_uso", "question": "¿Cuántos días seguidos usará la cabaña?", "type": "number"}
     ]
   },
   "53": {
@@ -952,6 +1070,10 @@
       "consumo diario 2kwh",
       "norma iec 62257‑5",
       "estructura fija inclinada 15°"
+    ],
+    "requirements": [
+      {"field": "consumo_diario", "question": "¿Cuál es su consumo energético diario estimado en kWh?", "type": "number"},
+      {"field": "autonomia_dias", "question": "¿Cuántos días de autonomía necesita?", "type": "number"}
     ]
   },
   "54": {
@@ -970,7 +1092,8 @@
       "norma eurocodigo 9 aluminio",
       "certificacion estructural estatica",
       "anodizado 15 micras"
-    ]
+    ],
+    "requirements": []
   },
   "55": {
     "tag": "bombas-caudal-no-sumergible",
@@ -988,7 +1111,8 @@
       "curva caracteristica bomba trasvase",
       "norma iso 2858",
       "proteccion termica motor"
-    ]
+    ],
+    "requirements": []
   },
   "56": {
     "tag": "sistemas-bombas-sumergibles-solares",
@@ -1006,6 +1130,10 @@
       "panel solar 300w para bomba",
       "norma iso 9906 bombas solares",
       "proteccion marcha en seco sensor"
+    ],
+    "requirements": [
+      {"field": "profundidad_pozo", "question": "¿Cuál es la profundidad de su pozo en metros?", "type": "number"},
+      {"field": "caudal_requerido", "question": "¿Qué caudal de agua necesita en litros por hora?", "type": "number"}
     ]
   },
   "57": {
@@ -1024,6 +1152,10 @@
       "altura succion maxima 8m",
       "norma iso 5199",
       "caudal 40 l/min"
+    ],
+    "requirements": [
+      {"field": "altura_succion", "question": "¿Desde qué altura debe succionar el agua? (metros)", "type": "number"},
+      {"field": "caudal_requerido", "question": "¿Qué caudal necesita? (litros por minuto)", "type": "number"}
     ]
   },
   "58": {
@@ -1042,6 +1174,10 @@
       "material acero inoxidable 316",
       "norma en 12050 bombas residuales",
       "proteccion termica bobinado"
+    ],
+    "requirements": [
+      {"field": "tipo_agua", "question": "¿Qué tipo de agua va a desalojar? (limpias, residuales, con sólidos)", "type": "string"},
+      {"field": "altura_impulsion", "question": "¿Qué altura debe impulsar el agua? (metros)", "type": "number"}
     ]
   },
   "59": {
@@ -1060,6 +1196,10 @@
       "presion maxima 4 bar",
       "norma iso 9906",
       "filtro de malla bomba"
+    ],
+    "requirements": [
+      {"field": "area_riego", "question": "¿Cuántos metros cuadrados va a regar?", "type": "number"},
+      {"field": "caudal_requerido", "question": "¿Qué caudal necesita? (litros por hora)", "type": "number"}
     ]
   },
   "60": {
@@ -1078,6 +1218,10 @@
       "norma iec 60898",
       "tension nominal 120/240v",
       "vida electrica 10000 maniobras"
+    ],
+    "requirements": [
+      {"field": "amperaje", "question": "¿Qué amperaje necesita? (ej. 15A, 20A, 30A)", "type": "number"},
+      {"field": "numero_polos", "question": "¿Cuántos polos necesita? (1, 2, 3)", "type": "number"}
     ]
   },
   "61": {
@@ -1096,6 +1240,9 @@
       "norma en 50521 conectores",
       "corriente maxima 30a mc4",
       "material contactos cobre estanado"
+    ],
+    "requirements": [
+      {"field": "seccion_cable", "question": "¿Qué sección de cable necesita? (4mm², 6mm²)", "type": "string"}
     ]
   },
   "62": {
@@ -1114,6 +1261,10 @@
       "rango temperatura -18 a 10°c",
       "norma iec 62552 refrigeracion",
       "controlador digital temperatura"
+    ],
+    "requirements": [
+      {"field": "capacidad_litros", "question": "¿Qué capacidad en litros necesita?", "type": "number"},
+      {"field": "tension_operacion", "question": "¿A qué voltaje operará? (12V o 24V)", "type": "string"}
     ]
   },
   "63": {
@@ -1132,7 +1283,8 @@
       "norma energy star refrigerador",
       "capacidad 300 litros",
       "control temperatura digital"
-    ]
+    ],
+    "requirements": []
   },
   "64": {
     "tag": "inversores-hibridos-solares",
@@ -1150,6 +1302,10 @@
       "potencia nominal 5000va",
       "norma iec 62109‑1 hibrido",
       "curva de carga bateria personalizable"
+    ],
+    "requirements": [
+      {"field": "potencia_inversor", "question": "¿Qué potencia necesita? (kW)", "type": "number"},
+      {"field": "tension_bateria", "question": "¿Qué voltaje de batería usará? (24V, 48V)", "type": "string"}
     ]
   },
   "65": {
@@ -1168,7 +1324,8 @@
       "norma ashrae 23 compresor",
       "voltaje 115v 60hz",
       "proteccion termica interna"
-    ]
+    ],
+    "requirements": []
   },
   "66": {
     "tag": "sistema-bombeo-profundo",
@@ -1186,6 +1343,10 @@
       "curva q‑h bomba 3hp",
       "norma iso 9906",
       "proteccion falta de agua electrodos"
+    ],
+    "requirements": [
+      {"field": "profundidad_pozo", "question": "¿Cuál es la profundidad del pozo? (metros)", "type": "number"},
+      {"field": "caudal_requerido", "question": "¿Qué caudal necesita? (m³/h)", "type": "number"}
     ]
   },
   "67": {
@@ -1204,6 +1365,10 @@
       "produccion agua caliente litros/dia",
       "norma en 12976",
       "garantia 5 anos colector"
+    ],
+    "requirements": [
+      {"field": "numero_personas", "question": "¿Para cuántas personas necesita agua caliente?", "type": "number"},
+      {"field": "tipo_instalacion", "question": "¿El calentador será instalado en un techo plano o inclinado?", "type": "string"}
     ]
   },
   "68": {
@@ -1222,7 +1387,8 @@
       "norma nsf 61 agua potable",
       "capacidad 5000 litros",
       "conexion valvula flotador"
-    ]
+    ],
+    "requirements": []
   },
   "69": {
     "tag": "respaldo-energetico-basico-hogar",
@@ -1240,6 +1406,10 @@
       "controlador carga 20a",
       "norma iec 62040 respaldo",
       "inversor onda modificada"
+    ],
+    "requirements": [
+      {"field": "potencia_carga", "question": "¿Qué potencia en watts necesita respaldar?", "type": "number"},
+      {"field": "autonomia_horas", "question": "¿Cuántas horas de autonomía necesita?", "type": "number"}
     ]
   },
   "70": {
@@ -1258,6 +1428,10 @@
       "carga critica tablero separado",
       "norma iec 62109 respaldo",
       "proteccion sobretension red"
+    ],
+    "requirements": [
+      {"field": "potencia_carga", "question": "¿Qué potencia en watts necesita respaldar?", "type": "number"},
+      {"field": "autonomia_horas", "question": "¿Cuántas horas de autonomía necesita?", "type": "number"}
     ]
   },
   "71": {
@@ -1276,6 +1450,10 @@
       "monitoreo remoto app",
       "norma ul 1741 sa",
       "curva de carga programable"
+    ],
+    "requirements": [
+      {"field": "potencia_carga", "question": "¿Qué potencia en watts necesita respaldar?", "type": "number"},
+      {"field": "autonomia_horas", "question": "¿Cuántas horas de autonomía necesita?", "type": "number"}
     ]
   },
   "72": {
@@ -1294,7 +1472,8 @@
       "carga viento soporte",
       "norma en 12975 estructural",
       "resistencia corrosion marina"
-    ]
+    ],
+    "requirements": []
   },
   "73": {
     "tag": "controladores-electronicos-bombas",
@@ -1312,7 +1491,8 @@
       "parametros configuracion presion",
       "norma iec 60730 control automatico",
       "grado proteccion ip55"
-    ]
+    ],
+    "requirements": []
   },
   "74": {
     "tag": "flotadores-nivel-agua",
@@ -1330,7 +1510,8 @@
       "longitud cable 5 metros",
       "norma iec 60730 flotador",
       "temperatura maxima 60°c"
-    ]
+    ],
+    "requirements": []
   },
   "75": {
     "tag": "maquinas-hielo-comerciales",
@@ -1348,6 +1529,10 @@
       "refrigerante r290",
       "norma nsf 7 equipo hielo",
       "sistema autolimpiante"
+    ],
+    "requirements": [
+      {"field": "produccion_diaria", "question": "¿Cuántos kilos de hielo necesita producir al día?", "type": "number"},
+      {"field": "tipo_hielo", "question": "¿Qué tipo de hielo necesita? (cubitos, escamas, granizado)", "type": "string"}
     ]
   },
   "76": {
@@ -1366,7 +1551,8 @@
       "tolva policarbonato",
       "norma ce maquinaria",
       "proteccion termica motor"
-    ]
+    ],
+    "requirements": []
   },
   "77": {
     "tag": "bombas-sumergibles-aguas-residuales",
@@ -1384,7 +1570,8 @@
       "cable sumergible 10m",
       "norma en 12050 aguas residuales",
       "proteccion termica bobinado"
-    ]
+    ],
+    "requirements": []
   },
   "78": {
     "tag": "bombas-sumergibles-alto-caudal",
@@ -1402,7 +1589,8 @@
       "curva q‑h bomba 5hp",
       "norma iso 9906",
       "proteccion falta de agua sensor"
-    ]
+    ],
+    "requirements": []
   },
   "79": {
     "tag": "sistemas-hibridos-respaldo",
@@ -1420,6 +1608,10 @@
       "gestion energia hibrida",
       "norma iec 62109 hibrido",
       "monitorizacion app movil"
+    ],
+    "requirements": [
+      {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"},
+      {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene?", "type": "string"}
     ]
   },
   "80": {
@@ -1438,7 +1630,8 @@
       "norma ntc 1332",
       "certificacion retie",
       "resistencia aislamiento megaohmios"
-    ]
+    ],
+    "requirements": []
   },
   "81": {
     "tag": "cable-solar-fotovoltaico",
@@ -1456,7 +1649,8 @@
       "norma en 50618 cable solar",
       "temperatura operacion -40 a 90°c",
       "vida util 25 anos exterior"
-    ]
+    ],
+    "requirements": []
   },
   "82": {
     "tag": "cable-bateria-alta-flexibilidad",
@@ -1474,7 +1668,8 @@
       "norma ul 1426 cable bateria",
       "corriente admisible 150a",
       "terminal ojo estañado"
-    ]
+    ],
+    "requirements": []
   },
   "83": {
     "tag": "cable-sumergible-plano",
@@ -1492,7 +1687,8 @@
       "norma en 50525 cable sumergible",
       "resistencia al agua permanente",
       "empalme termocontraible sumergible"
-    ]
+    ],
+    "requirements": []
   },
   "84": {
     "tag": "cable-tsj-uso-rudo",
@@ -1510,7 +1706,8 @@
       "norma ul 62 cable tsj",
       "temperatura -20 a 60°c",
       "calibre 14 awg"
-    ]
+    ],
+    "requirements": []
   },
   "85": {
     "tag": "kit-cables-prearmados-solar",
@@ -1528,7 +1725,8 @@
       "longitud 5m y 10m",
       "norma en 50618 kit",
       "resistencia uv y agua"
-    ]
+    ],
+    "requirements": []
   },
   "86": {
     "tag": "hieleras-portatiles-termoelectricas",
@@ -1546,6 +1744,10 @@
       "material polipropileno aislante",
       "norma ce emc",
       "panel control digital"
+    ],
+    "requirements": [
+      {"field": "capacidad_litros", "question": "¿Qué capacidad en litros necesita?", "type": "number"},
+      {"field": "fuente_energia", "question": "¿La usará con 12V (auto) o 110V (casa)?", "type": "string"}
     ]
   }
 }
