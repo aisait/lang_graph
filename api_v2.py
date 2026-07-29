@@ -428,18 +428,23 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
             )
     end_time = datetime.now(timezone.utc)
 
-    # 13. Extraer respuesta
-    respuesta_final = ""
-    ultimo_aimessage = None
-    ctx = resultado.get("contexto_tecnico", {})
-    for msg in reversed(resultado.get("messages", [])):
-        if isinstance(msg, AIMessage):
-            respuesta_final = msg.content
-            ultimo_aimessage = msg
-            break
+# 13. Extraer respuesta
+respuesta_final = ""
+ultimo_aimessage = None
+ctx = resultado.get("contexto_tecnico", {})
+for msg in reversed(resultado.get("messages", [])):
+    if isinstance(msg, AIMessage):
+        respuesta_final = msg.content
+        ultimo_aimessage = msg
+        break
 
-    if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
-        respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
+# ===== NUEVO: Guardar el contexto actualizado en Redis =====
+sesion["contexto_tecnico"] = ctx
+await guardar_sesion_redis(redis_client, chat_id, sesion)
+# ==========================================================
+
+if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
+    respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
     # 14. Instrumentación Langfuse (traza y observación)
     adapter = get_observability_adapter()
