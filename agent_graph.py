@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.0.18 – Auditada: eliminados residuos OTLP y decoradores obsoletos 27JUL2026 1300.
+VERSIÓN 2.0.19 – Prompts externalizados a Langfuse via PromptManager.
 """
 import os
 import time
@@ -31,6 +31,11 @@ from audit import auditar_fase
 from ontology import obtener_fragmento_ontologia, cargar_ontologia, obtener_productos_relevantes
 from telemetry import trace_id_var, span_id_var, schedule_telemetry_event
 from ubicacion import buscar_ubicacion
+
+# =============================================================================
+# NUEVO: Importar PromptManager para prompts externalizados
+# =============================================================================
+from services.prompt_manager import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -279,9 +284,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if tipo:
             ctx["tipo_producto"] = tipo
             return {"contexto_tecnico": ctx}
-        pregunta = ("Para poder recomendarle los productos más adecuados, ¿está usted buscando un **sistema completo** "
-                    "(incluye paneles, inversor, estructura, cableado, etc.) o un **producto específico** "
-                    "(ej. solo paneles, solo inversor, baterías)?")
+
+        # ========== PROMPT EXTERNALIZADO ==========
+        pregunta = get_prompt("jarvi_seleccion_productos")
+        # ==========================================
+
         new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
         return {"messages": new_messages, "contexto_tecnico": ctx}
 
@@ -308,7 +315,10 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         if ultimo_mensaje and (not ctx.get("nombre") or ctx.get("nombre") == "Usuario" or not ctx.get("whatsapp")):
             try:
-                extraccion = await extractor_llm.ainvoke(f"Identifica nombre o teléfono. Mensaje: {ultimo_mensaje}")
+                # ========== PROMPT EXTERNALIZADO ==========
+                prompt_text = get_prompt("jarvi_extractor_contacto", mensaje=ultimo_mensaje)
+                # ==========================================
+                extraccion = await extractor_llm.ainvoke(prompt_text)
                 if extraccion.nombre and (not ctx.get("nombre") or ctx["nombre"] == "Usuario"):
                     ctx["nombre"] = extraccion.nombre
                 if extraccion.telefono and (not ctx.get("whatsapp") or ctx["whatsapp"] == "Pendiente"):
@@ -354,20 +364,18 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if ctx.get("productos_interes"):
             config["metadata"]["productos_tags"] = [p["tag"] for p in ctx["productos_interes"]]
 
-        prompt_sistema = SystemMessage(
-            content=(
-                f"Eres Jarvi, Ingeniero de Preventa de AISA Solar. "
-                f"Siempre trata al cliente de **usted**, de manera formal y profesional. "
-                f"Utiliza el pronombre 'usted' y conjuga los verbos en tercera persona del singular. "
-                f"Evita cualquier tono coloquial o de amistad. Mantén una actitud respetuosa y cortés en todo momento.\n\n"
-                f"Responde con los datos auditados:\n"
-                f"- Ubicación: {ctx.get('ciudad', 'PENDIENTE')}\n"
-                f"- Distribuidora: {ctx.get('empresa_electrica', 'PENDIENTE')}\n"
-                f"- Tarifa: GTQ {ctx.get('tarifa_base_gtq', 'PENDIENTE')} /kWh\n"
-                f"REGLAS: {regla_datos}\n"
-                f"ONTOLOGÍA: {ontologia_dinamica}"
-            )
+        # ========== PROMPT EXTERNALIZADO ==========
+        prompt_content = get_prompt(
+            "jarvi_system_prompt",
+            ciudad=ctx.get('ciudad', 'PENDIENTE'),
+            empresa_electrica=ctx.get('empresa_electrica', 'PENDIENTE'),
+            tarifa_base_gtq=ctx.get('tarifa_base_gtq', 'PENDIENTE'),
+            regla_datos=regla_datos,
+            ontologia_dinamica=ontologia_dinamica
         )
+        # ==========================================
+
+        prompt_sistema = SystemMessage(content=prompt_content)
 
         # Uso del LLM con el cliente configurado
         respuesta = await llm.ainvoke([prompt_sistema] + state["messages"], config=config)
