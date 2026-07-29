@@ -1,14 +1,27 @@
 """
-schemas.py
-Contratos de datos (Pydantic) para la API central.
+schemas.py - Contratos de datos (Pydantic) para la API central.
+VERSIÓN 2.0.27 – Unificado para aceptar payload de n8n (chat_id, name, phone, record, url_n8n_audio).
 """
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, List
 
 class ChatRequest(BaseModel):
-    thread_id: str = Field(..., description="ID único de sesión del cliente.")
+    # Alias para que 'chat_id' se mapee automáticamente a 'thread_id'
+    thread_id: str = Field(..., alias='chat_id', description="ID único de sesión (chat_id de n8n).")
     message: str = Field(..., description="Contenido del mensaje del cliente.")
+
+    # Campos específicos de n8n (opcionales)
+    name: Optional[str] = Field(None, description="Nombre del cliente (desde n8n).")
+    phone: Optional[str] = Field(None, description="Teléfono del cliente (desde n8n).")
+    record: Optional[List[Dict[str, Any]]] = Field(default_factory=list, description="Historial de conversación (desde n8n).")
+    url_n8n_audio: Optional[str] = Field(None, description="URL del audio (desde n8n).")
+
+    # Metadatos adicionales (para compatibilidad con debug u otros orígenes)
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+    class Config:
+        populate_by_name = True   # permite usar 'thread_id' o 'chat_id' indistintamente
+        extra = "allow"           # ignora campos extra sin romper validación
 
 class ChatResponse(BaseModel):
     response: str
