@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.0.19 – Prompts externalizados a Langfuse via PromptManager.
+VERSIÓN 2.0.20 – Prompts externalizados y lógica de requisitos dinámicos (Ontología Extendida).
 """
 import os
 import time
@@ -11,7 +11,7 @@ import requests
 import re
 import functools
 import logging
-from typing import Annotated, TypedDict, Optional
+from typing import Annotated, TypedDict, Optional, List, Dict
 from pydantic import BaseModel, Field
 
 from langchain_openai import ChatOpenAI
@@ -28,7 +28,13 @@ from utils.sanitize import sanitize_pii
 
 import config
 from audit import auditar_fase
-from ontology import obtener_fragmento_ontologia, cargar_ontologia, obtener_productos_relevantes
+from ontology import (
+    obtener_fragmento_ontologia,
+    cargar_ontologia,
+    obtener_productos_relevantes,
+    inferir_tag_por_mensaje,          # <-- NUEVA FUNCIÓN
+    get_requirements_by_tag           # <-- NUEVA FUNCIÓN
+)
 from telemetry import trace_id_var, span_id_var, schedule_telemetry_event
 from ubicacion import buscar_ubicacion
 
@@ -91,7 +97,7 @@ def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) 
     return nombre_normalizado, whatsapp_formateado
 
 # =============================================================================
-# ESQUEMAS
+# ESQUEMAS (EXTENDIDO CON NUEVOS CAMPOS)
 # =============================================================================
 class ExtractorContacto(BaseModel):
     nombre: Optional[str] = Field(None, description="Nombre de pila y apellidos.")
@@ -111,13 +117,17 @@ class InferenciaEnergetica(TypedDict):
     vendedor: Optional[str]
     tipo_producto: Optional[str]
     productos_interes: Optional[list]
+    # ===== NUEVOS CAMPOS PARA REQUISITOS DINÁMICOS =====
+    product_tag: Optional[str]           # Tag del producto detectado (ej. '1', '11', '19')
+    requisitos: Optional[List[Dict]]     # Lista de requisitos del producto
+    checklist: Optional[Dict]            # Estado de la checklist (pendiente/completado)
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     contexto_tecnico: InferenciaEnergetica
 
 # =============================================================================
-# DECORADOR CTFOM (MANTENIDO, NO AFECTA A LANGFUSE)
+# DECORADOR CTFOM (MANTENIDO)
 # =============================================================================
 def observe_node(layer: str = "graph", node_name: str = ""):
     def decorator(func):
@@ -152,7 +162,7 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA DE ENVÍO A N8N (SIN TRAZAS OTLP)
+# HERRAMIENTA DE ENVÍO A N8N (SIN CAMBIOS)
 # =============================================================================
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
@@ -204,7 +214,7 @@ async def procesar_oportunidad_backend(
         return f"❌ Error al enviar lead: {str(e)}"
 
 # =============================================================================
-# FUNCIONES AUXILIARES (extraer_intencion_humana, extraer_tipo_producto)
+# FUNCIONES AUXILIARES (SIN CAMBIOS)
 # =============================================================================
 def extraer_intencion_humana(messages: list) -> str:
     for msg in reversed(messages):
@@ -228,7 +238,7 @@ def extraer_tipo_producto(mensaje: str) -> Optional[str]:
     return None
 
 # =============================================================================
-# CONSTRUCCIÓN DEL GRAFO
+# CONSTRUCCIÓN DEL GRAFO (MODIFICADO)
 # =============================================================================
 def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
@@ -242,6 +252,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
             return {"contexto_tecnico": ctx}
+        # Solo se asigna topologia si no viene del producto (respaldo)
         if not ctx.get("topologia"):
             if any(k in ultimo for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
                 ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
@@ -271,34 +282,52 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["tarifa_base_gtq"] = 1.45
         return {"contexto_tecnico": ctx}
 
+    # ========================================================================
+    # NODO SELECCIONAR PRODUCTOS (NUEVA LÓGICA ONTOLÓGICA)
+    # ========================================================================
     @auditar_fase(nombre_fase="Selección de Productos", criticidad="ALTA")
     @observe_node(node_name="seleccionar_productos")
     async def seleccionar_productos_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
-        if ctx.get("tipo_producto"):
-            return {"contexto_tecnico": ctx}
-        if not ultimo:
-            return {"contexto_tecnico": ctx}
-        tipo = extraer_tipo_producto(ultimo)
-        if tipo:
-            ctx["tipo_producto"] = tipo
+
+        # 1. Si ya tenemos tag o tipo_producto, no volvemos a preguntar
+        if ctx.get("product_tag") or ctx.get("tipo_producto"):
             return {"contexto_tecnico": ctx}
 
-        # ========== PROMPT EXTERNALIZADO ==========
-        pregunta = get_prompt("jarvi_seleccion_productos")
-        # ==========================================
+        # 2. Intentar inferir producto del mensaje usando la ontología
+        tag = inferir_tag_por_mensaje(ultimo)
+        if tag:
+            ctx["product_tag"] = tag
+            requisitos = get_requirements_by_tag(tag)
+            ctx["requisitos"] = requisitos
+            # Inicializar checklist
+            checklist = {}
+            for req in requisitos:
+                field = req.get("field")
+                if field and ctx.get(field) is not None:
+                    checklist[field] = "completado"
+                elif field:
+                    checklist[field] = "pendiente"
+            ctx["checklist"] = checklist
+            logger.info(f"Producto detectado: tag={tag}, requisitos={len(requisitos)}")
+            return {"contexto_tecnico": ctx}
 
+        # 3. Si no se infiere producto, preguntar al usuario
+        pregunta = "¿Sobre qué tipo de equipo le gustaría recibir asesoría? (ej. paneles solares, calentadores, bombas de agua, iluminación...)"
         new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
         return {"messages": new_messages, "contexto_tecnico": ctx}
 
+    # ========================================================================
+    # NODO GENERAR RESPUESTA (DINÁMICO Y CONTEXTUAL)
+    # ========================================================================
     @auditar_fase(nombre_fase="Generación de Respuesta Comercial", criticidad="ALTA")
     @observe_node(node_name="generar_respuesta_comercial")
     async def generar_respuesta_comercial_node(state: AgentState, config: RunnableConfig):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
-        # Extracción de información (nombre, whatsapp)
+        # --- 1. Extraer nombre/whatsapp (respaldo) ---
         if ultimo_mensaje:
             num_match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', ultimo_mensaje)
             if num_match:
@@ -315,9 +344,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         if ultimo_mensaje and (not ctx.get("nombre") or ctx.get("nombre") == "Usuario" or not ctx.get("whatsapp")):
             try:
-                # ========== PROMPT EXTERNALIZADO ==========
                 prompt_text = get_prompt("jarvi_extractor_contacto", mensaje=ultimo_mensaje)
-                # ==========================================
                 extraccion = await extractor_llm.ainvoke(prompt_text)
                 if extraccion.nombre and (not ctx.get("nombre") or ctx["nombre"] == "Usuario"):
                     ctx["nombre"] = extraccion.nombre
@@ -337,6 +364,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             if tipo:
                 ctx["tipo_producto"] = tipo
 
+        # --- 2. Obtener productos relevantes (si no existen) ---
         if ctx.get("topologia") and ctx.get("tipo_producto") and not ctx.get("productos_interes"):
             ctx["productos_interes"] = obtener_productos_relevantes(
                 topologia=ctx["topologia"],
@@ -344,13 +372,44 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 max_items=5
             )
 
-        if ctx.get("requiere_auditoria_electrica"):
-            regla_datos = "1. DEBES recopilar sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta."
-        else:
-            regla_datos = "1. DEBES recopilar sutilmente: Nombre, Ubicación y Necesidad exacta."
+        # --- 3. Actualizar checklist con los datos extraídos ---
+        checklist = ctx.get("checklist", {})
+        if ctx.get("requisitos"):
+            for req in ctx["requisitos"]:
+                field = req.get("field")
+                if field and ctx.get(field) is not None:
+                    checklist[field] = "completado"
+                elif field:
+                    checklist[field] = "pendiente"
+            ctx["checklist"] = checklist
 
+        # --- 4. Construir regla_datos dinámica desde la checklist ---
+        regla_datos = ""
+        pendientes = []
+        if checklist:
+            for field, status in checklist.items():
+                if status == "pendiente":
+                    pregunta = "información adicional"
+                    for req in ctx.get("requisitos", []):
+                        if req.get("field") == field:
+                            pregunta = req.get("question", field)
+                            break
+                    pendientes.append(pregunta)
+            if pendientes:
+                regla_datos = f"1. DEBES recopilar sutilmente las siguientes necesidades: {', '.join(pendientes)}."
+            else:
+                regla_datos = "Ya tienes toda la información técnica. Enfócate en ofrecer una solución y cerrar la conversación."
+        else:
+            # Fallback a la lógica original (si no hay checklist)
+            if ctx.get("requiere_auditoria_electrica"):
+                regla_datos = "1. DEBES recopilar sutilmente: Nombre, Ubicación, Consumo y Necesidad exacta."
+            else:
+                regla_datos = "1. DEBES recopilar sutilmente: Nombre, Ubicación y Necesidad exacta."
+
+        # --- 5. Obtener ontología dinámica (fragmento) ---
         ontologia_dinamica = obtener_fragmento_ontologia(ctx.get('topologia'))
 
+        # --- 6. Normalizar contacto para metadata ---
         nombre_ctx = ctx.get("nombre", "Usuario")
         whatsapp_ctx = ctx.get("whatsapp", "Pendiente")
         nombre_run, whatsapp_run = normalizar_contacto(nombre_ctx, whatsapp_ctx, ctx.get("ciudad", ""))
@@ -364,17 +423,36 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if ctx.get("productos_interes"):
             config["metadata"]["productos_tags"] = [p["tag"] for p in ctx["productos_interes"]]
 
-        # ========== PROMPT EXTERNALIZADO ==========
+        # --- 7. Construir conocimiento_usuario (para evitar redundancias) ---
+        conocimiento_usuario = ""
+        if ctx.get("nombre") and ctx.get("nombre") != "Usuario":
+            conocimiento_usuario += f"El usuario se llama {ctx['nombre']}. "
+        if ctx.get("ciudad"):
+            conocimiento_usuario += f"Vive en {ctx['ciudad']}. "
+        if ctx.get("consumo_mensual_kwh"):
+            conocimiento_usuario += f"Consume {ctx['consumo_mensual_kwh']} kWh al mes. "
+        if ctx.get("numero_personas"):
+            conocimiento_usuario += f"Necesita agua caliente para {ctx['numero_personas']} personas. "
+        if ctx.get("product_tag"):
+            # Añadir información del producto detectado
+            ontologia = cargar_ontologia()
+            item = ontologia.get(ctx["product_tag"], {})
+            if item.get("nombre"):
+                conocimiento_usuario += f"Está interesado en {item['nombre']}. "
+
+        if not conocimiento_usuario:
+            conocimiento_usuario = "No se tiene información previa del usuario."
+
+        # --- 8. Compilar y ejecutar el prompt del sistema ---
         prompt_content = get_prompt(
             "jarvi_system_prompt",
             ciudad=ctx.get('ciudad', 'PENDIENTE'),
             empresa_electrica=ctx.get('empresa_electrica', 'PENDIENTE'),
             tarifa_base_gtq=ctx.get('tarifa_base_gtq', 'PENDIENTE'),
             regla_datos=regla_datos,
-            ontologia_dinamica=ontologia_dinamica
+            ontologia_dinamica=ontologia_dinamica,
+            conocimiento_usuario=conocimiento_usuario   # <-- NUEVO PARÁMETRO
         )
-        # ==========================================
-
         prompt_sistema = SystemMessage(content=prompt_content)
 
         # Uso del LLM con el cliente configurado
@@ -393,7 +471,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": messages}
 
     # =========================================================================
-    # ENSAMBLAJE DEL GRAFO
+    # ENSAMBLAJE DEL GRAFO (SIN CAMBIOS)
     # =========================================================================
     graph_builder.add_node("clasificar_intencion_comercial", clasificar_intencion_comercial_node)
     graph_builder.add_node("validar_ubicacion_cliente", validar_ubicacion_cliente_node)
