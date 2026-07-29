@@ -17,7 +17,7 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# PROMPTS DE FALLBACK (EN CÓDIGO, SIN ARCHIVOS)
+# PROMPTS DE FALLBACK (EN CÓDIGO, SIN ARCHIVOS) 29JUL2026
 # =============================================================================
 FALLBACK_PROMPTS = {
     "jarvi_system_prompt": (
