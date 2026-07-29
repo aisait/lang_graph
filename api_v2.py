@@ -1,6 +1,6 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.0.27 – UNIFICACIÓN FINAL: solo endpoint /chat, eliminado debug, integración de audio, inyección de datos desde n8n. 29JUL2026
+VERSIÓN 2.0.27 – UNIFICACIÓN FINAL: solo endpoint /chat, eliminado debug, integración de audio, inyección de datos desde n8n.
 """
 import os
 import asyncio
@@ -37,7 +37,7 @@ from observability import ObservabilityPort, LangfuseIngestionAdapter
 from schemas import ChatRequest
 from agent_graph import create_graph, normalizar_contacto
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
-from db_client import get_bi_db_url, actualizar_thread, thread_id_to_uuid
+from db_client import get_bi_db_url, actualizar_thread
 from config import settings
 import audio  # Módulo para STT
 
@@ -297,7 +297,6 @@ async def procesar_audio_url(url: str) -> str:
     if not url:
         return ""
     try:
-        # Usamos el módulo audio en un hilo para no bloquear
         texto = await asyncio.to_thread(audio.transcribir_audio_desde_url, url)
         logger.info(f"Audio transcrito correctamente desde {url}")
         return texto.strip()
@@ -308,26 +307,24 @@ async def procesar_audio_url(url: str) -> str:
 # =============================================================================
 # NUEVO: PROCESAMIENTO DE PAYLOAD DE N8N
 # =============================================================================
-async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
+async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request) -> JSONResponse:
     """
     Procesa el payload de n8n (chat_id, name, phone, record, url_n8n_audio, message).
     Inyecta nombre y whatsapp en contexto, maneja historial y audio.
     """
-    # 1. Extraer datos del payload (se espera que vengan en metadata o como campos directos)
-    metadata = chat_request.metadata or {}
-    chat_id = chat_request.thread_id  # Esto es el chat_id de n8n
+    # 1. Extraer datos del payload
+    chat_id = chat_request.thread_id          # mapeado desde 'chat_id'
     mensaje = chat_request.message
-    nombre = metadata.get("name") or metadata.get("nombre")  # n8n envía "name"
-    whatsapp = metadata.get("phone") or metadata.get("whatsapp")
-    record = metadata.get("record", [])  # Lista de mensajes anteriores
-    url_audio = metadata.get("url_n8n_audio", "")
+    nombre = chat_request.name or chat_request.metadata.get("name")
+    whatsapp_raw = chat_request.phone or chat_request.metadata.get("phone")
+    record = chat_request.record or chat_request.metadata.get("record", [])
+    url_audio = chat_request.url_n8n_audio or chat_request.metadata.get("url_n8n_audio", "")
 
     # 2. Normalizar WhatsApp a E.164
-    if whatsapp:
-        whatsapp = normalizar_whatsapp_e164(whatsapp)
+    if whatsapp_raw:
+        whatsapp = normalizar_whatsapp_e164(whatsapp_raw)
     else:
-        # Fallback: intentar extraer del mensaje (por si no viene)
-        whatsapp = extraer_whatsapp(mensaje)
+        whatsapp = extraer_whatsapp(mensaje) or ""
 
     # 3. Si no viene nombre, extraer del mensaje
     if not nombre:
@@ -346,7 +343,6 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
         historial = await obtener_historial_redis(redis_client, chat_id)
         logger.info(f"Historial recuperado: {len(historial)} mensajes para chat_id {chat_id}")
     else:
-        # Si no hay sesión, usar record del payload como historial inicial
         if record:
             historial = record
             logger.info(f"Inicializando historial desde record con {len(historial)} mensajes")
@@ -374,7 +370,6 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
             "created_at": datetime.now(timezone.utc).isoformat()
         }
     else:
-        # Actualizar campos relevantes
         sesion["whatsapp"] = whatsapp
         sesion["nombre"] = nombre
         sesion["ultimo_mensaje"] = mensaje
@@ -391,16 +386,13 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
     # 9. Construir el historial de mensajes para el grafo
     messages = []
     for item in historial:
-        # item puede ser dict con "input"/"output" o lista de strings
         if isinstance(item, dict):
             messages.append(HumanMessage(content=item.get("input", "")))
             messages.append(AIMessage(content=item.get("output", "")))
         elif isinstance(item, list) and len(item) >= 2:
             messages.append(HumanMessage(content=item[0]))
             messages.append(AIMessage(content=item[1]))
-        # Si es otro formato, se ignora
 
-    # Añadir el mensaje actual
     caso = obtener_caso(chat_id)
     mensaje_con_caso = f"{mensaje} [Caso No. {caso}]"
     messages.append(HumanMessage(content=mensaje_con_caso))
@@ -430,7 +422,6 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
             resultado = await graph.ainvoke(estado_inicial, config=config)
         except Exception as e:
             logger.error(f"Error en ejecución del grafo para {chat_id}: {e}")
-            # Devolver error en JSON
             return JSONResponse(
                 status_code=500,
                 content={"status": "error", "chat_id": chat_id, "error": str(e)}
@@ -440,6 +431,7 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
     # 13. Extraer respuesta
     respuesta_final = ""
     ultimo_aimessage = None
+    ctx = resultado.get("contexto_tecnico", {})
     for msg in reversed(resultado.get("messages", [])):
         if isinstance(msg, AIMessage):
             respuesta_final = msg.content
@@ -495,7 +487,6 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
 
     if trace_id_langfuse:
         try:
-            ctx = resultado.get("contexto_tecnico", {})
             puntaje = calcular_puntaje_completitud(ctx)
             accion = "Calificado" if puntaje >= 60 else "No Calificado"
             adapter.create_score(
@@ -519,7 +510,6 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
     # 15. Guardar historial en Redis y actualizar PostgreSQL
     if respuesta_final:
         await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
-        # Actualizar thread en PostgreSQL (convertir chat_id a UUID si es necesario)
         await actualizar_thread(
             thread_id=chat_id,
             nombre=nombre,
@@ -541,27 +531,6 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
             "langfuse_trace_id": trace_id_langfuse,
             "contexto_tecnico": ctx
         }
-    )
-
-# =============================================================================
-# PROCESAMIENTO DE CHAT FRONTEND (LEGACY, SOLO PARA PRUEBAS INTERNAS)
-# =============================================================================
-async def process_chat_legacy(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
-    """
-    Flujo antiguo con streaming y fingerprint (solo para pruebas internas).
-    Se mantiene pero se recomienda desactivar en producción.
-    """
-    # ... (código antiguo de process_chat_frontend, se puede eliminar o comentar)
-    # Por brevedad, en esta versión final se redirige al nuevo procesamiento.
-    # Pero para no romper nada, se puede mantener pero con advertencia.
-    logger.warning("Usando flujo legacy (streaming) - solo para pruebas internas")
-    # Aquí iría el código antiguo, pero lo omitimos para que el endpoint /chat
-    # use el nuevo procesamiento si detecta metadata con "name" o "phone".
-    # Como solución, podemos hacer que /chat llame a procesar_payload_n8n
-    # y si no hay datos de n8n, entonces usar streaming.
-    return JSONResponse(
-        status_code=400,
-        content={"status": "error", "message": "Flujo legacy desactivado. Use el nuevo formato de payload."}
     )
 
 # =============================================================================
@@ -654,18 +623,12 @@ async def health_check():
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest, http_request: Request):
     """
-    Único punto de entrada para todas las solicitudes (n8n y pruebas internas).
+    Único punto de entrada para todas las solicitudes.
     Detecta si el payload contiene datos de n8n (name, phone, record, url_n8n_audio)
     y usa el nuevo flujo síncrono; si no, usa el flujo legacy (streaming) solo para pruebas.
     """
-    metadata = request.metadata or {}
-    # Si viene con campos de n8n, usar nuevo flujo
-    if metadata.get("name") or metadata.get("phone") or metadata.get("record"):
-        return await procesar_payload_n8n(request, http_request)
-    else:
-        # Legacy (streaming) - se mantiene por compatibilidad, pero se puede eliminar
-        logger.warning("Solicitud sin datos de n8n, usando flujo legacy (desactivado)")
-        return await process_chat_legacy(request, http_request)
+    # Usar siempre el flujo unificado para cualquier solicitud (incluso debug)
+    return await procesar_payload_n8n(request, http_request)
 
 # =============================================================================
 # FUNCIÓN AUXILIAR PARA OBTENER DB URL
