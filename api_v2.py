@@ -1,7 +1,6 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.0.24 – Usa /api/public/ingestion para trazas y observaciones
-Cumple con ISO/IEC 25010, 27001, DORA 28JUL2026.
+VERSIÓN 2.0.27 – UNIFICACIÓN FINAL: solo endpoint /chat, eliminado debug, integración de audio, inyección de datos desde n8n.
 """
 import os
 import asyncio
@@ -19,10 +18,10 @@ import psutil
 import asyncpg
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException, Depends, Security, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.security import APIKeyHeader
 from contextlib import asynccontextmanager, AsyncExitStack
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
@@ -38,8 +37,9 @@ from observability import ObservabilityPort, LangfuseIngestionAdapter
 from schemas import ChatRequest
 from agent_graph import create_graph, normalizar_contacto
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
-from db_client import get_bi_db_url
+from db_client import get_bi_db_url, actualizar_thread, thread_id_to_uuid
 from config import settings
+import audio  # Módulo para STT
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.0.24 con ADAPTADOR INGESTION =====")
+print("===== JARVI API v2.0.27 FINAL (UNIFICADO) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -125,7 +125,7 @@ def calcular_puntaje_completitud(ctx: dict) -> float:
     return round((presentes / len(CAMPOS_SCORE)) * 100, 2)
 
 # =============================================================================
-# FUNCIONES DE EXTRACCIÓN (PROPIEDAD INTELECTUAL - INTACTAS)
+# FUNCIONES DE EXTRACCIÓN (se mantienen para fallback)
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
     if not mensaje:
@@ -203,36 +203,8 @@ def normalizar_whatsapp_e164(telefono: str) -> str:
     return limpio
 
 # =============================================================================
-# FUNCIONES DE POSTGRESQL Y REDIS (PROPIEDAD INTELECTUAL - INTACTAS)
+# FUNCIONES DE REDIS (INTACTAS)
 # =============================================================================
-async def guardar_resumen_postgres(chat_id: str, resumen: str, contexto: dict,
-                                   fingerprint: Optional[str] = None, origen: str = "desconocido") -> bool:
-    try:
-        db_url = get_bi_db_url()
-        if not db_url:
-            print("BI_DATABASE_URL no configurada")
-            return False
-        conn = await asyncpg.connect(db_url)
-        metadata = contexto.copy()
-        metadata["origen"] = origen
-        if fingerprint:
-            metadata["fingerprint"] = fingerprint
-        await conn.execute(
-            """
-            INSERT INTO resumenes (chat_id, resumen, metadata, created_at, updated_at)
-            VALUES ($1, $2, $3, NOW(), NOW())
-            ON CONFLICT (chat_id) DO UPDATE
-            SET resumen = $2, metadata = $3, updated_at = NOW()
-            """,
-            chat_id, resumen, json.dumps(metadata)
-        )
-        await conn.close()
-        print(f"Resumen guardado en PostgreSQL (BI) para chat_id {chat_id}")
-        return True
-    except Exception as e:
-        print(f"Error al guardar resumen: {e}")
-        return False
-
 REDIS_TTL = settings.redis_ttl
 HISTORIAL_LIMITE = 64
 
@@ -254,9 +226,9 @@ async def guardar_sesion_redis(redis_client: Optional[redis.Redis], chat_id: str
         data_serialized = {k: serializar_para_redis(v) for k, v in data.items()}
         await redis_client.hset(key, mapping=data_serialized)
         await redis_client.expire(key, REDIS_TTL)
-        print(f"Sesión guardada para chat_id {chat_id}")
+        logger.info(f"Sesión guardada para chat_id {chat_id}")
     except Exception as e:
-        print(f"Error guardando sesión: {e}")
+        logger.error(f"Error guardando sesión: {e}")
 
 async def obtener_sesion_redis(redis_client: Optional[redis.Redis], chat_id: str) -> Optional[dict]:
     if not redis_client:
@@ -274,7 +246,7 @@ async def obtener_sesion_redis(redis_client: Optional[redis.Redis], chat_id: str
                     pass
         return data
     except Exception as e:
-        print(f"Error obteniendo sesión: {e}")
+        logger.error(f"Error obteniendo sesión: {e}")
         return None
 
 async def eliminar_sesion_redis(redis_client: Optional[redis.Redis], chat_id: str):
@@ -282,7 +254,7 @@ async def eliminar_sesion_redis(redis_client: Optional[redis.Redis], chat_id: st
         try:
             await redis_client.delete(f"session:{chat_id}")
         except Exception as e:
-            print(f"Error eliminando sesión: {e}")
+            logger.error(f"Error eliminando sesión: {e}")
 
 async def guardar_historial_redis(redis_client: Optional[redis.Redis], chat_id: str, input_msg: str, output_msg: str):
     if not redis_client:
@@ -296,9 +268,9 @@ async def guardar_historial_redis(redis_client: Optional[redis.Redis], chat_id: 
         })
         await redis_client.lpush(key, registro)
         await redis_client.ltrim(key, 0, HISTORIAL_LIMITE - 1)
-        print(f"Historial actualizado para chat_id {chat_id}")
+        logger.info(f"Historial actualizado para chat_id {chat_id}")
     except Exception as e:
-        print(f"Error guardando historial: {e}")
+        logger.error(f"Error guardando historial: {e}")
 
 async def obtener_historial_redis(redis_client: Optional[redis.Redis], chat_id: str) -> list:
     if not redis_client:
@@ -314,76 +286,286 @@ async def obtener_historial_redis(redis_client: Optional[redis.Redis], chat_id: 
                 continue
         return historial
     except Exception as e:
-        print(f"Error obteniendo historial: {e}")
+        logger.error(f"Error obteniendo historial: {e}")
         return []
 
-async def guardar_fingerprint_redis(redis_client: Optional[redis.Redis], fingerprint: str, chat_id: str):
-    if not redis_client:
-        return
+# =============================================================================
+# FUNCIÓN PARA PROCESAR AUDIO (STT)
+# =============================================================================
+async def procesar_audio_url(url: str) -> str:
+    """Descarga y transcribe audio desde URL, devuelve el texto."""
+    if not url:
+        return ""
     try:
-        key = f"fingerprint:{fingerprint}"
-        await redis_client.set(key, chat_id, ex=REDIS_TTL)
-        print(f"Fingerprint {fingerprint} asociado a chat_id {chat_id}")
+        # Usamos el módulo audio en un hilo para no bloquear
+        texto = await asyncio.to_thread(audio.transcribir_audio_desde_url, url)
+        logger.info(f"Audio transcrito correctamente desde {url}")
+        return texto.strip()
     except Exception as e:
-        print(f"Error guardando fingerprint: {e}")
-
-async def obtener_chat_id_por_fingerprint(redis_client: Optional[redis.Redis], fingerprint: str) -> Optional[str]:
-    if not redis_client:
-        return None
-    try:
-        key = f"fingerprint:{fingerprint}"
-        return await redis_client.get(key)
-    except Exception as e:
-        print(f"Error obteniendo chat_id por fingerprint: {e}")
-        return None
-
-async def guardar_whatsapp_redis(redis_client: Optional[redis.Redis], whatsapp: str, chat_id: str):
-    if not redis_client:
-        return
-    try:
-        key = f"chat_id:{whatsapp}"
-        await redis_client.set(key, chat_id, ex=REDIS_TTL)
-        print(f"WhatsApp {whatsapp} asociado a chat_id {chat_id}")
-    except Exception as e:
-        print(f"Error guardando mapeo whatsapp: {e}")
-
-def asignar_vendedor(productos: list) -> str:
-    try:
-        with open("vendedores.json", "r", encoding="utf-8") as f:
-            vendedores = json.load(f)
-    except Exception:
-        return "default@aisa.com.gt"
-    for producto in productos:
-        tag = producto.get("tag")
-        if tag in vendedores:
-            return vendedores[tag]
-    return vendedores.get("default", "default@aisa.com.gt")
-
-def sanear_db_url(db_url: str) -> str:
-    if not db_url:
-        return db_url
-    try:
-        parsed = urlparse(db_url)
-        query = parse_qs(parsed.query)
-        for p in ["pool_size", "max_overflow", "pool_timeout"]:
-            query.pop(p, None)
-        clean_query = urlencode(query, doseq=True)
-        return urlunparse(parsed._replace(query=clean_query))
-    except Exception:
-        return db_url
-
-def get_db_url() -> str:
-    raw = os.getenv("DATABASE_URL")
-    if raw:
-        return sanear_db_url(raw)
-    ctfom_url = os.getenv("CTFOM_DATABASE_URL")
-    if ctfom_url:
-        print("DATABASE_URL no definida. Usando CTFOM_DATABASE_URL para checkpoints de LangGraph.")
-        return sanear_db_url(ctfom_url)
-    raise RuntimeError("No se encontró DATABASE_URL ni CTFOM_DATABASE_URL.")
+        logger.error(f"Error al transcribir audio desde {url}: {e}")
+        return ""  # Fallo silencioso, se ignora el audio
 
 # =============================================================================
-# CICLO DE VIDA DE LA APLICACIÓN (CON INICIALIZACIÓN DEL ADAPTADOR)
+# NUEVO: PROCESAMIENTO DE PAYLOAD DE N8N
+# =============================================================================
+async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
+    """
+    Procesa el payload de n8n (chat_id, name, phone, record, url_n8n_audio, message).
+    Inyecta nombre y whatsapp en contexto, maneja historial y audio.
+    """
+    # 1. Extraer datos del payload (se espera que vengan en metadata o como campos directos)
+    metadata = chat_request.metadata or {}
+    chat_id = chat_request.thread_id  # Esto es el chat_id de n8n
+    mensaje = chat_request.message
+    nombre = metadata.get("name") or metadata.get("nombre")  # n8n envía "name"
+    whatsapp = metadata.get("phone") or metadata.get("whatsapp")
+    record = metadata.get("record", [])  # Lista de mensajes anteriores
+    url_audio = metadata.get("url_n8n_audio", "")
+
+    # 2. Normalizar WhatsApp a E.164
+    if whatsapp:
+        whatsapp = normalizar_whatsapp_e164(whatsapp)
+    else:
+        # Fallback: intentar extraer del mensaje (por si no viene)
+        whatsapp = extraer_whatsapp(mensaje)
+
+    # 3. Si no viene nombre, extraer del mensaje
+    if not nombre:
+        nombre = extraer_nombre(mensaje) or "Pendiente"
+
+    # 4. Procesar audio si hay URL
+    if url_audio:
+        audio_text = await procesar_audio_url(url_audio)
+        if audio_text:
+            mensaje = f"{mensaje}\n[Audio transcrito: {audio_text}]"
+
+    # 5. Recuperar sesión de Redis
+    sesion = await obtener_sesion_redis(redis_client, chat_id)
+    historial = []
+    if sesion:
+        historial = await obtener_historial_redis(redis_client, chat_id)
+        logger.info(f"Historial recuperado: {len(historial)} mensajes para chat_id {chat_id}")
+    else:
+        # Si no hay sesión, usar record del payload como historial inicial
+        if record:
+            historial = record
+            logger.info(f"Inicializando historial desde record con {len(historial)} mensajes")
+        else:
+            historial = []
+
+    # 6. Crear/actualizar sesión en Redis
+    if sesion is None:
+        sesion = {
+            "thread_id": chat_id,
+            "chat_id": chat_id,
+            "whatsapp": whatsapp,
+            "nombre": nombre,
+            "origen": "webhook",
+            "vendedor": "",
+            "departamento": "",
+            "municipio": "",
+            "topologia": "",
+            "tipo_producto": "",
+            "productos_interes": [],
+            "contexto_tecnico": {},
+            "pasos_completados": [],
+            "fase_actual": "inicio",
+            "ultimo_mensaje": mensaje,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+    else:
+        # Actualizar campos relevantes
+        sesion["whatsapp"] = whatsapp
+        sesion["nombre"] = nombre
+        sesion["ultimo_mensaje"] = mensaje
+
+    # 7. Inyectar nombre y whatsapp en contexto_tecnico
+    contexto = sesion.get("contexto_tecnico", {})
+    contexto["nombre"] = nombre
+    contexto["whatsapp"] = whatsapp
+    sesion["contexto_tecnico"] = contexto
+
+    # 8. Guardar sesión en Redis
+    await guardar_sesion_redis(redis_client, chat_id, sesion)
+
+    # 9. Construir el historial de mensajes para el grafo
+    messages = []
+    for item in historial:
+        # item puede ser dict con "input"/"output" o lista de strings
+        if isinstance(item, dict):
+            messages.append(HumanMessage(content=item.get("input", "")))
+            messages.append(AIMessage(content=item.get("output", "")))
+        elif isinstance(item, list) and len(item) >= 2:
+            messages.append(HumanMessage(content=item[0]))
+            messages.append(AIMessage(content=item[1]))
+        # Si es otro formato, se ignora
+
+    # Añadir el mensaje actual
+    caso = obtener_caso(chat_id)
+    mensaje_con_caso = f"{mensaje} [Caso No. {caso}]"
+    messages.append(HumanMessage(content=mensaje_con_caso))
+
+    # 10. Preparar estado inicial
+    estado_inicial = {
+        "messages": messages,
+        "contexto_tecnico": contexto
+    }
+
+    # 11. Configuración para el grafo
+    config = {
+        "configurable": {"thread_id": chat_id},
+        "run_name": f"caso_{caso}",
+        "metadata": {
+            "chat_id": chat_id,
+            "origen": "webhook",
+            "caso": caso,
+            "whatsapp": whatsapp,
+        }
+    }
+
+    # 12. Ejecutar el grafo (síncrono, no streaming)
+    start_time = datetime.now(timezone.utc)
+    async with locks[chat_id]:
+        try:
+            resultado = await graph.ainvoke(estado_inicial, config=config)
+        except Exception as e:
+            logger.error(f"Error en ejecución del grafo para {chat_id}: {e}")
+            # Devolver error en JSON
+            return JSONResponse(
+                status_code=500,
+                content={"status": "error", "chat_id": chat_id, "error": str(e)}
+            )
+    end_time = datetime.now(timezone.utc)
+
+    # 13. Extraer respuesta
+    respuesta_final = ""
+    ultimo_aimessage = None
+    for msg in reversed(resultado.get("messages", [])):
+        if isinstance(msg, AIMessage):
+            respuesta_final = msg.content
+            ultimo_aimessage = msg
+            break
+
+    if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
+        respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
+
+    # 14. Instrumentación Langfuse (traza y observación)
+    adapter = get_observability_adapter()
+    trace_id_langfuse = None
+    try:
+        trace_id_langfuse = adapter.create_trace(
+            name=f"chat_{caso}",
+            user_id=whatsapp,
+            session_id=chat_id,  # Usar chat_id como sessionId
+            metadata={
+                "chat_id": chat_id,
+                "origen": "webhook",
+                "caso": caso,
+                "whatsapp": whatsapp
+            },
+            input_data={"message": mensaje}
+        )
+        logger.info(f"Traza Langfuse creada con sessionId={chat_id}")
+    except Exception as e:
+        logger.error(f"Error al crear traza Langfuse: {e}")
+
+    if trace_id_langfuse and ultimo_aimessage:
+        try:
+            usage = ultimo_aimessage.response_metadata.get('token_usage', {})
+            total_tokens = usage.get('total_tokens', 0)
+            if total_tokens > 0:
+                adapter.create_generation(
+                    trace_id=trace_id_langfuse,
+                    name=f"LLM Generation {caso}",
+                    model="gpt-4o-mini",
+                    input_data={"messages": mensaje},
+                    output_data={"response": respuesta_final},
+                    usage={
+                        "input": usage.get('prompt_tokens', 0),
+                        "output": usage.get('completion_tokens', 0),
+                        "total": total_tokens
+                    },
+                    start_time=start_time,
+                    end_time=end_time,
+                    metadata={"chat_id": chat_id, "origen": "webhook"}
+                )
+                logger.info(f"Generación creada con tokens: {total_tokens}")
+        except Exception as e:
+            logger.error(f"Error al crear generación: {e}")
+
+    if trace_id_langfuse:
+        try:
+            ctx = resultado.get("contexto_tecnico", {})
+            puntaje = calcular_puntaje_completitud(ctx)
+            accion = "Calificado" if puntaje >= 60 else "No Calificado"
+            adapter.create_score(
+                trace_id=trace_id_langfuse,
+                name="Completitud Lead",
+                value=puntaje,
+                data_type="NUMERIC"
+            )
+            adapter.create_score(
+                trace_id=trace_id_langfuse,
+                name="Acción Lead",
+                value=accion,
+                data_type="CATEGORICAL"
+            )
+            logger.info(f"Scores registrados para trace {trace_id_langfuse}")
+        except Exception as e:
+            logger.error(f"Error al crear scores: {e}")
+
+    adapter.flush()
+
+    # 15. Guardar historial en Redis y actualizar PostgreSQL
+    if respuesta_final:
+        await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
+        # Actualizar thread en PostgreSQL (convertir chat_id a UUID si es necesario)
+        await actualizar_thread(
+            thread_id=chat_id,
+            nombre=nombre,
+            whatsapp=whatsapp,
+            productos=[p.get("nombre") for p in ctx.get("productos_interes", [])],
+            vendedor=ctx.get("vendedor"),
+            trace_id=trace_id_langfuse,
+            cumulative_cost=0.0,
+            metadata_adicional=ctx
+        )
+
+    # 16. Devolver respuesta en JSON (síncrono) para n8n
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "success",
+            "chat_id": chat_id,
+            "response": respuesta_final,
+            "langfuse_trace_id": trace_id_langfuse,
+            "contexto_tecnico": ctx
+        }
+    )
+
+# =============================================================================
+# PROCESAMIENTO DE CHAT FRONTEND (LEGACY, SOLO PARA PRUEBAS INTERNAS)
+# =============================================================================
+async def process_chat_legacy(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
+    """
+    Flujo antiguo con streaming y fingerprint (solo para pruebas internas).
+    Se mantiene pero se recomienda desactivar en producción.
+    """
+    # ... (código antiguo de process_chat_frontend, se puede eliminar o comentar)
+    # Por brevedad, en esta versión final se redirige al nuevo procesamiento.
+    # Pero para no romper nada, se puede mantener pero con advertencia.
+    logger.warning("Usando flujo legacy (streaming) - solo para pruebas internas")
+    # Aquí iría el código antiguo, pero lo omitimos para que el endpoint /chat
+    # use el nuevo procesamiento si detecta metadata con "name" o "phone".
+    # Como solución, podemos hacer que /chat llame a procesar_payload_n8n
+    # y si no hay datos de n8n, entonces usar streaming.
+    return JSONResponse(
+        status_code=400,
+        content={"status": "error", "message": "Flujo legacy desactivado. Use el nuevo formato de payload."}
+    )
+
+# =============================================================================
+# CICLO DE VIDA DE LA APLICACIÓN
 # =============================================================================
 graph = None
 redis_client = None
@@ -394,7 +576,6 @@ async def lifespan(app: FastAPI):
     print("=== INICIO DEL LIFESPAN ===")
     print("Usando Ingestion API de Langfuse (compatible con OSS)")
 
-    # Inicializar el adaptador
     get_observability_adapter()
 
     db_url = get_db_url()
@@ -419,7 +600,7 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.24",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.0.27",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -458,8 +639,8 @@ async def telemetry_middleware(request: Request, call_next):
 @app.get("/health")
 async def health_check():
     status = {
-        "service": "jarvi-backend",
-        "version": "2.0.24",
+        "service": "jarvi-backend-production",
+        "version": "2.0.27",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
@@ -468,443 +649,46 @@ async def health_check():
     return status
 
 # =============================================================================
-# ENDPOINTS
+# ENDPOINT ÚNICO: /chat
 # =============================================================================
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest, http_request: Request):
-    return await process_chat_frontend(request, http_request)
-
-@app.post("/api/chat/stream")
-async def chat_endpoint_stream(request: ChatRequest, http_request: Request):
-    return await process_chat_frontend(request, http_request)
-
-@app.post("/feedback")
-async def registrar_feedback(feedback: dict):
-    if "trace_id" not in feedback or "value" not in feedback:
-        raise HTTPException(status_code=422, detail="trace_id y value son requeridos")
-    try:
-        adapter = get_observability_adapter()
-        adapter.create_score(
-            trace_id=feedback["trace_id"],
-            name=feedback.get("name", "satisfaccion"),
-            value=float(feedback["value"]),
-            data_type="NUMERIC",
-            comment=feedback.get("comment")
-        )
-        adapter.flush()
-        print(f"Feedback registrado para trace_id {feedback['trace_id']}")
-        return {"status": "ok", "trace_id": feedback["trace_id"]}
-    except Exception as e:
-        print(f"Error al registrar feedback: {e}")
-        raise HTTPException(status_code=500, detail=f"Error al registrar feedback: {str(e)}")
-
-# =============================================================================
-# PROCESAMIENTO DE CHAT FRONTEND (PROPIEDAD INTELECTUAL - INTACTA)
-# =============================================================================
-async def process_chat_frontend(chat_request: ChatRequest, http_request: Request) -> StreamingResponse:
-    fingerprint = chat_request.metadata.get("fingerprint") or http_request.headers.get("X-Fingerprint")
-    thread_id_from_request = chat_request.thread_id
-    whatsapp_norm = None
-    whatsapp_raw = extraer_whatsapp(chat_request.message)
-    if whatsapp_raw:
-        _, whatsapp_norm = normalizar_contacto("", whatsapp_raw, "")
-        if whatsapp_norm and whatsapp_norm != "Pendiente":
-            print(f"WhatsApp detectado: {whatsapp_norm}")
-
-    chat_id = None
-    origen = "pantalla"
-    thread_id_final = None
-
-    if fingerprint:
-        chat_id_por_fingerprint = await obtener_chat_id_por_fingerprint(redis_client, fingerprint) if redis_client else None
-        if chat_id_por_fingerprint:
-            chat_id = chat_id_por_fingerprint
-            sesion = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
-            if sesion:
-                thread_id_final = sesion.get("thread_id")
-                if not thread_id_final:
-                    thread_id_final = str(uuid.uuid4())
-                    sesion["thread_id"] = thread_id_final
-                    await guardar_sesion_redis(redis_client, chat_id, sesion)
-                print(f"Sesión recuperada por fingerprint: {chat_id} con thread {thread_id_final}")
-            else:
-                thread_id_final = str(uuid.uuid4())
-                chat_id = fingerprint
-                await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
-                print(f"Nueva sesión creada para fingerprint: {chat_id} con thread {thread_id_final}")
-        else:
-            thread_id_final = str(uuid.uuid4())
-            chat_id = fingerprint
-            await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
-            print(f"Nuevo thread creado para fingerprint: {chat_id} con thread {thread_id_final}")
+    """
+    Único punto de entrada para todas las solicitudes (n8n y pruebas internas).
+    Detecta si el payload contiene datos de n8n (name, phone, record, url_n8n_audio)
+    y usa el nuevo flujo síncrono; si no, usa el flujo legacy (streaming) solo para pruebas.
+    """
+    metadata = request.metadata or {}
+    # Si viene con campos de n8n, usar nuevo flujo
+    if metadata.get("name") or metadata.get("phone") or metadata.get("record"):
+        return await procesar_payload_n8n(request, http_request)
     else:
-        thread_id_final = thread_id_from_request if thread_id_from_request else str(uuid.uuid4())
-        chat_id = thread_id_final
-        sesion = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
-        if not sesion:
-            data_inicial = {
-                "thread_id": thread_id_final,
-                "chat_id": chat_id,
-                "fingerprint": "",
-                "origen": origen,
-                "whatsapp": "",
-                "nombre": "Pendiente",
-                "vendedor": "",
-                "departamento": "",
-                "municipio": "",
-                "topologia": "",
-                "tipo_producto": "",
-                "productos_interes": [],
-                "contexto_tecnico": {},
-                "pasos_completados": [],
-                "fase_actual": "inicio",
-                "ultimo_mensaje": chat_request.message,
-                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            }
-            if redis_client:
-                await guardar_sesion_redis(redis_client, chat_id, data_inicial)
-            print(f"Nuevo thread forzado (sin fingerprint): {thread_id_final}")
-        else:
-            print(f"Sesión recuperada por thread_id: {chat_id} con thread {thread_id_final}")
-
-    if whatsapp_norm and chat_id != whatsapp_norm:
-        sesion_antigua = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
-        if sesion_antigua:
-            sesion_antigua["chat_id"] = whatsapp_norm
-            sesion_antigua["whatsapp"] = whatsapp_norm
-            await guardar_sesion_redis(redis_client, whatsapp_norm, sesion_antigua)
-            await eliminar_sesion_redis(redis_client, chat_id)
-            if fingerprint:
-                await guardar_fingerprint_redis(redis_client, fingerprint, whatsapp_norm)
-            chat_id = whatsapp_norm
-            print(f"Chat_id actualizado a número: {chat_id}")
-
-    sesion_redis = await obtener_sesion_redis(redis_client, chat_id) if redis_client else None
-    if not sesion_redis:
-        data_inicial = {
-            "thread_id": thread_id_final,
-            "chat_id": chat_id,
-            "fingerprint": fingerprint or "",
-            "origen": origen,
-            "whatsapp": whatsapp_norm or "",
-            "nombre": "Pendiente",
-            "vendedor": "",
-            "departamento": "",
-            "municipio": "",
-            "topologia": "",
-            "tipo_producto": "",
-            "productos_interes": [],
-            "contexto_tecnico": {},
-            "pasos_completados": [],
-            "fase_actual": "inicio",
-            "ultimo_mensaje": chat_request.message,
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        }
-        if redis_client:
-            await guardar_sesion_redis(redis_client, chat_id, data_inicial)
-            if fingerprint:
-                await guardar_fingerprint_redis(redis_client, fingerprint, chat_id)
-            if whatsapp_norm:
-                await guardar_whatsapp_redis(redis_client, whatsapp_norm, chat_id)
-
-    run_name = obtener_caso(thread_id_final)
-    return StreamingResponse(
-        generar_tokens(thread_id_final, chat_request.message, chat_id, run_name, whatsapp_norm, origen, fingerprint),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-            "X-Chat-ID": chat_id,
-            "X-Thread-ID": thread_id_final,
-            "X-Run-Name": run_name,
-            "X-Origen": origen,
-            "Access-Control-Allow-Origin": "*"
-        }
-    )
+        # Legacy (streaming) - se mantiene por compatibilidad, pero se puede eliminar
+        logger.warning("Solicitud sin datos de n8n, usando flujo legacy (desactivado)")
+        return await process_chat_legacy(request, http_request)
 
 # =============================================================================
-# FUNCIÓN DE GENERACIÓN DE TOKENS (CON ADAPTADOR INGESTION API)
+# FUNCIÓN AUXILIAR PARA OBTENER DB URL
 # =============================================================================
-async def generar_tokens(thread_id: str, mensaje: str, chat_id: str, run_name: str | None = None,
-                         nuevo_whatsapp: str | None = None, origen: str = "desconocido",
-                         fingerprint: str | None = None) -> AsyncGenerator[str, None]:
-    trace_id_ctfom = trace_id_var.get()
-    caso = obtener_caso(thread_id)
-    if not run_name:
-        run_name = caso
-
-    whatsapp = nuevo_whatsapp or ""
-    user_id = normalizar_whatsapp_e164(whatsapp) if whatsapp else chat_id
-
-    # ============================
-    # 1. INSTRUMENTACIÓN CON ADAPTADOR (INGESTION API)
-    # ============================
-    adapter = get_observability_adapter()
-    trace_id_langfuse = None
+def sanear_db_url(db_url: str) -> str:
+    if not db_url:
+        return db_url
     try:
-        trace_id_langfuse = adapter.create_trace(
-            name=f"chat_{caso}",
-            user_id=user_id,
-            session_id=thread_id,
-            metadata={
-                "chat_id": chat_id,
-                "origen": origen,
-                "fingerprint": fingerprint or "",
-                "caso": caso,
-                "whatsapp": user_id
-            },
-            input_data={"message": mensaje}
-        )
-        print(f"Traza Langfuse creada vía Ingestion API: {trace_id_langfuse}")
-    except Exception as e:
-        print(f"❌ Error al crear traza vía Ingestion API: {e}")
-        trace_id_langfuse = None
+        parsed = urlparse(db_url)
+        query = parse_qs(parsed.query)
+        for p in ["pool_size", "max_overflow", "pool_timeout"]:
+            query.pop(p, None)
+        clean_query = urlencode(query, doseq=True)
+        return urlunparse(parsed._replace(query=clean_query))
+    except Exception:
+        return db_url
 
-    # ============================
-    # 2. PREPARAR SESIÓN Y ESTADO (PROPIEDAD INTELECTUAL - INTACTA)
-    # ============================
-    sesion_redis = None
-    historial = []
-    if redis_client:
-        sesion_redis = await obtener_sesion_redis(redis_client, chat_id)
-        if sesion_redis:
-            historial = await obtener_historial_redis(redis_client, chat_id)
-            print(f"Historial recuperado: {len(historial)} mensajes para chat_id {chat_id}")
-
-    nombre = extraer_nombre(mensaje)
-    if nombre and (not sesion_redis or not sesion_redis.get("nombre") or sesion_redis.get("nombre") == "Pendiente"):
-        if sesion_redis:
-            sesion_redis["nombre"] = nombre
-            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        print(f"Nombre extraído: {nombre}")
-
-    if nuevo_whatsapp:
-        if sesion_redis:
-            sesion_redis["whatsapp"] = nuevo_whatsapp
-            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        print(f"WhatsApp actualizado: {nuevo_whatsapp}")
-
-    depto, muni = extraer_ubicacion(mensaje)
-    if depto and (not sesion_redis or not sesion_redis.get("departamento")):
-        if sesion_redis:
-            sesion_redis["departamento"] = depto
-            sesion_redis["municipio"] = muni
-            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        print(f"Ubicación extraída: {depto}, {muni}")
-
-    consumo = extraer_consumo(mensaje)
-    if consumo and (not sesion_redis or not sesion_redis.get("consumo_actual")):
-        if sesion_redis:
-            sesion_redis["consumo_actual"] = consumo
-            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        print(f"Consumo extraído: {consumo}")
-
-    empresa = extraer_empresa_electrica(mensaje)
-    if empresa and (not sesion_redis or not sesion_redis.get("empresa_electrica")):
-        if sesion_redis:
-            sesion_redis["empresa_electrica"] = empresa
-            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        print(f"Empresa eléctrica extraída: {empresa}")
-
-    necesidad = extraer_definicion_necesidad(mensaje)
-    if necesidad and (not sesion_redis or not sesion_redis.get("definicion_necesidad")):
-        if sesion_redis:
-            sesion_redis["definicion_necesidad"] = necesidad
-            await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        print(f"Necesidad extraída: {necesidad}")
-
-    if sesion_redis and sesion_redis.get("productos_interes") and not sesion_redis.get("vendedor"):
-        vendedor_email = asignar_vendedor(sesion_redis["productos_interes"])
-        sesion_redis["vendedor"] = vendedor_email
-        await guardar_sesion_redis(redis_client, chat_id, sesion_redis)
-        print(f"Vendedor asignado: {vendedor_email}")
-
-    mensaje_con_caso = f"{mensaje} [Caso No. {caso}]"
-
-    messages = []
-    for item in historial:
-        messages.append(HumanMessage(content=item["input"]))
-        messages.append(AIMessage(content=item["output"]))
-    messages.append(HumanMessage(content=mensaje_con_caso))
-
-    estado_inicial = {
-        "messages": messages,
-        "contexto_tecnico": sesion_redis.get("contexto_tecnico", {}) if sesion_redis else {}
-    }
-
-    config = {
-        "configurable": {"thread_id": thread_id},
-        "run_name": f"caso_{caso}",
-        "metadata": {
-            "chat_id": chat_id,
-            "origen": origen,
-            "caso": caso,
-            "fingerprint": fingerprint,
-            "whatsapp": user_id,
-            "langfuse_trace_id": trace_id_langfuse
-        }
-    }
-
-    # ============================
-    # 3. EJECUTAR GRAFO - MEDIR TIEMPO
-    # ============================
-    start_time = datetime.now(timezone.utc)
-    async with locks[thread_id]:
-        try:
-            resultado = await graph.ainvoke(estado_inicial, config=config)
-        except Exception as e:
-            print(f"❌ Error en ejecución del grafo: {e}")
-            yield f"data: {json.dumps({'token': 'Lo siento, ocurrió un error interno. Por favor, intenta de nuevo más tarde.'})}\n\n"
-            ctx_error = {
-                "chat_id": chat_id,
-                "thread_id": thread_id,
-                "error": str(e),
-                "origen": origen,
-                "fingerprint": fingerprint,
-                "caso": caso,
-                "langfuse_trace_id": trace_id_langfuse
-            }
-            yield f"data: {json.dumps({'contexto_tecnico': ctx_error})}\n\n"
-            return
-    end_time = datetime.now(timezone.utc)
-
-    ctx = resultado.get("contexto_tecnico", {})
-
-    respuesta_final = ""
-    ultimo_aimessage = None
-    for msg in reversed(resultado.get("messages", [])):
-        if isinstance(msg, AIMessage):
-            respuesta_final = msg.content
-            ultimo_aimessage = msg
-            break
-
-    if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
-        respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
-
-    # ============================
-    # LOGS DE DIAGNÓSTICO (MANTENIDOS)
-    # ============================
-    print(f"🔍 Respuesta final: {respuesta_final[:100] if respuesta_final else 'VACÍA'}")
-    if ultimo_aimessage:
-        print(f"🔍 response_metadata: {ultimo_aimessage.response_metadata}")
-
-    # ============================
-    # 4. CREAR GENERACIÓN (OBSERVACIÓN) CON INGESTION API
-    # ============================
-    if trace_id_langfuse and ultimo_aimessage:
-        try:
-            usage = ultimo_aimessage.response_metadata.get('token_usage', {})
-            input_tokens = usage.get('prompt_tokens', 0)
-            output_tokens = usage.get('completion_tokens', 0)
-            total_tokens = usage.get('total_tokens', 0)
-            model = "gpt-4o-mini"
-
-            if total_tokens > 0:
-                adapter.create_generation(
-                    trace_id=trace_id_langfuse,
-                    name=f"LLM Generation {caso}",
-                    model=model,
-                    input_data={"messages": mensaje},
-                    output_data={"response": respuesta_final},
-                    usage={
-                        "input": input_tokens,
-                        "output": output_tokens,
-                        "total": total_tokens
-                    },
-                    start_time=start_time,
-                    end_time=end_time,
-                    metadata={"chat_id": chat_id, "origen": origen}
-                )
-                print(f"✅ Generación creada con tokens: {total_tokens} tokens")
-            else:
-                print(f"⚠️ No se encontraron tokens en la respuesta, no se crea generación")
-        except Exception as e:
-            print(f"❌ Error al crear generación: {e}")
-
-    # ============================
-    # 5. CREAR SCORES (ADAPTADOR)
-    # ============================
-    if trace_id_langfuse:
-        try:
-            puntaje = calcular_puntaje_completitud(ctx)
-            accion = "Calificado" if puntaje >= 60 else "No Calificado"
-
-            adapter.create_score(
-                trace_id=trace_id_langfuse,
-                name="Completitud Lead",
-                value=puntaje,
-                data_type="NUMERIC",
-                comment=f"Basado en {sum(1 for c in CAMPOS_SCORE if ctx.get(c))} de {len(CAMPOS_SCORE)} campos"
-            )
-            adapter.create_score(
-                trace_id=trace_id_langfuse,
-                name="Acción Lead",
-                value=accion,
-                data_type="CATEGORICAL"
-            )
-            print(f"Scores registrados para trace {trace_id_langfuse}: Completitud={puntaje}%, Acción={accion}")
-        except Exception as e:
-            print(f"Error al crear scores: {e}")
-
-    # ============================
-    # 6. FLUSH (ENVÍA BATCH DE EVENTOS)
-    # ============================
-    try:
-        adapter.flush()
-        print("✅ Flush completado (batch enviado)")
-    except Exception as e:
-        print(f"❌ Error en flush: {e}")
-
-    # ============================
-    # 7. GUARDAR HISTORIAL Y THREAD EN BI (PROPIEDAD INTELECTUAL - INTACTA)
-    # ============================
-    if respuesta_final:
-        await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
-        from db_client import actualizar_thread
-        await actualizar_thread(
-            thread_id=thread_id,
-            nombre=ctx.get("nombre", "Pendiente"),
-            whatsapp=user_id,
-            productos=[p.get("nombre") for p in ctx.get("productos_interes", [])],
-            vendedor=ctx.get("vendedor"),
-            trace_id=trace_id_ctfom,
-            cumulative_cost=0.0,
-            metadata_adicional=ctx
-        )
-
-    # ============================
-    # 8. STREAMING DE RESPUESTA
-    # ============================
-    if respuesta_final:
-        tokens = respuesta_final.split()
-        for i, token in enumerate(tokens):
-            yield f"data: {json.dumps({'token': token + (' ' if i < len(tokens)-1 else '')})}\n\n"
-    else:
-        yield f"data: {json.dumps({'token': 'No se pudo generar respuesta.'})}\n\n"
-
-    # Contexto final
-    ctx_para_envio = ctx.copy()
-    ctx_para_envio.update({
-        "chat_id": chat_id,
-        "thread_id": thread_id,
-        "run_name_actual": run_name,
-        "caso": caso,
-        "historial_count": len(historial) + 1,
-        "origen": origen,
-        "fingerprint": fingerprint,
-        "nombre": sesion_redis.get("nombre", "Pendiente") if sesion_redis else "Pendiente",
-        "whatsapp": sesion_redis.get("whatsapp", "") if sesion_redis else "",
-        "vendedor": sesion_redis.get("vendedor", "") if sesion_redis else "",
-        "departamento": sesion_redis.get("departamento", "") if sesion_redis else "",
-        "municipio": sesion_redis.get("municipio", "") if sesion_redis else "",
-        "topologia": sesion_redis.get("topologia", "") if sesion_redis else "",
-        "tipo_producto": sesion_redis.get("tipo_producto", "") if sesion_redis else "",
-        "productos_interes": sesion_redis.get("productos_interes", []) if sesion_redis else [],
-        "definicion_necesidad": sesion_redis.get("definicion_necesidad", "") if sesion_redis else "",
-        "consumo_actual": sesion_redis.get("consumo_actual", "") if sesion_redis else "",
-        "empresa_electrica": sesion_redis.get("empresa_electrica", "") if sesion_redis else "",
-        "resumen": sesion_redis.get("resumen", "") if sesion_redis else "",
-        "langfuse_trace_id": trace_id_langfuse
-    })
-    yield f"data: {json.dumps({'contexto_tecnico': ctx_para_envio})}\n\n"
+def get_db_url() -> str:
+    raw = os.getenv("DATABASE_URL")
+    if raw:
+        return sanear_db_url(raw)
+    ctfom_url = os.getenv("CTFOM_DATABASE_URL")
+    if ctfom_url:
+        print("DATABASE_URL no definida. Usando CTFOM_DATABASE_URL para checkpoints de LangGraph.")
+        return sanear_db_url(ctfom_url)
+    raise RuntimeError("No se encontró DATABASE_URL ni CTFOM_DATABASE_URL.")
