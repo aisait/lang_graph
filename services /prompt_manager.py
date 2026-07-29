@@ -1,9 +1,8 @@
 """
-services/prompt_manager.py - Gestión de prompts sin hardcode en código.
-VERSIÓN 2.0 – Carga desde prompts.json y/o Langfuse.
+services/prompt_manager.py - Gestión de prompts con fallback en código.
+VERSIÓN 3.0 – No requiere archivos externos.
 """
 import os
-import json
 import logging
 from typing import Optional, Dict, Any
 from functools import lru_cache
@@ -18,24 +17,35 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 # =============================================================================
+# PROMPTS DE FALLBACK (EN CÓDIGO, SIN ARCHIVOS)
+# =============================================================================
+FALLBACK_PROMPTS = {
+    "jarvi_system_prompt": (
+        "Eres Jarvi, Ingeniero de Preventa de AISA Solar. "
+        "Siempre trata al cliente de **usted**, de manera formal y profesional. "
+        "Utiliza el pronombre 'usted' y conjuga los verbos en tercera persona del singular. "
+        "Evita cualquier tono coloquial o de amistad. Mantén una actitud respetuosa y cortés en todo momento.\n\n"
+        "Responde con los datos auditados:\n"
+        "- Ubicación: {ciudad}\n"
+        "- Distribuidora: {empresa_electrica}\n"
+        "- Tarifa: GTQ {tarifa_base_gtq} /kWh\n"
+        "REGLAS: {regla_datos}\n"
+        "ONTOLOGÍA: {ontologia_dinamica}"
+    ),
+    "jarvi_seleccion_productos": (
+        "Para poder recomendarle los productos más adecuados, ¿está usted buscando un **sistema completo** "
+        "(incluye paneles, inversor, estructura, cableado, etc.) o un **producto específico** "
+        "(ej. solo paneles, solo inversor, baterías)?"
+    ),
+    "jarvi_extractor_contacto": (
+        "Identifica nombre o teléfono. Mensaje: {mensaje}"
+    )
+}
+
+# =============================================================================
 # CONFIGURACIÓN
 # =============================================================================
-PROMPTS_JSON_PATH = os.getenv("PROMPTS_JSON_PATH", "config/prompts.json")
 USE_LANGFUSE_PROMPTS = os.getenv("USE_LANGFUSE_PROMPTS", "true").lower() == "true"
-
-# =============================================================================
-# CARGA LOCAL DESDE JSON (FALLBACK)
-# =============================================================================
-def load_prompts_from_json() -> Dict[str, str]:
-    try:
-        with open(PROMPTS_JSON_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return {name: item["content"] for name, item in data.items()}
-    except Exception as e:
-        logger.error(f"Error cargando prompts desde {PROMPTS_JSON_PATH}: {e}")
-        return {}
-
-_LOCAL_PROMPTS = load_prompts_from_json()
 
 
 # =============================================================================
@@ -71,7 +81,7 @@ class PromptManager:
                 logger.error(f"PromptManager: Error en cliente: {e}")
                 self._client = None
         else:
-            logger.info("PromptManager: Usando solo fuente local (JSON)")
+            logger.info("PromptManager: Usando fallback en código")
 
     def get_prompt(self, name: str, version: Optional[int] = None) -> Dict[str, Any]:
         cache_key = f"{name}:{version or 'latest'}"
@@ -79,8 +89,9 @@ class PromptManager:
             return self._cache[cache_key]
 
         content = None
-        source = "local"
+        source = "fallback"
 
+        # 1. Intentar desde Langfuse
         if self._client and USE_LANGFUSE_PROMPTS:
             try:
                 prompt = self._client.get_prompt(name, version=version)
@@ -90,15 +101,16 @@ class PromptManager:
             except Exception as e:
                 logger.warning(f"Langfuse falló para '{name}': {e}")
 
+        # 2. Fallback al código
         if content is None:
-            content = _LOCAL_PROMPTS.get(name)
+            content = FALLBACK_PROMPTS.get(name)
             if content is None:
-                raise ValueError(f"Prompt '{name}' no encontrado ni en Langfuse ni en JSON")
-            source = "local"
+                raise ValueError(f"Prompt '{name}' no encontrado ni en Langfuse ni en fallback")
+            source = "fallback"
 
         result = {"content": content, "source": source}
         self._cache[cache_key] = result
-        logger.debug(f"PromptManager: '{name}' desde {source}")
+        logger.info(f"PromptManager: '{name}' desde {source}")
         return result
 
     def compile(self, name: str, **kwargs) -> str:
