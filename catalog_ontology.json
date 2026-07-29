@@ -1,5 +1,5 @@
 {
-  "__comentario_iso": "Archivo de ontología de catálogo de productos AISA Solar. Define 86 categorías con etiquetas, nombres, URLs, palabras clave, tipo (sistema/unitario) y requisitos de configuración (requirements). Propósito: servir como fuente de verdad referencial para el enrutamiento epistemológico del agente (ontology.py).\n\nEstándares aplicados:\n- ISO/IEC 26514:2021 (Documentación de software): cada entrada describe un producto con metadatos claros.\n- ISO/IEC 25010:2011 (Calidad del producto): las palabras clave permiten emparejamiento preciso con la intención del usuario, mejorando la adecuación funcional.\n- ISO/IEC 29119:2022 (Pruebas de software - caja negra):\n  Pruebas sugeridas:\n  1. Carga del archivo: verificar que la función cargar_ontologia() retorna un diccionario con 86 claves numéricas y un campo '__comentario_iso'.\n  2. Búsqueda de bloques: invocar obtener_fragmento_ontologia('On-Grid') y comprobar que se incluyen los bloques 1-10, 20, 35, 37, 38, 60, 61, 64, 79, 80, 81, 85.\n  3. Integridad: cada entrada debe contener 'tag', 'nombre', 'url', 'tipo' y 'keywords' (lista de 10 cadenas). La URL debe ser válida y pertenecer al dominio aisa.com.gt.\n  4. Rendimiento: la carga desde disco debe ser instantánea (<10ms) gracias al caché en memoria.\n- ISO/IEC/IEEE 12207:2008 (Ciclo de vida): este archivo es un ítem de configuración del sistema, mantenido bajo control de cambios.\n\nVersión: 2.1.0 – Se añade campo 'requirements' para guiar el diálogo imperceptible (Julio 2026).",
+  "__comentario_iso": "Archivo de ontología de catálogo de productos AISA Solar. Define 86 categorías con etiquetas, nombres, URLs, palabras clave, tipo (sistema/unitario), requisitos de configuración (requirements), flag de diagnóstico eléctrico y dimensionamiento Off‑Grid. Propósito: servir como fuente de verdad referencial para el enrutamiento epistemológico del agente (ontology.py).\n\nVersión: 2.2.0 – Se añaden 'requiere_diagnostico_electrico' y 'dimensionamiento' para cierre SMART y cálculo Off‑Grid (Julio 2026).",
   "1": {
     "tag": "sistemas-solares-on-grid",
     "nombre": "SISTEMAS SOLARES CONECTADOS A LA RED ELECTRICA ON-GRID",
@@ -21,7 +21,8 @@
       {"field": "consumo_mensual_kwh", "question": "Para dimensionar su sistema, ¿cuál es su consumo eléctrico mensual en kWh? (puede revisar su factura de luz)", "type": "number"},
       {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene actualmente? (ej. T-1, T-2, o el monto en quetzales por kWh)", "type": "string"},
       {"field": "espacio_techo", "question": "¿Cuántos metros cuadrados disponibles tiene en el techo para los paneles?", "type": "number"}
-    ]
+    ],
+    "requiere_diagnostico_electrico": true
   },
   "2": {
     "tag": "kit-solar-basico-on-grid",
@@ -42,7 +43,8 @@
     ],
     "requirements": [
       {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo eléctrico mensual en kWh?", "type": "number"}
-    ]
+    ],
+    "requiere_diagnostico_electrico": true
   },
   "3": {
     "tag": "sistema-intermedio-on-grid",
@@ -64,7 +66,8 @@
     "requirements": [
       {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"},
       {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene?", "type": "string"}
-    ]
+    ],
+    "requiere_diagnostico_electrico": true
   },
   "4": {
     "tag": "inversores-monofasicos-on-grid",
@@ -86,7 +89,8 @@
     "requirements": [
       {"field": "potencia_inversor", "question": "¿Qué potencia en kW necesita para el inversor?", "type": "number"},
       {"field": "tipo_instalacion", "question": "¿El inversor será instalado en interiores o exteriores?", "type": "string"}
-    ]
+    ],
+    "requiere_diagnostico_electrico": true
   },
   "5": {
     "tag": "sistema-alto-on-grid",
@@ -109,7 +113,8 @@
       {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"},
       {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene?", "type": "string"},
       {"field": "espacio_techo", "question": "¿Cuántos metros cuadrados de techo tiene disponibles?", "type": "number"}
-    ]
+    ],
+    "requiere_diagnostico_electrico": true
   },
   "6": {
     "tag": "comercial-alto-on-grid",
@@ -131,7 +136,8 @@
     "requirements": [
       {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"},
       {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene?", "type": "string"}
-    ]
+    ],
+    "requiere_diagnostico_electrico": true
   },
   "7": {
     "tag": "industrial-on-grid",
@@ -154,7 +160,8 @@
       {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"},
       {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene?", "type": "string"},
       {"field": "area_disponible", "question": "¿Cuántos metros cuadrados tiene disponibles para la instalación?", "type": "number"}
-    ]
+    ],
+    "requiere_diagnostico_electrico": true
   },
   "8": {
     "tag": "comercial-intermedio-on-grid",
@@ -176,7 +183,8 @@
     "requirements": [
       {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"},
       {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene?", "type": "string"}
-    ]
+    ],
+    "requiere_diagnostico_electrico": true
   },
   "9": {
     "tag": "inversores-trifasicos-on-grid",
@@ -198,7 +206,8 @@
     "requirements": [
       {"field": "potencia_inversor", "question": "¿Qué potencia en kW necesita para el inversor?", "type": "number"},
       {"field": "tipo_instalacion", "question": "¿El inversor será instalado en interiores o exteriores?", "type": "string"}
-    ]
+    ],
+    "requiere_diagnostico_electrico": true
   },
   "10": {
     "tag": "comercial-basico-on-grid",
@@ -219,7 +228,8 @@
     ],
     "requirements": [
       {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"}
-    ]
+    ],
+    "requiere_diagnostico_electrico": true
   },
   "11": {
     "tag": "calentadores-solares-residenciales",
@@ -396,7 +406,22 @@
     "requirements": [
       {"field": "autonomia_dias", "question": "¿Cuántos días de autonomía necesita sin sol (baterías)?", "type": "number"},
       {"field": "potencia_pico", "question": "¿Qué potencia pico (en watts) necesita para sus equipos?", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "Nevera 12V", "potencia_w": 80, "horas_dia": 24},
+        {"nombre": "TV LED 32", "potencia_w": 30, "horas_dia": 6},
+        {"nombre": "Bombilla LED", "potencia_w": 10, "horas_dia": 8}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 450, "url": "https://www.aisa.com.gt/shop/product/panel-solar-450w"},
+        "bateria": {"capacidad_kwh": 5, "url": "https://www.aisa.com.gt/shop/product/bateria-litio-5kwh"},
+        "inversor": {"potencia_w": 3000, "url": "https://www.aisa.com.gt/shop/product/inversor-offgrid-3000w"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-mppt-60a"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "20": {
     "tag": "paneles-solares-fotovoltaicos",
@@ -1008,7 +1033,19 @@
     "requirements": [
       {"field": "numero_luces", "question": "¿Cuántas luces necesita alimentar?", "type": "number"},
       {"field": "horas_uso", "question": "¿Cuántas horas al día necesita iluminación?", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "Bombilla LED 5W", "potencia_w": 5, "horas_dia": 8}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 100, "url": "https://www.aisa.com.gt/shop/product/panel-solar-100w"},
+        "bateria": {"capacidad_kwh": 0.5, "url": "https://www.aisa.com.gt/shop/product/bateria-litio-12v-50ah"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-pwm-10a"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "51": {
     "tag": "kits-solares-necesidad-basica",
@@ -1030,7 +1067,21 @@
     "requirements": [
       {"field": "numero_equipos", "question": "¿Qué equipos necesita alimentar? (ej. TV, luces, cargador)", "type": "string"},
       {"field": "horas_uso", "question": "¿Cuántas horas al día los usará?", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "TV LED 32", "potencia_w": 30, "horas_dia": 6},
+        {"nombre": "Bombilla LED", "potencia_w": 10, "horas_dia": 8}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 150, "url": "https://www.aisa.com.gt/shop/product/panel-solar-150w"},
+        "bateria": {"capacidad_kwh": 1, "url": "https://www.aisa.com.gt/shop/product/bateria-litio-12v-100ah"},
+        "inversor": {"potencia_w": 300, "url": "https://www.aisa.com.gt/shop/product/inversor-offgrid-300w"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-pwm-20a"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "52": {
     "tag": "kit-solar-amenidades-fin-semana",
@@ -1052,7 +1103,22 @@
     "requirements": [
       {"field": "electrodomesticos", "question": "¿Qué electrodomésticos planea usar? (nevera, TV, luces, etc.)", "type": "string"},
       {"field": "dias_uso", "question": "¿Cuántos días seguidos usará la cabaña?", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "Nevera 12V", "potencia_w": 80, "horas_dia": 24},
+        {"nombre": "TV LED 32", "potencia_w": 30, "horas_dia": 6},
+        {"nombre": "Bombilla LED", "potencia_w": 10, "horas_dia": 8}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 200, "url": "https://www.aisa.com.gt/shop/product/panel-solar-200w"},
+        "bateria": {"capacidad_kwh": 1.5, "url": "https://www.aisa.com.gt/shop/product/bateria-litio-12v-150ah"},
+        "inversor": {"potencia_w": 500, "url": "https://www.aisa.com.gt/shop/product/inversor-offgrid-500w"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-mppt-30a"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "53": {
     "tag": "hogar-solar-completo-offgrid",
@@ -1074,7 +1140,22 @@
     "requirements": [
       {"field": "consumo_diario", "question": "¿Cuál es su consumo energético diario estimado en kWh?", "type": "number"},
       {"field": "autonomia_dias", "question": "¿Cuántos días de autonomía necesita?", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "Nevera 12V", "potencia_w": 80, "horas_dia": 24},
+        {"nombre": "TV LED 32", "potencia_w": 30, "horas_dia": 6},
+        {"nombre": "Bombilla LED x4", "potencia_w": 40, "horas_dia": 8}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 450, "url": "https://www.aisa.com.gt/shop/product/panel-solar-450w"},
+        "bateria": {"capacidad_kwh": 5, "url": "https://www.aisa.com.gt/shop/product/bateria-litio-5kwh"},
+        "inversor": {"potencia_w": 1000, "url": "https://www.aisa.com.gt/shop/product/inversor-offgrid-1000w"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-mppt-60a"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "54": {
     "tag": "repuestos-estructuras-paneles",
@@ -1134,7 +1215,18 @@
     "requirements": [
       {"field": "profundidad_pozo", "question": "¿Cuál es la profundidad de su pozo en metros?", "type": "number"},
       {"field": "caudal_requerido", "question": "¿Qué caudal de agua necesita en litros por hora?", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "Bomba sumergible solar", "potencia_w": 200, "horas_dia": 6}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 300, "url": "https://www.aisa.com.gt/shop/product/panel-solar-300w"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-bomba-solar-mppt"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "57": {
     "tag": "sistemas-bombas-perifericas-solares",
@@ -1156,7 +1248,18 @@
     "requirements": [
       {"field": "altura_succion", "question": "¿Desde qué altura debe succionar el agua? (metros)", "type": "number"},
       {"field": "caudal_requerido", "question": "¿Qué caudal necesita? (litros por minuto)", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "Bomba periférica solar", "potencia_w": 150, "horas_dia": 6}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 150, "url": "https://www.aisa.com.gt/shop/product/panel-solar-150w"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-bomba-solar-pwm"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "58": {
     "tag": "sistema-bomba-desalojo",
@@ -1178,7 +1281,18 @@
     "requirements": [
       {"field": "tipo_agua", "question": "¿Qué tipo de agua va a desalojar? (limpias, residuales, con sólidos)", "type": "string"},
       {"field": "altura_impulsion", "question": "¿Qué altura debe impulsar el agua? (metros)", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "Bomba desalojo solar", "potencia_w": 300, "horas_dia": 4}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 450, "url": "https://www.aisa.com.gt/shop/product/panel-solar-450w"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-bomba-solar-mppt"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "59": {
     "tag": "sistema-bombas-caudal-riego",
@@ -1200,7 +1314,18 @@
     "requirements": [
       {"field": "area_riego", "question": "¿Cuántos metros cuadrados va a regar?", "type": "number"},
       {"field": "caudal_requerido", "question": "¿Qué caudal necesita? (litros por hora)", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "Bomba de riego solar", "potencia_w": 250, "horas_dia": 5}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 250, "url": "https://www.aisa.com.gt/shop/product/panel-solar-250w"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-bomba-solar-pwm"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "60": {
     "tag": "interruptores-termomagneticos",
@@ -1265,7 +1390,19 @@
     "requirements": [
       {"field": "capacidad_litros", "question": "¿Qué capacidad en litros necesita?", "type": "number"},
       {"field": "tension_operacion", "question": "¿A qué voltaje operará? (12V o 24V)", "type": "string"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "Congelador solar 12V", "potencia_w": 60, "horas_dia": 24}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 150, "url": "https://www.aisa.com.gt/shop/product/panel-solar-150w"},
+        "bateria": {"capacidad_kwh": 2, "url": "https://www.aisa.com.gt/shop/product/bateria-litio-12v-200ah"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-mppt-20a"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "63": {
     "tag": "refrigeradores-electricos-eficientes",
@@ -1347,7 +1484,18 @@
     "requirements": [
       {"field": "profundidad_pozo", "question": "¿Cuál es la profundidad del pozo? (metros)", "type": "number"},
       {"field": "caudal_requerido", "question": "¿Qué caudal necesita? (m³/h)", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "Bomba sumergible 3hp", "potencia_w": 2200, "horas_dia": 4}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 450, "url": "https://www.aisa.com.gt/shop/product/panel-solar-450w"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-bomba-solar-trifasico"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "67": {
     "tag": "todos-calentadores-solares",
@@ -1410,7 +1558,21 @@
     "requirements": [
       {"field": "potencia_carga", "question": "¿Qué potencia en watts necesita respaldar?", "type": "number"},
       {"field": "autonomia_horas", "question": "¿Cuántas horas de autonomía necesita?", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "TV LED 32", "potencia_w": 30, "horas_dia": 4},
+        {"nombre": "Bombilla LED x2", "potencia_w": 20, "horas_dia": 4}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 100, "url": "https://www.aisa.com.gt/shop/product/panel-solar-100w"},
+        "bateria": {"capacidad_kwh": 1, "url": "https://www.aisa.com.gt/shop/product/bateria-litio-12v-100ah"},
+        "inversor": {"potencia_w": 200, "url": "https://www.aisa.com.gt/shop/product/inversor-offgrid-200w"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-pwm-20a"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "70": {
     "tag": "respaldo-intermedio-vivienda",
@@ -1432,7 +1594,22 @@
     "requirements": [
       {"field": "potencia_carga", "question": "¿Qué potencia en watts necesita respaldar?", "type": "number"},
       {"field": "autonomia_horas", "question": "¿Cuántas horas de autonomía necesita?", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "Nevera 110V", "potencia_w": 100, "horas_dia": 8},
+        {"nombre": "TV LED 32", "potencia_w": 30, "horas_dia": 4},
+        {"nombre": "Bombilla LED x3", "potencia_w": 30, "horas_dia": 4}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 200, "url": "https://www.aisa.com.gt/shop/product/panel-solar-200w"},
+        "bateria": {"capacidad_kwh": 2.5, "url": "https://www.aisa.com.gt/shop/product/bateria-litio-24v-100ah"},
+        "inversor": {"potencia_w": 500, "url": "https://www.aisa.com.gt/shop/product/inversor-hibrido-500w"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-mppt-30a"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "71": {
     "tag": "respaldo-avanzado-casa-completa",
@@ -1454,7 +1631,23 @@
     "requirements": [
       {"field": "potencia_carga", "question": "¿Qué potencia en watts necesita respaldar?", "type": "number"},
       {"field": "autonomia_horas", "question": "¿Cuántas horas de autonomía necesita?", "type": "number"}
-    ]
+    ],
+    "dimensionamiento": {
+      "tipo_calculo": "carga_equipos",
+      "equipos_tipicos": [
+        {"nombre": "Nevera 110V", "potencia_w": 100, "horas_dia": 12},
+        {"nombre": "TV LED 32", "potencia_w": 30, "horas_dia": 6},
+        {"nombre": "Bombilla LED x5", "potencia_w": 50, "horas_dia": 6},
+        {"nombre": "Microondas", "potencia_w": 800, "horas_dia": 1}
+      ],
+      "componentes": {
+        "panel": {"potencia_w": 450, "url": "https://www.aisa.com.gt/shop/product/panel-solar-450w"},
+        "bateria": {"capacidad_kwh": 10, "url": "https://www.aisa.com.gt/shop/product/bateria-litio-48v-200ah"},
+        "inversor": {"potencia_w": 3000, "url": "https://www.aisa.com.gt/shop/product/inversor-hibrido-3000w"},
+        "controlador": {"url": "https://www.aisa.com.gt/shop/product/controlador-mppt-60a"}
+      },
+      "factor_seguridad": 1.2
+    }
   },
   "72": {
     "tag": "marcos-soportes-calentadores",
@@ -1612,7 +1805,8 @@
     "requirements": [
       {"field": "consumo_mensual_kwh", "question": "¿Cuál es su consumo mensual en kWh?", "type": "number"},
       {"field": "tarifa_electrica", "question": "¿Qué tarifa eléctrica tiene?", "type": "string"}
-    ]
+    ],
+    "requiere_diagnostico_electrico": true
   },
   "80": {
     "tag": "cables-electricos-generales",
