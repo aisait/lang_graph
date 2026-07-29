@@ -1,6 +1,6 @@
 """
 audio.py - Procesamiento de audio: Speech-to-Text y Text-to-Speech.
-Usa OpenAI Whisper y TTS.
+Usa OpenAI Whisper y TTS 29JUL2026.
 """
 import os
 import io
