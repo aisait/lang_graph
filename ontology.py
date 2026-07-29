@@ -2,7 +2,7 @@
 ontology.py
 Módulo de ontología del catálogo de productos de AISA Solar para JARVI 2.0.
 Carga y filtra bloques de conocimiento desde un archivo JSON externo,
-proporcionando fragmentos de contexto al motor de razonamiento.
+proporcionando fragmentos de contexto al motor de razonamiento. 29JUL2026
 
 Estándares aplicados:
 - ISO/IEC/IEEE 12207:2008 (Ciclo de vida del software): este módulo es
