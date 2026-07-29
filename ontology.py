@@ -25,7 +25,7 @@ Estándares aplicados:
 import os
 import json
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 # ---------------------------------------------------------------------------
 # Configuración del Logger para observabilidad en entornos serverless
@@ -410,3 +410,287 @@ def get_requirements_by_tag(tag: str) -> List[Dict]:
 
     logger.debug(f"Requisitos cargados para tag '{tag}': {len(requirements)} items")
     return requirements
+
+
+# =============================================================================
+# NUEVAS FUNCIONES PARA DIAGNÓSTICO ELÉCTRICO Y DIMENSIONAMIENTO OFF‑GRID
+# =============================================================================
+
+def get_requires_diagnostic(tag: str) -> bool:
+    """
+    Retorna True si el producto identificado por 'tag' requiere
+    diagnóstico eléctrico (preguntar por consumo y tarifa).
+    Por defecto, si el campo no existe, retorna False.
+
+    Estándares aplicados:
+    - ISO/IEC 25010:2011: la función es determinista y rápida.
+
+    Parámetros:
+        tag (str): clave numérica del producto.
+
+    Retorna:
+        bool: True si el producto necesita diagnóstico eléctrico, False en caso contrario.
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. tag='1' (On-Grid): retorna True.
+        2. tag='11' (Calentador): retorna False.
+        3. tag='999' (inexistente): retorna False.
+    """
+    ontologia = cargar_ontologia()
+    item = ontologia.get(tag)
+    if not item or not isinstance(item, dict):
+        return False
+    return item.get("requiere_diagnostico_electrico", False)
+
+
+def get_dimensionamiento_by_tag(tag: str) -> Optional[Dict]:
+    """
+    Retorna el objeto 'dimensionamiento' del producto identificado por 'tag'.
+    Si no existe, retorna None.
+
+    Estándares aplicados:
+    - ISO/IEC 26514:2021: documentación completa.
+
+    Parámetros:
+        tag (str): clave numérica del producto.
+
+    Retorna:
+        Optional[Dict]: el objeto dimensionamiento, o None si no existe.
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. tag='19' (Sistemas Aislados): retorna el objeto dimensionamiento.
+        2. tag='1' (On-Grid): retorna None (o no tiene).
+        3. tag='999' (inexistente): retorna None.
+    """
+    ontologia = cargar_ontologia()
+    item = ontologia.get(tag)
+    if not item or not isinstance(item, dict):
+        return None
+    return item.get("dimensionamiento")
+
+
+def get_componentes_urls(tag: str) -> Dict[str, str]:
+    """
+    Retorna un diccionario con las URLs de los componentes
+    (panel, batería, inversor, controlador) para el producto Off‑Grid
+    identificado por 'tag'. Si no se encuentra dimensionamiento o no tiene
+    URLs definidas, retorna un diccionario vacío.
+
+    Estándares aplicados:
+    - ISO/IEC/IEEE 12207:2008: extensión para soportar extracción dinámica.
+
+    Parámetros:
+        tag (str): clave numérica del producto.
+
+    Retorna:
+        Dict[str, str]: diccionario con las URLs de los componentes.
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. tag='19': retorna {'panel': 'https://...', 'bateria': 'https://...', ...}
+        2. tag='1': retorna {}
+    """
+    dimensionamiento = get_dimensionamiento_by_tag(tag)
+    if not dimensionamiento:
+        return {}
+    componentes = dimensionamiento.get("componentes", {})
+    urls = {}
+    for key, comp in componentes.items():
+        if isinstance(comp, dict) and "url" in comp:
+            urls[key] = comp["url"]
+    return urls
+
+
+def get_equipos_tipicos(tag: str) -> List[Dict]:
+    """
+    Retorna la lista de equipos típicos (consumo en watts, horas de uso)
+    para el producto Off‑Grid identificado por 'tag'. Si no se encuentra,
+    retorna una lista vacía.
+
+    Estándares aplicados:
+    - ISO/IEC 26514:2021: documentación completa.
+
+    Parámetros:
+        tag (str): clave numérica del producto.
+
+    Retorna:
+        List[Dict]: lista de equipos típicos.
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. tag='19': retorna la lista de equipos definida en la ontología.
+        2. tag='1': retorna [].
+    """
+    dimensionamiento = get_dimensionamiento_by_tag(tag)
+    if not dimensionamiento:
+        return []
+    return dimensionamiento.get("equipos_tipicos", [])
+
+
+def get_factor_seguridad(tag: str) -> float:
+    """
+    Retorna el factor de seguridad para el dimensionamiento Off‑Grid.
+    Por defecto, si no se define en la ontología, retorna 1.2.
+
+    Estándares aplicados:
+    - ISO/IEC 25010:2011: comportamiento robusto con fallback.
+
+    Parámetros:
+        tag (str): clave numérica del producto.
+
+    Retorna:
+        float: factor de seguridad.
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. tag='19': retorna el valor definido en la ontología.
+        2. tag='1': retorna 1.2 por defecto.
+    """
+    dimensionamiento = get_dimensionamiento_by_tag(tag)
+    if not dimensionamiento:
+        return 1.2
+    return dimensionamiento.get("factor_seguridad", 1.2)
+
+
+def calcular_consumo_diario(equipos: List[Dict], horas_uso: List[float]) -> float:
+    """
+    Calcula el consumo diario en Wh a partir de una lista de equipos y sus horas de uso.
+    Cada equipo es un diccionario con 'potencia_w' y opcionalmente 'horas_dia'.
+    Si no se proporcionan horas_uso, se usan las del equipo.
+
+    Estándares aplicados:
+    - ISO/IEC 29119:2022: pruebas de caja negra.
+
+    Parámetros:
+        equipos (List[Dict]): lista de equipos con 'potencia_w' y 'horas_dia'.
+        horas_uso (List[float]): lista de horas de uso correspondiente a cada equipo.
+                                  Si no se pasa, se usa 'horas_dia' del equipo.
+
+    Retorna:
+        float: consumo diario en Wh.
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. equipos=[{'potencia_w':80, 'horas_dia':24}] → 1920.
+        2. equipos=[{'potencia_w':30, 'horas_dia':6}] → 180.
+        3. equipos vacío → 0.0.
+    """
+    if not equipos:
+        return 0.0
+
+    consumo_total = 0.0
+    for i, equipo in enumerate(equipos):
+        potencia = equipo.get("potencia_w", 0)
+        if i < len(horas_uso):
+            horas = horas_uso[i]
+        else:
+            horas = equipo.get("horas_dia", 0)
+        consumo_total += potencia * horas
+    return consumo_total
+
+
+def dimensionar_sistema_offgrid(
+    consumo_wh_dia: float,
+    autonomia_dias: int,
+    tag: str
+) -> Dict:
+    """
+    Dimensiona un sistema Off‑Grid a partir del consumo diario, la autonomía en días
+    y los datos de la ontología para el producto identificado por 'tag'.
+    Retorna un diccionario con los resultados: número de paneles, baterías, inversor,
+    y URLs de los componentes para obtener precios dinámicamente.
+
+    Estándares aplicados:
+    - ISO/IEC 25010:2011: eficiencia y fiabilidad.
+    - ISO/IEC 29119:2022: pruebas de caja negra.
+
+    Parámetros:
+        consumo_wh_dia (float): consumo diario en Wh.
+        autonomia_dias (int): días de autonomía deseada.
+        tag (str): clave numérica del producto (ej. '19').
+
+    Retorna:
+        Dict: {
+            "paneles": {"cantidad": int, "potencia_w": float, "url": str},
+            "baterias": {"cantidad": int, "capacidad_kwh": float, "url": str},
+            "inversor": {"potencia_w": float, "url": str},
+            "controlador": {"url": str},
+            "precio_total_estimado": float,  # Suma de precios de componentes (se necesita extraer)
+            "advertencia": str
+        }
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. consumo=2420, autonomia=2, tag='19' → dimensionamiento razonable.
+        2. consumo=0, autonomia=1 → retorna sistema mínimo.
+        3. tag sin dimensionamiento → retorna {}.
+    """
+    dimensionamiento = get_dimensionamiento_by_tag(tag)
+    if not dimensionamiento:
+        logger.warning(f"No hay dimensionamiento para tag '{tag}'")
+        return {}
+
+    factor_seguridad = get_factor_seguridad(tag)
+
+    # Consumo diario ajustado con factor de seguridad
+    consumo_ajustado = consumo_wh_dia * factor_seguridad
+
+    # Energía total necesaria para la autonomía (Wh)
+    energia_total = consumo_ajustado * autonomia_dias
+
+    # Componentes
+    componentes = dimensionamiento.get("componentes", {})
+    panel = componentes.get("panel", {})
+    bateria = componentes.get("bateria", {})
+    inversor = componentes.get("inversor", {})
+    controlador = componentes.get("controlador", {})
+
+    # Calcular número de baterías (capacidad en kWh)
+    capacidad_bateria_kwh = bateria.get("capacidad_kwh", 0)
+    if capacidad_bateria_kwh > 0:
+        num_baterias = (energia_total / 1000) / capacidad_bateria_kwh
+        num_baterias = max(1, round(num_baterias))
+    else:
+        num_baterias = 1
+
+    # Calcular número de paneles (potencia en W)
+    potencia_panel_w = panel.get("potencia_w", 0)
+    if potencia_panel_w > 0:
+        # Suponiendo 5 horas de sol pico al día (constante razonable)
+        horas_sol_pico = 5
+        energia_panel_dia = potencia_panel_w * horas_sol_pico / 1000  # kWh/día por panel
+        num_paneles = (consumo_ajustado / 1000) / energia_panel_dia
+        num_paneles = max(1, round(num_paneles))
+    else:
+        num_paneles = 1
+
+    # Inversor: se selecciona el que tenga al menos la potencia pico necesaria
+    potencia_inversor_w = inversor.get("potencia_w", 0)
+
+    # URLs
+    urls = {
+        "panel": panel.get("url", ""),
+        "bateria": bateria.get("url", ""),
+        "inversor": inversor.get("url", ""),
+        "controlador": controlador.get("url", "")
+    }
+
+    resultado = {
+        "paneles": {
+            "cantidad": num_paneles,
+            "potencia_w": potencia_panel_w,
+            "url": urls["panel"]
+        },
+        "baterias": {
+            "cantidad": num_baterias,
+            "capacidad_kwh": capacidad_bateria_kwh,
+            "url": urls["bateria"]
+        },
+        "inversor": {
+            "potencia_w": potencia_inversor_w,
+            "url": urls["inversor"]
+        },
+        "controlador": {
+            "url": urls["controlador"]
+        },
+        "precio_total_estimado": 0.0,  # Se calculará externamente con price_extractor
+        "advertencia": "El precio indicado corresponde únicamente a los equipos. No incluye instalación, mano de obra, servicios adicionales ni costos de envío."
+    }
+
+    logger.info(f"Dimensionamiento Off‑Grid para tag '{tag}': {num_paneles} paneles, {num_baterias} baterías, inversor {potencia_inversor_w}W")
+    return resultado
