@@ -35,7 +35,7 @@ from ubicacion import buscar_ubicacion
 # =============================================================================
 # NUEVO: Importar PromptManager para prompts externalizados
 # =============================================================================
-from services.prompt_manager import get_prompt
+from prompt_manager import get_prompt
 
 logger = logging.getLogger(__name__)
 
