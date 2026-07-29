@@ -61,8 +61,8 @@ async def actualizar_thread(
             return False
         conn = await get_db_connection(db_url)
 
-        # La BD ahora acepta texto; convertimos a UUID solo si es necesario (comentar si se prefiere texto)
-        thread_id_uuid = thread_id_to_uuid(thread_id)  # mantener por compatibilidad
+        # La BD ahora acepta texto; convertimos a UUID solo si es necesario
+        thread_id_uuid = thread_id_to_uuid(thread_id)
 
         if metadata_adicional is None:
             metadata_adicional = {}
@@ -132,14 +132,91 @@ async def actualizar_thread(
         if conn:
             await conn.close()
 
-async def registrar_evento_auditoria(...):
-    # (misma función, sin cambios)
-    pass
+async def registrar_evento_auditoria(
+    thread_id: str,
+    trace_id: str,
+    event_type: str,
+    source: str,
+    payload: Dict[str, Any],
+    langsmith_run_id: Optional[str] = None
+) -> bool:
+    conn = None
+    try:
+        db_url = get_ctfom_db_url()
+        if not db_url:
+            logger.error("CTFOM_DATABASE_URL no configurada")
+            return False
+        conn = await get_db_connection(db_url)
+        await conn.execute(
+            """
+            INSERT INTO audit_events (
+                thread_id, timestamp, event_type, source,
+                system_snapshot, request_payload, langsmith_run_id
+            )
+            VALUES ($1, NOW(), $2, $3, $4, $5, $6)
+            """,
+            thread_id,
+            event_type,
+            source,
+            json.dumps({"trace_id": trace_id}),
+            json.dumps(payload),
+            langsmith_run_id
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error al registrar evento: {e}")
+        return False
+    finally:
+        if conn:
+            await conn.close()
 
-async def acumular_costo_thread(...):
-    # (misma función, sin cambios)
-    pass
+async def acumular_costo_thread(thread_id: str, costo: float) -> bool:
+    conn = None
+    try:
+        db_url = get_bi_db_url()
+        if not db_url:
+            logger.error("BI_DATABASE_URL no configurada")
+            return False
+        conn = await get_db_connection(db_url)
+        thread_id_uuid = thread_id_to_uuid(thread_id)
+        await conn.execute(
+            """
+            UPDATE threads
+            SET metadata = jsonb_set(
+                metadata,
+                '{cumulative_cost}',
+                to_jsonb(COALESCE((metadata->>'cumulative_cost')::numeric, 0) + $1)
+            )
+            WHERE thread_id = $2
+            """,
+            costo,
+            thread_id_uuid
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error al acumular costo: {e}")
+        return False
+    finally:
+        if conn:
+            await conn.close()
 
-async def obtener_costo_acumulado(...):
-    # (misma función, sin cambios)
-    pass
+async def obtener_costo_acumulado(thread_id: str) -> float:
+    conn = None
+    try:
+        db_url = get_bi_db_url()
+        if not db_url:
+            logger.error("BI_DATABASE_URL no configurada")
+            return 0.0
+        conn = await get_db_connection(db_url)
+        thread_id_uuid = thread_id_to_uuid(thread_id)
+        row = await conn.fetchrow(
+            "SELECT metadata->>'cumulative_cost' as cost FROM threads WHERE thread_id = $1",
+            thread_id_uuid
+        )
+        return float(row["cost"]) if row and row["cost"] else 0.0
+    except Exception as e:
+        logger.error(f"Error al obtener costo acumulado: {e}")
+        return 0.0
+    finally:
+        if conn:
+            await conn.close()
