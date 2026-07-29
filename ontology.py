@@ -316,3 +316,97 @@ def buscar_productos_por_mensaje(mensaje: str, top_n: int = 5) -> List[str]:
                             return productos_encontrados
                     break
     return productos_encontrados
+
+
+# =============================================================================
+# NUEVAS FUNCIONES PARA LA LÓGICA DE REQUISITOS (ONTOLOGÍA EXTENDIDA)
+# =============================================================================
+
+def inferir_tag_por_mensaje(mensaje: str) -> Optional[str]:
+    """
+    Busca en la ontología el primer tag (clave numérica) cuyas keywords
+    coincidan con el mensaje del usuario. Retorna la clave (ej. '1', '11', '19')
+    o None si no hay coincidencia.
+
+    Esta función es el punto de entrada para la detección del producto
+    en el flujo conversacional, permitiendo cargar los requisitos específicos
+    del producto detectado.
+
+    Estándares aplicados:
+    - ISO/IEC/IEEE 12207:2008: extensión del módulo para soportar detección semántica.
+    - ISO/IEC 26514:2021: documentación completa.
+    - ISO/IEC 25010:2011: eficiente gracias al caché en memoria.
+
+    Parámetros:
+        mensaje (str): texto del usuario (en minúsculas o no).
+
+    Retorna:
+        Optional[str]: el tag (clave numérica) del producto detectado, o None.
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. Mensaje "quiero un calentador solar": debe retornar "11".
+        2. Mensaje "necesito paneles solares para mi casa": debe retornar "1" o "20".
+        3. Mensaje sin coincidencias: retorna None.
+        4. Mensaje con múltiples coincidencias: retorna el primero encontrado.
+    """
+    if not mensaje or not mensaje.strip():
+        return None
+
+    mensaje_lower = mensaje.lower()
+    ontologia = cargar_ontologia()
+
+    for key, item in ontologia.items():
+        if not isinstance(item, dict) or "keywords" not in item:
+            continue
+        keywords = item.get("keywords", [])
+        for keyword in keywords:
+            if keyword.lower() in mensaje_lower:
+                logger.info(f"Tag inferido: '{key}' ({item.get('nombre', '')}) desde keyword: '{keyword}'")
+                return key
+
+    logger.debug(f"No se encontró tag para el mensaje: {mensaje[:50]}...")
+    return None
+
+
+def get_requirements_by_tag(tag: str) -> List[Dict]:
+    """
+    Retorna la lista de requisitos (requirements) de un bloque de producto
+    dado su tag (clave numérica). Si el tag no existe o no tiene requisitos
+    definidos, retorna una lista vacía.
+
+    Los requisitos son utilizados por el agente para formular preguntas
+    contextuales y específicas sobre el producto, evitando preguntas
+    genéricas o redundantes.
+
+    Estándares aplicados:
+    - ISO/IEC/IEEE 12207:2008: extensión del módulo para soportar
+      la lógica de diálogo imperceptible.
+    - ISO/IEC 26514:2021: documentación completa.
+    - ISO/IEC 25010:2011: respuesta rápida gracias al caché en memoria.
+
+    Parámetros:
+        tag (str): clave numérica del producto (ej. '1', '11', '19').
+
+    Retorna:
+        List[Dict]: lista de requisitos, cada uno con 'field', 'question' y 'type'.
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. tag='1' (On-Grid): retorna requisitos de consumo, tarifa y espacio.
+        2. tag='11' (Calentadores): retorna requisitos de número de personas y tipo de instalación.
+        3. tag='999' (inexistente): retorna lista vacía.
+        4. tag='12' (tuberías, sin requisitos): retorna lista vacía.
+    """
+    ontologia = cargar_ontologia()
+    item = ontologia.get(tag)
+
+    if not item or not isinstance(item, dict):
+        logger.warning(f"Tag '{tag}' no encontrado en la ontología.")
+        return []
+
+    requirements = item.get("requirements", [])
+    if not isinstance(requirements, list):
+        logger.warning(f"El campo 'requirements' de '{tag}' no es una lista.")
+        return []
+
+    logger.debug(f"Requisitos cargados para tag '{tag}': {len(requirements)} items")
+    return requirements
