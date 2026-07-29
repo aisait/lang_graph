@@ -1,16 +1,31 @@
 """
 db_client.py - Cliente de base de datos con reintentos y manejo de errores.
-VERSIÓN CORREGIDA – UPSERT en actualizar_thread (ON CONFLICT) 27JUL2026.
+VERSIÓN 2.0.27 – Soporte para thread_id como texto (VARCHAR) o conversión a UUID.
 """
 import os
 import json
 import asyncio
+import hashlib
+import uuid
 import asyncpg
 import logging
 from typing import Optional, List, Dict, Any
 from agent_graph import normalizar_contacto
 
 logger = logging.getLogger("jarvi.db")
+
+def thread_id_to_uuid(thread_id: str) -> str:
+    """Convierte cualquier string a un UUID válido de forma determinista."""
+    if not thread_id:
+        return str(uuid.uuid4())
+    # Si ya es UUID, devolverlo
+    try:
+        uuid.UUID(thread_id)
+        return thread_id
+    except ValueError:
+        # Generar UUID determinista usando SHA-256
+        hash_hex = hashlib.sha256(thread_id.encode()).hexdigest()
+        return str(uuid.UUID(hex=hash_hex[:32]))
 
 def get_bi_db_url() -> str:
     return os.getenv("BI_DATABASE_URL")
@@ -48,6 +63,9 @@ async def actualizar_thread(
             return False
         conn = await get_db_connection(db_url)
 
+        # Convertir thread_id a UUID si la base de datos lo requiere
+        thread_id_uuid = thread_id_to_uuid(thread_id)
+
         if metadata_adicional is None:
             metadata_adicional = {}
         if not isinstance(metadata_adicional, dict):
@@ -65,7 +83,7 @@ async def actualizar_thread(
         if cumulative_cost is not None:
             row = await conn.fetchrow(
                 "SELECT metadata FROM threads WHERE thread_id = $1",
-                thread_id
+                thread_id_uuid
             )
             old_meta = row["metadata"] if row else {}
             if isinstance(old_meta, str):
@@ -79,7 +97,7 @@ async def actualizar_thread(
             if "cumulative_cost" not in metadata:
                 row = await conn.fetchrow(
                     "SELECT metadata FROM threads WHERE thread_id = $1",
-                    thread_id
+                    thread_id_uuid
                 )
                 if row:
                     old_meta = row["metadata"] if row else {}
@@ -101,7 +119,7 @@ async def actualizar_thread(
                 whatsapp_id = EXCLUDED.whatsapp_id,
                 metadata = EXCLUDED.metadata
             """,
-            thread_id,
+            thread_id_uuid,
             nombre,
             whatsapp_norm,
             json.dumps(metadata)
@@ -165,7 +183,7 @@ async def acumular_costo_thread(thread_id: str, costo: float) -> bool:
             WHERE thread_id = $2
             """,
             costo,
-            thread_id
+            thread_id_to_uuid(thread_id)
         )
         return True
     except Exception as e:
@@ -181,7 +199,7 @@ async def obtener_costo_acumulado(thread_id: str) -> float:
         conn = await get_db_connection(get_bi_db_url())
         row = await conn.fetchrow(
             "SELECT metadata->>'cumulative_cost' as cost FROM threads WHERE thread_id = $1",
-            thread_id
+            thread_id_to_uuid(thread_id)
         )
         return float(row["cost"]) if row and row["cost"] else 0.0
     except Exception:
