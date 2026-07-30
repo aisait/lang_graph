@@ -2,9 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "version": "3.2",
   "default_action": "allow",
-  "comentarios": {
-    "descripcion": "Reglas del supervisor alineadas con catalog_ontology.json. Se permiten menciones de productos, keywords y nombres que existen en la ontología. Las reglas de bloqueo se han convertido a reescritura para mejorar la experiencia de usuario."
-  },
+  "comentarios": "Reglas alineadas con catalog_ontology.json. Permite productos del catálogo y keywords.",
   "rules": [
     {
       "id": "ID-001",
