@@ -1,7 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "version": "3.0",
+  "version": "3.2",
   "default_action": "allow",
+  "comentarios": {
+    "descripcion": "Reglas del supervisor alineadas con catalog_ontology.json. Se permiten menciones de productos, keywords y nombres que existen en la ontología. Las reglas de bloqueo se han convertido a reescritura para mejorar la experiencia de usuario."
+  },
   "rules": [
     {
       "id": "ID-001",
@@ -84,15 +87,17 @@
     },
     {
       "id": "FMT-004",
-      "name": "Prohibir jerga técnica excesiva",
+      "name": "Prohibir jerga técnica excesiva (con excepción ontológica)",
       "category": "format",
       "severity": "medium",
       "condition": { "output_type": "response", "user_technical": false },
       "requirement": {
-        "type": "regex_block",
-        "pattern": "(W/m²|STC|NOCT|MPPT|PWM|VOC|ISC|factor de potencia|THD|I-V)",
-        "action": "block",
-        "message": "Evite jerga técnica a menos que el usuario la solicite explícitamente."
+        "type": "regex_block_with_exception",
+        "pattern": "(W/m²|STC|NOCT|MPPT|PWM|VOC|ISC|factor de potencia|THD|I-V|eficiencia del [0-9]+%)",
+        "exception_source": "catalog_ontology.json",
+        "exception_fields": ["keywords"],
+        "action": "rewrite",
+        "message": "Entiendo que busca información técnica detallada. Para asegurarnos de darle la información precisa y actualizada, sería excelente que un ingeniero de preventa le explique con claridad. ¿Le parece si agendamos una llamada?"
       }
     },
     {
@@ -110,15 +115,14 @@
     },
     {
       "id": "SRC-001",
-      "name": "Prohibir marcas externas no catalogadas",
+      "name": "Validar menciones contra ontología (reescribir en lugar de bloquear)",
       "category": "sources",
       "severity": "critical",
       "condition": { "output_type": "response" },
       "requirement": {
-        "type": "ontology_whitelist",
-        "whitelist_ontology": true,
-        "action": "block",
-        "message": "Marca no autorizada detectada."
+        "type": "ontology_validation",
+        "action": "rewrite",
+        "message": "Para conocer las marcas y modelos específicos que manejamos, lo mejor es que un asesor de AISA Solar le brinde una cotización personalizada. ¿Le parece si coordinamos una llamada?"
       }
     },
     {
@@ -248,6 +252,20 @@
         "type": "product_category_match",
         "action": "block",
         "message": "No puede recomendar productos de una categoría distinta a la necesidad expresada (ej. calentador vs. inversor)."
+      }
+    },
+    {
+      "id": "SRC-012",
+      "name": "Excepción para productos del catálogo (permitir menciones de nombres y keywords)",
+      "category": "sources",
+      "severity": "low",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "ontology_allowlist",
+        "source": "catalog_ontology.json",
+        "fields": ["nombre", "keywords"],
+        "action": "allow",
+        "message": "Producto validado en ontología."
       }
     },
     {
