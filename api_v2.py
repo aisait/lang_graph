@@ -1,6 +1,7 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
 VERSIÓN 2.0.28 – UNIFICACIÓN FINAL: solo endpoint /chat, integración de audio, inyección de datos desde n8n, persistencia de contexto SMART 30JUL2026 1100.
+CORREGIDO: Manejo robusto de productos_interes (strings o dicts) en persistencia.
 """
 import os
 import asyncio
@@ -305,12 +306,13 @@ async def procesar_audio_url(url: str) -> str:
         return ""  # Fallo silencioso, se ignora el audio
 
 # =============================================================================
-# NUEVO: PROCESAMIENTO DE PAYLOAD DE N8N
+# NUEVO: PROCESAMIENTO DE PAYLOAD DE N8N (CORREGIDO)
 # =============================================================================
 async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request) -> JSONResponse:
     """
     Procesa el payload de n8n (chat_id, name, phone, record, url_n8n_audio, message).
     Inyecta nombre y whatsapp en contexto, maneja historial y audio.
+    CORREGIDO: Maneja productos_interes como lista de strings o dicts.
     """
     # 1. Extraer datos del payload
     chat_id = chat_request.thread_id          # mapeado desde 'chat_id'
@@ -515,11 +517,26 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
     # 15. Guardar historial en Redis y actualizar PostgreSQL
     if respuesta_final:
         await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
+        
+        # --- CORRECCIÓN: Manejar productos_interes robustamente ---
+        productos_raw = ctx.get("productos_interes", [])
+        nombres_productos = []
+        if isinstance(productos_raw, list):
+            for item in productos_raw:
+                if isinstance(item, dict):
+                    # Si es dict, extraer 'nombre'
+                    nombres_productos.append(item.get("nombre"))
+                elif isinstance(item, str):
+                    # Si es string, usarlo directamente
+                    nombres_productos.append(item)
+        # Si es otro tipo, ignorar
+        # ---------------------------------------------------------
+        
         await actualizar_thread(
             thread_id=chat_id,
             nombre=nombre,
             whatsapp=whatsapp,
-            productos=[p.get("nombre") for p in ctx.get("productos_interes", [])],
+            productos=nombres_productos,
             vendedor=ctx.get("vendedor"),
             trace_id=trace_id_langfuse,
             cumulative_cost=0.0,
