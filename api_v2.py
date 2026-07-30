@@ -1,7 +1,7 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.0.28 – UNIFICACIÓN FINAL: solo endpoint /chat, integración de audio, inyección de datos desde n8n, persistencia de contexto SMART 30JUL2026 1100.
-CORREGIDO: Manejo robusto de productos_interes (strings o dicts) en persistencia.
+VERSIÓN 2.1.0 – Integración del Supervisor Determinista.
+30JUL2026.
 """
 import os
 import asyncio
@@ -28,19 +28,17 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage, AIMessage
 
 # =============================================================================
-# IMPORTACIÓN DEL ADAPTADOR DE OBSERVABILIDAD (INGESTION API)
+# IMPORTACIONES
 # =============================================================================
 from observability import ObservabilityPort, LangfuseIngestionAdapter
-
-# =============================================================================
-# IMPORTACIONES EXISTENTES DEL SISTEMA
-# =============================================================================
 from schemas import ChatRequest
 from agent_graph import create_graph, normalizar_contacto
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 from db_client import get_bi_db_url, actualizar_thread
 from config import settings
-import audio  # Módulo para STT
+import audio
+from supervisor_jarvi import SupervisorJarvi
+from text_normalizer import limpiar_respuesta_final
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -84,7 +82,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.0.28 FINAL (UNIFICADO) =====")
+print("===== JARVI API v2.1.0 (CON SUPERVISOR) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -105,7 +103,7 @@ def taxonomy_error(exc: Exception) -> str:
     return "SWR-API-UNKNOWN-000"
 
 # =============================================================================
-# FUNCIONES AUXILIARES PARA CÁLCULO DE SCORE (NEGOCIO) - INTACTAS
+# FUNCIONES AUXILIARES PARA CÁLCULO DE SCORE (NEGOCIO)
 # =============================================================================
 CAMPOS_SCORE = [
     "ciudad", "empresa_electrica", "tarifa_base_gtq", "topologia",
@@ -126,7 +124,7 @@ def calcular_puntaje_completitud(ctx: dict) -> float:
     return round((presentes / len(CAMPOS_SCORE)) * 100, 2)
 
 # =============================================================================
-# FUNCIONES DE EXTRACCIÓN (se mantienen para fallback)
+# FUNCIONES DE EXTRACCIÓN (fallback)
 # =============================================================================
 def extraer_whatsapp(mensaje: str) -> str | None:
     if not mensaje:
@@ -204,7 +202,7 @@ def normalizar_whatsapp_e164(telefono: str) -> str:
     return limpio
 
 # =============================================================================
-# FUNCIONES DE REDIS (INTACTAS)
+# FUNCIONES DE REDIS
 # =============================================================================
 REDIS_TTL = settings.redis_ttl
 HISTORIAL_LIMITE = 64
@@ -291,10 +289,9 @@ async def obtener_historial_redis(redis_client: Optional[redis.Redis], chat_id: 
         return []
 
 # =============================================================================
-# FUNCIÓN PARA PROCESAR AUDIO (STT)
+# PROCESAMIENTO DE AUDIO (STT)
 # =============================================================================
 async def procesar_audio_url(url: str) -> str:
-    """Descarga y transcribe audio desde URL, devuelve el texto."""
     if not url:
         return ""
     try:
@@ -303,19 +300,23 @@ async def procesar_audio_url(url: str) -> str:
         return texto.strip()
     except Exception as e:
         logger.error(f"Error al transcribir audio desde {url}: {e}")
-        return ""  # Fallo silencioso, se ignora el audio
+        return ""
 
 # =============================================================================
-# NUEVO: PROCESAMIENTO DE PAYLOAD DE N8N (CORREGIDO)
+# INICIALIZACIÓN DEL SUPERVISOR
+# =============================================================================
+_supervisor = SupervisorJarvi(rules_path="rules.json")
+logger.info("SupervisorJarvi inicializado con 45 reglas")
+
+# =============================================================================
+# PROCESAMIENTO DE PAYLOAD DE N8N (CON SUPERVISIÓN)
 # =============================================================================
 async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request) -> JSONResponse:
     """
-    Procesa el payload de n8n (chat_id, name, phone, record, url_n8n_audio, message).
-    Inyecta nombre y whatsapp en contexto, maneja historial y audio.
-    CORREGIDO: Maneja productos_interes como lista de strings o dicts.
+    Procesa el payload de n8n y aplica el supervisor para validar y limpiar la respuesta.
     """
     # 1. Extraer datos del payload
-    chat_id = chat_request.thread_id          # mapeado desde 'chat_id'
+    chat_id = chat_request.thread_id
     mensaje = chat_request.message
     nombre = chat_request.name or chat_request.metadata.get("name")
     whatsapp_raw = chat_request.phone or chat_request.metadata.get("phone")
@@ -328,11 +329,11 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
     else:
         whatsapp = extraer_whatsapp(mensaje) or ""
 
-    # 3. Si no viene nombre, extraer del mensaje
+    # 3. Extraer nombre
     if not nombre:
         nombre = extraer_nombre(mensaje) or "Pendiente"
 
-    # 4. Procesar audio si hay URL
+    # 4. Procesar audio
     if url_audio:
         audio_text = await procesar_audio_url(url_audio)
         if audio_text:
@@ -385,7 +386,7 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
     # 8. Guardar sesión en Redis
     await guardar_sesion_redis(redis_client, chat_id, sesion)
 
-    # 9. Construir el historial de mensajes para el grafo
+    # 9. Construir historial de mensajes
     messages = []
     for item in historial:
         if isinstance(item, dict):
@@ -399,13 +400,13 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
     mensaje_con_caso = f"{mensaje} [Caso No. {caso}]"
     messages.append(HumanMessage(content=mensaje_con_caso))
 
-    # 10. Preparar estado inicial
+    # 10. Estado inicial
     estado_inicial = {
         "messages": messages,
         "contexto_tecnico": contexto
     }
 
-    # 11. Configuración para el grafo
+    # 11. Configuración
     config = {
         "configurable": {"thread_id": chat_id},
         "run_name": f"caso_{caso}",
@@ -417,7 +418,7 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
         }
     }
 
-    # 12. Ejecutar el grafo (síncrono, no streaming)
+    # 12. Ejecutar grafo
     start_time = datetime.now(timezone.utc)
     async with locks[chat_id]:
         try:
@@ -440,26 +441,62 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
             ultimo_aimessage = msg
             break
 
-    # ===== LIMPIAR RESPUESTA (ELIMINAR *, #, FORMATOS MARKDOWN) =====
-    from text_normalizer import limpiar_respuesta_final  # <--- NUEVA
-    respuesta_final = limpiar_respuesta_final(respuesta_final)  # <--- NUEVA
+    # ===== APLICAR SUPERVISIÓN A LA RESPUESTA (api_v2) =====
+    eval_data = {
+        "response": respuesta_final,
+        "contexto": ctx,
+        "messages": messages,
+        "user_message": mensaje,
+        "output_type": "response",
+        "price_extractor_failed": False  # Podría mejorarse con lógica real
+    }
+    evaluacion = _supervisor.evaluate(eval_data)
 
-    # ===== ACTUALIZAR SESIÓN EN REDIS CON EL NUEVO CONTEXTO =====
+    if evaluacion["decision"] == "rewrite":
+        if evaluacion.get("modified_response"):
+            respuesta_final = evaluacion["modified_response"]
+            logger.info(f"Supervisor (api) reescribió respuesta: {evaluacion['rule_id']}")
+    elif evaluacion["decision"] == "block":
+        respuesta_final = "Lo siento, no puedo proporcionar esa información. ¿Puedo ayudarle con otra cosa?"
+        logger.warning(f"Supervisor (api) bloqueó respuesta: {evaluacion['rule_id']}")
+    elif evaluacion["decision"] == "rewrite_context":
+        if evaluacion.get("modified_context"):
+            ctx.update(evaluacion["modified_context"])
+            logger.info(f"Supervisor (api) modificó contexto: {evaluacion['rule_id']}")
+    elif evaluacion["decision"] == "force_fallback":
+        ctx["escalation_mode"] = True
+        if evaluacion.get("modified_response"):
+            respuesta_final = evaluacion["modified_response"]
+        else:
+            respuesta_final = "Para poder ayudarle mejor, ¿podría indicarme su nombre y número de teléfono?"
+        logger.info(f"Supervisor (api) activó escalación: {evaluacion['rule_id']}")
+    elif evaluacion["decision"] == "force_closure":
+        if evaluacion.get("modified_response"):
+            respuesta_final = evaluacion["modified_response"]
+            logger.info(f"Supervisor (api) forzó cierre: {evaluacion['rule_id']}")
+    elif evaluacion["decision"] == "end_conversation":
+        respuesta_final = evaluacion.get("modified_response", "Gracias por contactar a AISA Solar. ¡Que tenga un excelente día!")
+        ctx["conversation_end"] = True
+        logger.info(f"Supervisor (api) finalizó conversación: {evaluacion['rule_id']}")
+
+    # Limpiar formato Markdown (adicional)
+    respuesta_final = limpiar_respuesta_final(respuesta_final)
+
+    # ===== ACTUALIZAR SESIÓN EN REDIS =====
     sesion["contexto_tecnico"] = ctx
     await guardar_sesion_redis(redis_client, chat_id, sesion)
-    # ============================================================
 
     if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
         respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
-    # 14. Instrumentación Langfuse (traza y observación)
+    # 14. Instrumentación Langfuse
     adapter = get_observability_adapter()
     trace_id_langfuse = None
     try:
         trace_id_langfuse = adapter.create_trace(
             name=f"chat_{caso}",
             user_id=whatsapp,
-            session_id=chat_id,  # Usar chat_id como sessionId
+            session_id=chat_id,
             metadata={
                 "chat_id": chat_id,
                 "origen": "webhook",
@@ -518,24 +555,19 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
 
     adapter.flush()
 
-    # 15. Guardar historial en Redis y actualizar PostgreSQL
+    # 15. Persistir historial y actualizar thread
     if respuesta_final:
         await guardar_historial_redis(redis_client, chat_id, mensaje_con_caso, respuesta_final)
-        
-        # --- CORRECCIÓN: Manejar productos_interes robustamente ---
+
         productos_raw = ctx.get("productos_interes", [])
         nombres_productos = []
         if isinstance(productos_raw, list):
             for item in productos_raw:
                 if isinstance(item, dict):
-                    # Si es dict, extraer 'nombre'
                     nombres_productos.append(item.get("nombre"))
                 elif isinstance(item, str):
-                    # Si es string, usarlo directamente
                     nombres_productos.append(item)
-        # Si es otro tipo, ignorar
-        # ---------------------------------------------------------
-        
+
         await actualizar_thread(
             thread_id=chat_id,
             nombre=nombre,
@@ -547,7 +579,7 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
             metadata_adicional=ctx
         )
 
-    # 16. Devolver respuesta en JSON (síncrono) para n8n
+    # 16. Devolver respuesta
     return JSONResponse(
         status_code=200,
         content={
@@ -595,11 +627,11 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.0.28",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.1.0",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
-# MIDDLEWARE DE TELEMETRÍA (CTFOM)
+# MIDDLEWARE DE TELEMETRÍA
 # =============================================================================
 @app.middleware("http")
 async def telemetry_middleware(request: Request, call_next):
@@ -635,10 +667,11 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend-production",
-        "version": "2.0.28",
+        "version": "2.1.0",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
+        "supervisor": "active",
         "status": "ok"
     }
     return status
@@ -648,12 +681,6 @@ async def health_check():
 # =============================================================================
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest, http_request: Request):
-    """
-    Único punto de entrada para todas las solicitudes.
-    Detecta si el payload contiene datos de n8n (name, phone, record, url_n8n_audio)
-    y usa el nuevo flujo síncrono; si no, usa el flujo legacy (streaming) solo para pruebas.
-    """
-    # Usar siempre el flujo unificado para cualquier solicitud (incluso debug)
     return await procesar_payload_n8n(request, http_request)
 
 # =============================================================================
