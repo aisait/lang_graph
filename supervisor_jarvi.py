@@ -1,7 +1,6 @@
 """
 supervisor_jarvi.py - Módulo de supervisión determinista para JARVI 2.0.
-Aplica 45 reglas de control en tiempo de ejecución para garantizar
-la calidad, seguridad y cumplimiento de las respuestas.
+VERSIÓN 2.0 – Implementación completa de reglas ontológicas.
 30JUL2026
 """
 
@@ -194,7 +193,6 @@ class SupervisorJarvi:
             func_name = req.get("function")
             text = data.get("response", "")
             if func_name == "remove_markdown":
-                # Eliminar **, *, _, #, viñetas
                 text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
                 text = re.sub(r'\*(.*?)\*', r'\1', text)
                 text = re.sub(r'__(.*?)__', r'\1', text)
@@ -213,48 +211,107 @@ class SupervisorJarvi:
             min_w = req.get("min_words", 33)
             max_w = req.get("max_words", 66)
             if len(words) < min_w or len(words) > max_w:
-                # Truncar o resumir (implementación simple: truncar)
                 if len(words) > max_w:
                     truncated = " ".join(words[:max_w])
                     result["modified_response"] = truncated
                 else:
-                    # Si es muy corto, no hacemos nada (dejamos pasar)
                     return {"passed": True}
                 return {"passed": True, "action": "rewrite", "message": req.get("message"), "modified_response": truncated}
 
-        elif rule_type == "ontology_whitelist":
+        # ================== NUEVOS TIPOS DE REGLA ==================
+        elif rule_type == "ontology_validation":
             response = data.get("response", "")
-            # Cargar ontología para validar marcas
             try:
                 from ontology import cargar_ontologia
                 ontologia = cargar_ontologia()
-                marcas_permitidas = set()
+                # Construir conjunto de términos permitidos (nombres + keywords)
+                permitidos = set()
                 for item in ontologia.values():
                     if isinstance(item, dict):
-                        marcas_permitidas.add(item.get("nombre", "").lower())
-                        marcas_permitidas.update([k.lower() for k in item.get("keywords", [])])
-                # Buscar si la respuesta contiene alguna marca no permitida (simplificado)
-                # En una implementación real, se usaría un modelo de extracción de entidades
-                palabras = re.findall(r'\b[A-Za-zÁÉÍÓÚáéíóúñÑ\-]+\b', response)
-                for palabra in palabras:
-                    if palabra.lower() not in marcas_permitidas and len(palabra) > 3:
-                        # Podría ser una marca externa (heurístico)
-                        return {"passed": False, "message": req.get("message"), "action": action}
+                        nombre = item.get("nombre", "").lower()
+                        if nombre:
+                            permitidos.add(nombre)
+                        for kw in item.get("keywords", []):
+                            if kw:
+                                permitidos.add(kw.lower())
+                # Extraer posibles entidades de la respuesta (nombres propios, marcas)
+                # Mejor: buscar palabras que parezcan nombres de marca (mayúscula inicial)
+                entidades = re.findall(r'\b[A-Z][a-z]+(?:[\s-][A-Z][a-z]+)*\b', response)
+                entidades_no_validas = []
+                for entidad in entidades:
+                    if entidad.lower() not in permitidos and len(entidad) > 3:
+                        entidades_no_validas.append(entidad)
+                if entidades_no_validas:
+                    # Reescribir la respuesta eliminando o reemplazando las entidades no válidas
+                    mensaje = req.get("message", "Para conocer los detalles específicos, lo mejor es que un asesor de AISA Solar le brinde una cotización personalizada.")
+                    return {"passed": False, "message": mensaje, "action": "rewrite", 
+                            "modified_response": mensaje}
             except Exception as e:
-                logger.warning(f"Ontología no disponible para validación de marcas: {e}")
+                logger.warning(f"Ontología no disponible para validación: {e}")
             return {"passed": True}
 
-        elif rule_type == "price_validation":
-            # Verificar si el precio se obtuvo de price_extractor o es inventado
-            # En producción, se puede verificar que el precio esté en el contexto
-            # Si no, se bloquea
-            if data.get("price_extractor_failed", False):
-                return {"passed": False, "message": req.get("message"), "action": action}
+        elif rule_type == "ontology_allowlist":
+            response = data.get("response", "")
+            try:
+                from ontology import cargar_ontologia
+                ontologia = cargar_ontologia()
+                # Construir conjunto de términos permitidos (nombres + keywords)
+                permitidos = set()
+                for item in ontologia.values():
+                    if isinstance(item, dict):
+                        nombre = item.get("nombre", "").lower()
+                        if nombre:
+                            permitidos.add(nombre)
+                        for kw in item.get("keywords", []):
+                            if kw:
+                                permitidos.add(kw.lower())
+                # Verificar si la respuesta contiene SOLO términos permitidos
+                # Si contiene términos no permitidos, se activa la regla
+                palabras = re.findall(r'\b[A-Za-zÁÉÍÓÚáéíóúñÑ\-]+\b', response)
+                for palabra in palabras:
+                    if len(palabra) > 3 and palabra.lower() not in permitidos:
+                        # Se encontró un término no permitido
+                        return {"passed": False, "message": req.get("message"), "action": "rewrite"}
+            except Exception as e:
+                logger.warning(f"Ontología no disponible para allowlist: {e}")
+            return {"passed": True}
+
+        elif rule_type == "regex_block_with_exception":
+            pattern = req.get("pattern")
+            text = data.get("response", "")
+            exception_source = req.get("exception_source")
+            exception_fields = req.get("exception_fields", [])
+            
+            # Verificar si hay coincidencia con el patrón
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if not matches:
+                return {"passed": True}
+            
+            # Si hay coincidencia, verificar si el término está en la excepción
+            try:
+                from ontology import cargar_ontologia
+                ontologia = cargar_ontologia()
+                excepciones = set()
+                for item in ontologia.values():
+                    if isinstance(item, dict):
+                        for field in exception_fields:
+                            value = item.get(field, [])
+                            if isinstance(value, str):
+                                excepciones.add(value.lower())
+                            elif isinstance(value, list):
+                                for v in value:
+                                    if v:
+                                        excepciones.add(v.lower())
+                # Verificar si el término coincidente está en la excepción
+                for match in matches:
+                    if match.lower() not in excepciones:
+                        return {"passed": False, "message": req.get("message"), "action": req.get("action", "rewrite")}
+            except Exception as e:
+                logger.warning(f"Ontología no disponible para excepción: {e}")
             return {"passed": True}
 
         elif rule_type == "ontology_anchor":
             # Validar que la respuesta esté anclada a la ontología del tag
-            # Esta regla se usa para validar que no se desvíe de la categoría
             return {"passed": True}
 
         elif rule_type == "product_category_match":
@@ -262,7 +319,6 @@ class SupervisorJarvi:
             return {"passed": True}
 
         elif rule_type == "trigger_escalation":
-            # Activar modo escalación
             return {
                 "passed": False,
                 "message": req.get("message"),
@@ -273,7 +329,6 @@ class SupervisorJarvi:
         elif rule_type == "ask_field":
             field = req.get("field")
             question = req.get("question")
-            # Inyectar la pregunta en la respuesta
             return {
                 "passed": False,
                 "message": req.get("message"),
@@ -283,7 +338,6 @@ class SupervisorJarvi:
 
         elif rule_type == "ask_authorization":
             question = req.get("question")
-            # Reemplazar {telefono} y {producto} con valores reales
             telefono = data.get("whatsapp", "su teléfono")
             producto = data.get("product_tag", "su producto")
             question = question.replace("{telefono}", telefono).replace("{producto}", producto)
@@ -327,7 +381,6 @@ class SupervisorJarvi:
         elif rule_type == "inject_questions":
             questions = req.get("questions", [])
             response = data.get("response", "")
-            # Inyectar preguntas al final
             new_response = response + "\n\n" + "\n".join(questions)
             return {
                 "passed": False,
@@ -356,7 +409,6 @@ class SupervisorJarvi:
             }
 
         elif rule_type == "trigger_dimensionamiento":
-            # Activar el nodo de dimensionamiento
             return {
                 "passed": False,
                 "message": req.get("message"),
@@ -365,7 +417,6 @@ class SupervisorJarvi:
             }
 
         elif rule_type == "ask_requirements":
-            # Preguntar requisitos pendientes
             requisitos = data.get("requisitos", [])
             preguntas = []
             for req in requisitos:
@@ -395,7 +446,6 @@ class SupervisorJarvi:
             pattern = req.get("pattern")
             response = data.get("response", "")
             if not re.search(pattern, response, re.IGNORECASE):
-                # Inyectar el mensaje requerido
                 new_response = response + " " + req.get("message", "")
                 return {
                     "passed": False,
@@ -408,7 +458,6 @@ class SupervisorJarvi:
         elif rule_type == "token_limit":
             max_tokens = req.get("max_tokens", 120000)
             messages = data.get("messages", [])
-            # Calcular tokens (usando tiktoken si está disponible)
             try:
                 import tiktoken
                 enc = tiktoken.get_encoding("cl100k_base")
@@ -417,7 +466,6 @@ class SupervisorJarvi:
                     content = msg.content if hasattr(msg, 'content') else str(msg)
                     total_tokens += len(enc.encode(content))
                 if total_tokens > max_tokens:
-                    # Truncar a últimos 10 mensajes
                     truncated = messages[-10:]
                     return {
                         "passed": False,
@@ -430,7 +478,6 @@ class SupervisorJarvi:
             return {"passed": True}
 
         elif rule_type == "price_fallback":
-            # Si price_extractor falló, reemplazar el precio por "disponible bajo consulta"
             response = data.get("response", "")
             if re.search(r'\d+\.?\d*\s*(GTQ|Q|USD)', response):
                 new_response = re.sub(r'\d+\.?\d*\s*(GTQ|Q|USD)', 'disponible bajo consulta', response)
@@ -443,7 +490,6 @@ class SupervisorJarvi:
             return {"passed": True}
 
         elif rule_type == "fallback_local":
-            # No requiere acción, solo logging
             logger.info("Fallback a memoria local activado.")
             return {"passed": True}
 
