@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.3.0 – Extracción semántica de checklist, precios dinámicos, sin # ni *.
+VERSIÓN 2.3.1 – Unificación de tipo de productos_interes (lista de dicts).
 30JUL2026.
 """
 import os
@@ -53,7 +53,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.3.0"}
+        default_headers={"User-Agent": "JARVI/2.3.1"}
     )
 
 # =============================================================================
@@ -128,7 +128,7 @@ class InferenciaEnergetica(TypedDict):
     municipio: Optional[str]
     vendedor: Optional[str]
     tipo_producto: Optional[str]
-    productos_interes: Optional[list]
+    productos_interes: Optional[list]  # ahora es lista de dicts con 'nombre' y 'tag'
     product_tag: Optional[str]
     requisitos: Optional[List[Dict]]
     checklist_universal: Optional[Dict]
@@ -180,6 +180,32 @@ def calcular_puntaje_completitud(ctx: dict) -> float:
         ctx["checklist_universal"] = checklist
     completados = sum(1 for status in checklist.values() if status == "completado")
     return round((completados / len(CAMPOS_SCORE_UNIVERSAL)) * 100, 2)
+
+def normalizar_productos_interes(productos_raw) -> List[Dict[str, str]]:
+    """Convierte cualquier entrada de productos_interes a una lista de dicts con 'nombre' y 'tag'."""
+    if not productos_raw:
+        return []
+    if isinstance(productos_raw, list):
+        # Si es una lista de strings, convertir a dicts buscando en ontología
+        if productos_raw and isinstance(productos_raw[0], str):
+            ontologia = cargar_ontologia()
+            resultado = []
+            for nombre in productos_raw:
+                if not nombre:
+                    continue
+                # Buscar el tag correspondiente
+                tag = None
+                for key, item in ontologia.items():
+                    if isinstance(item, dict) and item.get("nombre", "").lower() == nombre.lower():
+                        tag = key
+                        break
+                resultado.append({"nombre": nombre, "tag": tag or "desconocido"})
+            return resultado
+        # Si ya es lista de dicts, retornar tal cual
+        elif productos_raw and isinstance(productos_raw[0], dict):
+            return productos_raw
+    # Fallback: lista vacía
+    return []
 
 # =============================================================================
 # DECORADOR CTFOM
@@ -298,7 +324,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     checklist_llm = llm.with_structured_output(ChecklistExtract)
 
     # -------------------------------------------------------------------------
-    # NODO 1: CLASIFICADOR DE INTENCIÓN (SOLO DETECCIÓN EXPLÍCITA)
+    # NODO 1: CLASIFICADOR DE INTENCIÓN
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Clasificador de Intención Comercial", criticidad="MEDIA")
     @observe_node(node_name="clasificar_intencion_comercial")
@@ -311,10 +337,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             return {"contexto_tecnico": ctx}
         if re.search(r'\b(on\s*grid|conectado a la red|atado a la red|sistema de red)\b', ultimo, re.IGNORECASE):
             ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
-            logger.info(f"Topología On-Grid detectada explícitamente.")
         elif re.search(r'\b(off\s*grid|aislado|sin red|autónomo|independiente)\b', ultimo, re.IGNORECASE):
             ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
-            logger.info(f"Topología Off-Grid detectada explícitamente.")
         return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
@@ -341,7 +365,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 3: SELECCIÓN DE PRODUCTOS (PRIORIDAD ONTOLÓGICA)
+    # NODO 3: SELECCIÓN DE PRODUCTOS
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Selección de Productos", criticidad="ALTA")
     @observe_node(node_name="seleccionar_productos")
@@ -425,7 +449,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 5: GENERAR RESPUESTA COMERCIAL
+    # NODO 5: GENERAR RESPUESTA COMERCIAL (CON UNIFICACIÓN DE productos_interes)
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Generación de Respuesta Comercial", criticidad="ALTA")
     @observe_node(node_name="generar_respuesta_comercial")
@@ -433,7 +457,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
-        # Extracción básica por regex (fallback)
+        # Extracción básica por regex
         if ultimo_mensaje:
             num_match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', ultimo_mensaje)
             if num_match:
@@ -470,17 +494,22 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             if tipo:
                 ctx["tipo_producto"] = tipo
 
+        # Obtener productos relevantes (si no existen)
         if ctx.get("topologia") and ctx.get("tipo_producto") and not ctx.get("productos_interes"):
-            ctx["productos_interes"] = obtener_productos_relevantes(
+            productos = obtener_productos_relevantes(
                 topologia=ctx["topologia"],
                 tipo=ctx["tipo_producto"],
                 max_items=5
             )
+            # Asegurar que sea lista de dicts
+            ctx["productos_interes"] = normalizar_productos_interes(productos)
 
+        # Inicializar checklist
         if not ctx.get("checklist_universal"):
             ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
         checklist = ctx["checklist_universal"]
 
+        # Actualizar checklist
         for campo in CAMPOS_SCORE_UNIVERSAL:
             valor = ctx.get(campo)
             if campo == "productos_interes" and isinstance(valor, list) and valor:
@@ -535,8 +564,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
         if ctx.get("tipo_producto"):
             config["metadata"]["tipo_producto"] = ctx["tipo_producto"]
-        if ctx.get("productos_interes"):
-            config["metadata"]["productos_tags"] = [p["tag"] for p in ctx["productos_interes"]]
+        # Normalizar productos_interes para metadata
+        productos_normalizados = normalizar_productos_interes(ctx.get("productos_interes", []))
+        config["metadata"]["productos_tags"] = [p.get("tag") for p in productos_normalizados if p.get("tag")]
 
         conocimiento_usuario = ""
         if ctx.get("nombre") and ctx.get("nombre") != "Usuario":
@@ -553,7 +583,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             if item.get("nombre"):
                 conocimiento_usuario += f"Está interesado en {item['nombre']}. "
         if ctx.get("productos_interes"):
-            nombres = [p.get("nombre") for p in ctx["productos_interes"] if p.get("nombre")]
+            nombres = [p.get("nombre") for p in productos_normalizados if p.get("nombre")]
             if nombres:
                 conocimiento_usuario += f"Productos de interés: {', '.join(nombres)}. "
         if not conocimiento_usuario:
@@ -574,20 +604,18 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 6: ACTUALIZAR CHECKLIST (EXTRACCIÓN SEMÁNTICA CON LLM)
+    # NODO 6: ACTUALIZAR CHECKLIST (CON UNIFICACIÓN DE productos_interes)
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Actualización Semántica de Checklist", criticidad="ALTA")
     @observe_node(node_name="actualizar_checklist")
     async def actualizar_checklist_node(state: AgentState):
         """
-        Nodo que utiliza el LLM para extraer los 13 campos del scoring
-        de todo el historial de conversación. Esto desbloquea el scoring
-        al interpretar semánticamente las respuestas del usuario.
+        Nodo que utiliza el LLM para extraer los 13 campos del scoring.
+        productos_interes se almacena como lista de dicts con 'nombre' y 'tag'.
         """
         ctx = dict(state.get("contexto_tecnico") or {})
         messages = state.get("messages", [])
 
-        # Construir el historial completo como texto
         historial_texto = ""
         for msg in messages:
             if isinstance(msg, HumanMessage):
@@ -598,7 +626,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if not historial_texto:
             return {"contexto_tecnico": ctx}
 
-        # Si ya tenemos un tag, lo usamos para mejorar la extracción
         tag_info = ""
         if ctx.get("product_tag"):
             ontologia = cargar_ontologia()
@@ -637,7 +664,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             logger.error(f"Error en extracción semántica: {e}")
             return {"contexto_tecnico": ctx}
 
-        # Actualizar ctx con los valores extraídos (solo si no están ya seteados)
+        # Actualizar ctx con los valores extraídos (si no están ya seteados)
         if extraccion.nombre and not ctx.get("nombre"):
             ctx["nombre"] = extraccion.nombre
         if extraccion.whatsapp and not ctx.get("whatsapp"):
@@ -662,8 +689,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             ctx["vendedor"] = extraccion.vendedor
         if extraccion.tipo_producto and not ctx.get("tipo_producto"):
             ctx["tipo_producto"] = extraccion.tipo_producto
-        if extraccion.productos_interes and not ctx.get("productos_interes"):
-            ctx["productos_interes"] = extraccion.productos_interes
+
+        # Procesar productos_interes: convertir a lista de dicts
+        if extraccion.productos_interes:
+            # Usar normalizar_productos_interes para convertir strings a dicts
+            ctx["productos_interes"] = normalizar_productos_interes(extraccion.productos_interes)
 
         # Actualizar checklist
         if not ctx.get("checklist_universal"):
@@ -697,28 +727,21 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 7: VERIFICAR CIERRE (VERSIÓN DEFINITIVA – SIN # NI *)
+    # NODO 7: VERIFICAR CIERRE
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Verificación de Cierre Comercial", criticidad="ALTA")
     @observe_node(node_name="verificar_cierre")
     async def verificar_cierre_node(state: AgentState, config: RunnableConfig):
-        """
-        Nodo que evalúa el score y, si es >= 60%, activa el cierre SMART.
-        Usa get_precio_by_tag para obtener el precio exacto desde la URL del producto.
-        """
         ctx = dict(state.get("contexto_tecnico") or {})
         score = ctx.get("score_actual", 0.0)
         messages = state.get("messages", [])
 
         if score < 60.0:
-            logger.debug(f"Score {score} < 60, no se activa cierre.")
             return {"contexto_tecnico": ctx}
 
         if ctx.get("cierre_realizado"):
-            logger.debug("Cierre ya realizado, omitiendo.")
             return {"contexto_tecnico": ctx}
 
-        # Obtener precio exacto desde la URL
         precio_texto = ""
         tag = ctx.get("product_tag")
         if tag:
@@ -777,14 +800,14 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": messages}
 
     # =========================================================================
-    # ENSAMBLAJE DEL GRAFO (CON NUEVO NODO actualizar_checklist)
+    # ENSAMBLAJE DEL GRAFO
     # =========================================================================
     graph_builder.add_node("clasificar_intencion_comercial", clasificar_intencion_comercial_node)
     graph_builder.add_node("validar_ubicacion_cliente", validar_ubicacion_cliente_node)
     graph_builder.add_node("seleccionar_productos", seleccionar_productos_node)
     graph_builder.add_node("calcular_carga_offgrid", calcular_carga_offgrid_node)
     graph_builder.add_node("generar_respuesta_comercial", generar_respuesta_comercial_node)
-    graph_builder.add_node("actualizar_checklist", actualizar_checklist_node)  # NUEVO
+    graph_builder.add_node("actualizar_checklist", actualizar_checklist_node)
     graph_builder.add_node("verificar_cierre", verificar_cierre_node)
     graph_builder.add_node("anexar_caso_respuesta", anexar_caso_respuesta_node)
     graph_builder.add_node("tools", ToolNode([procesar_oportunidad_backend]))
@@ -793,7 +816,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         messages = state.get("messages", [])
         if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
             return "tools"
-        return "actualizar_checklist"  # Cambio: ir a actualizar_checklist antes de cierre
+        return "actualizar_checklist"
 
     graph_builder.add_edge(START, "clasificar_intencion_comercial")
     graph_builder.add_edge("clasificar_intencion_comercial", "validar_ubicacion_cliente")
