@@ -92,13 +92,15 @@ class PromptManager:
                 if prompt:
                     content = prompt.prompt
                     source = "langfuse"
+                    logger.debug(f"Prompt '{name}' obtenido de Langfuse")
             except Exception as e:
                 logger.warning(f"Langfuse falló para '{name}': {e}")
 
         if content is None:
             content = FALLBACK_PROMPTS.get(name)
             if content is None:
-                raise ValueError(f"Prompt '{name}' no encontrado")
+                logger.error(f"Prompt '{name}' no encontrado en fallback. Usando cadena vacía.")
+                content = ""
             source = "fallback"
 
         result = {"content": content, "source": source}
@@ -112,6 +114,7 @@ class PromptManager:
             return data["content"].format(**kwargs)
         except KeyError as e:
             logger.error(f"Variable faltante en '{name}': {e}")
+            # Devuelve el contenido crudo si falla el formato
             return data["content"]
 
 _pm = None
