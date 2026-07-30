@@ -1,6 +1,6 @@
 """
 price_extractor.py - Extracción de precios desde URLs con caché y manejo de errores.
-VERSIÓN 1.0 – Solo para URLs de AISA Solar 29JUL2026.
+VERSIÓN 1.0 – Solo para URLs de AISA Solar 30JUL2026.
 """
 import time
 import logging
