@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.1.2 – Corrección definitiva del nodo verificar_cierre (nunca retorna {}).
+VERSIÓN 2.2.0 – Prioridad Ontológica: Producto → Topología.
 30JUL2026.
 """
 import os
@@ -57,7 +57,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.1.2"}
+        default_headers={"User-Agent": "JARVI/2.2.0"}
     )
 
 # =============================================================================
@@ -277,11 +277,33 @@ def extraer_intencion_humana(messages: list) -> str:
     return ""
 
 def extraer_tipo_producto(mensaje: str) -> Optional[str]:
+    """
+    Versión mejorada con detección de sinónimos y variantes contextuales.
+    """
+    if not mensaje:
+        return None
+    
     mensaje_lower = mensaje.lower()
-    if re.search(r'\b(sistema|kit|completo|llave en mano|instalación completa)\b', mensaje_lower):
+    
+    # Palabras clave para SISTEMA (On-Grid, Off-Grid, kits completos)
+    patron_sistema = r'\b(sistema|kit|completo|llave en mano|instalación completa|pack solar|planta solar|proyecto llave en mano|integral)\b'
+    # Palabras clave para UNITARIO (componentes específicos)
+    patron_unitario = r'\b(producto|unitario|componente|inversor|panel|módulo|batería|acumulador|calentador|termo|bomba|controlador|cargador|estructura|soporte|cable|conector|regulador)\b'
+    
+    # Primero, verificar si se menciona claramente "sistema" o "kit" (prioridad)
+    if re.search(patron_sistema, mensaje_lower):
         return "sistema"
-    elif re.search(r'\b(producto|unitario|componente|inversor|panel|batería|calentador|bomba|controlador)\b', mensaje_lower):
+    
+    # Luego, verificar si se menciona un componente unitario
+    if re.search(patron_unitario, mensaje_lower):
         return "unitario"
+    
+    # Si no se detecta explícitamente, pero el mensaje contiene "solar" o "fotovoltaico"
+    # y no hay otras pistas, asumir unitario por defecto (caso común)
+    if re.search(r'\b(solar|fotovoltaico|fotovoltaica|energía solar)\b', mensaje_lower):
+        # Si no hay palabra que indique sistema, asumimos que busca un producto específico
+        return "unitario"
+    
     return None
 
 # =============================================================================
@@ -292,20 +314,45 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     llm = get_llm().bind_tools([procesar_oportunidad_backend])
     extractor_llm = llm.with_structured_output(ExtractorContacto)
 
+    # =========================================================================
+    # NODO: CLASIFICADOR DE INTENCIÓN (SOLO DETECCIÓN EXPLÍCITA)
+    # =========================================================================
     @auditar_fase(nombre_fase="Clasificador de Intención Comercial", criticidad="MEDIA")
     @observe_node(node_name="clasificar_intencion_comercial")
     async def clasificar_intencion_comercial_node(state: AgentState):
+        """
+        Versión corregida: solo detecta si el usuario MENCIONA EXPLÍCITAMENTE On-Grid o Off-Grid.
+        No infiere topología por defecto. La topología se asigna en seleccionar_productos
+        basándose en el tipo de producto detectado (sistema o unitario).
+        """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
+        
         if not ultimo:
             return {"contexto_tecnico": ctx}
-        if not ctx.get("topologia"):
-            if any(k in ultimo for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
-                ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
-            elif any(k in ultimo for k in ["aislado", "batería", "bateria", "finca", "autónomo", "off-grid"]):
-                ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
+        
+        # Si ya tenemos topología, no sobreescribir
+        if ctx.get("topologia"):
+            return {"contexto_tecnico": ctx}
+        
+        # Solo asignar topología si el usuario la MENCIONA EXPLÍCITAMENTE
+        # Esto evita inferencias erróneas basadas en palabras sueltas
+        if re.search(r'\b(on\s*grid|conectado a la red|atado a la red|sistema de red)\b', ultimo, re.IGNORECASE):
+            ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
+            logger.info(f"Topología On-Grid detectada explícitamente en mensaje.")
+            return {"contexto_tecnico": ctx}
+        
+        if re.search(r'\b(off\s*grid|aislado|sin red|autónomo|independiente)\b', ultimo, re.IGNORECASE):
+            ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
+            logger.info(f"Topología Off-Grid detectada explícitamente en mensaje.")
+            return {"contexto_tecnico": ctx}
+        
+        # Si no se menciona explícitamente, no forzar asignación.
         return {"contexto_tecnico": ctx}
 
+    # =========================================================================
+    # NODO: VALIDADOR DE UBICACIÓN
+    # =========================================================================
     @auditar_fase(nombre_fase="Validador de Ubicación del Cliente", criticidad="MEDIA")
     @observe_node(node_name="validar_ubicacion_cliente")
     async def validar_ubicacion_cliente_node(state: AgentState):
@@ -326,39 +373,109 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["tarifa_base_gtq"] = 1.45
         return {"contexto_tecnico": ctx}
 
+    # =========================================================================
+    # NODO: SELECCIÓN DE PRODUCTOS (PRIORIDAD ONTOLÓGICA - PRODUCTO → TOPOLOGÍA)
+    # =========================================================================
     @auditar_fase(nombre_fase="Selección de Productos", criticidad="ALTA")
     @observe_node(node_name="seleccionar_productos")
     async def seleccionar_productos_node(state: AgentState):
+        """
+        Versión corregida con prioridad ontológica:
+        1. Primero infiere el producto (tag).
+        2. Si lo encuentra, consulta la ontología.
+        3. Si es unitario → topologia = "No aplica".
+        4. Si es sistema → asigna On-Grid u Off-Grid según tag.
+        Esto resuelve el estancamiento del scoring al no depender de regex para topología.
+        """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
 
+        # Si ya tenemos un tag, no volver a procesar
         if ctx.get("product_tag"):
             return {"contexto_tecnico": ctx}
 
+        # 1. Intentar inferir el producto del mensaje
         tag = inferir_tag_por_mensaje(ultimo)
+        
         if tag:
             ctx["product_tag"] = tag
+            logger.info(f"Producto detectado: tag={tag}")
+            
+            # 2. Consultar la ontología para obtener el tipo y otros atributos
+            ontologia = cargar_ontologia()
+            item = ontologia.get(tag, {})
+            tipo_producto = item.get("tipo", "unitario")  # Por defecto unitario si no se especifica
+            
+            # 3. Cargar requisitos específicos del producto
             requisitos = get_requirements_by_tag(tag)
             ctx["requisitos"] = requisitos
+            
+            # 4. Asignar flag de diagnóstico eléctrico (solo para sistemas On-Grid)
             requires_diagnostic = get_requires_diagnostic(tag)
             ctx["requiere_auditoria_electrica"] = requires_diagnostic
+            
+            # 5. --- LÓGICA NUEVA: ASIGNAR TOPOLOGÍA SEGÚN EL TIPO DE PRODUCTO ---
+            if tipo_producto == "sistema":
+                # El producto es un sistema (On-Grid u Off-Grid)
+                tag_int = int(tag) if tag.isdigit() else 0
+                
+                # Definir rangos de tags para sistemas (basado en catalog_ontology.json)
+                ongrid_tags = list(range(1, 11)) + [20, 35, 37, 38, 60, 61, 64, 79, 80, 81, 85]
+                offgrid_tags = [19, 50, 51, 52, 53, 56, 57, 58, 59, 62, 66, 69, 70, 71]
+                
+                if tag_int in ongrid_tags:
+                    ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
+                    ctx["tipo_producto"] = "sistema"
+                    logger.info(f"Topología On-Grid asignada por tag={tag}")
+                elif tag_int in offgrid_tags:
+                    ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
+                    ctx["tipo_producto"] = "sistema"
+                    logger.info(f"Topología Off-Grid asignada por tag={tag}")
+                else:
+                    # Fallback: si el tag es sistema pero no está en los rangos, preguntar
+                    ctx["topologia"] = "Pendiente (sistema no clasificado)"
+                    logger.warning(f"Tag {tag} es sistema pero no está en rangos On/Off-Grid. Queda pendiente.")
+            else:
+                # 6. Producto unitario: la topología NO APLICA
+                ctx["topologia"] = "No aplica (Producto unitario)"
+                ctx["tipo_producto"] = "unitario"
+                logger.info(f"Producto unitario detectado (tag={tag}). Topología marcada como 'No aplica'.")
+            
+            # 7. Inicializar o actualizar checklist universal
             if not ctx.get("checklist_universal"):
                 ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
+            
+            # 8. Actualizar checklist con los requisitos y los nuevos campos
             checklist = ctx["checklist_universal"]
+            
+            # Marcar topologia como completada si ya se asignó (incluye "No aplica")
+            if ctx.get("topologia") and ctx["topologia"] != "Pendiente (sistema no clasificado)":
+                checklist["topologia"] = "completado"
+            
+            # Marcar tipo_producto como completado si se asignó
+            if ctx.get("tipo_producto"):
+                checklist["tipo_producto"] = "completado"
+            
+            # Procesar requisitos del producto
             for req in requisitos:
                 field = req.get("field")
                 if field and ctx.get(field) is not None:
                     checklist[field] = "completado"
                 elif field:
                     checklist[field] = "pendiente"
+            
             ctx["checklist_universal"] = checklist
-            logger.info(f"Producto detectado: tag={tag}, requisitos={len(requisitos)}")
+            logger.info(f"Checklist actualizada tras detectar producto. Score potencial: {calcular_puntaje_completitud(ctx)}%")
             return {"contexto_tecnico": ctx}
 
+        # 9. Si no se infiere producto, preguntar al usuario
         pregunta = "¿Sobre qué tipo de equipo le gustaría recibir asesoría? (ej. paneles solares, calentadores, bombas de agua, iluminación...)"
         new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
         return {"messages": new_messages, "contexto_tecnico": ctx}
 
+    # =========================================================================
+    # NODO: CÁLCULO DE CARGA OFF-GRID
+    # =========================================================================
     @auditar_fase(nombre_fase="Cálculo de Carga Off‑Grid", criticidad="ALTA")
     @observe_node(node_name="calcular_carga_offgrid")
     async def calcular_carga_offgrid_node(state: AgentState):
@@ -387,6 +504,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         return {"contexto_tecnico": ctx}
 
+    # =========================================================================
+    # NODO: GENERAR RESPUESTA COMERCIAL
+    # =========================================================================
     @auditar_fase(nombre_fase="Generación de Respuesta Comercial", criticidad="ALTA")
     @observe_node(node_name="generar_respuesta_comercial")
     async def generar_respuesta_comercial_node(state: AgentState, config: RunnableConfig):
@@ -599,6 +719,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             "contexto_tecnico": ctx
         }
 
+    # =========================================================================
+    # NODO: ANEXAR CASO
+    # =========================================================================
     @observe_node(node_name="anexar_caso_respuesta")
     async def anexar_caso_respuesta_node(state: AgentState, config: RunnableConfig):
         messages = state.get("messages", [])
