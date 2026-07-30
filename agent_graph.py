@@ -1,6 +1,7 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.1.0 – Checklist Universal, Cierre SMART, Diagnóstico Ontológico y Cálculo Off‑Grid 29JUL2026.
+VERSIÓN 2.1.1 – Corrección de nodo verificar_cierre (siempre retorna contexto).
+29JUL2026.
 """
 import os
 import time
@@ -56,7 +57,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.1.0"}
+        default_headers={"User-Agent": "JARVI/2.1.1"}
     )
 
 # =============================================================================
@@ -121,6 +122,7 @@ class InferenciaEnergetica(TypedDict):
     checklist_universal: Optional[Dict]
     fecha_estimada_compra: Optional[str]
     score_actual: Optional[float]
+    cierre_realizado: Optional[bool]
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -530,19 +532,30 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         respuesta = await llm.ainvoke([prompt_sistema] + state["messages"], config=config)
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
+    # =========================================================================
+    # NODO: VERIFICAR CIERRE (CORREGIDO - SIEMPRE RETORNA CONTEXTO)
+    # =========================================================================
     @auditar_fase(nombre_fase="Verificación de Cierre Comercial", criticidad="ALTA")
     @observe_node(node_name="verificar_cierre")
     async def verificar_cierre_node(state: AgentState, config: RunnableConfig):
+        """
+        Nodo que evalúa el score de completitud y, si es ≥ 60%, activa el flujo de cierre SMART.
+        En caso contrario, no modifica el estado (pero devuelve el contexto actual para cumplir
+        con el contrato del grafo de LangGraph, evitando el error 'Expected node ... to update').
+        """
         ctx = dict(state.get("contexto_tecnico") or {})
         score = ctx.get("score_actual", 0.0)
         messages = state.get("messages", [])
 
+        # Si el score es bajo, devolver el contexto sin cambios (pero siempre actualizar)
         if score < 60.0:
-            return {}
+            return {"contexto_tecnico": ctx}
 
+        # Si el cierre ya se realizó, devolver el contexto sin cambios
         if ctx.get("cierre_realizado"):
-            return {}
+            return {"contexto_tecnico": ctx}
 
+        # --- Lógica de cierre SMART (solo si score >= 60% y no realizado) ---
         precio_texto = ""
         tag = ctx.get("product_tag")
         if tag:
@@ -578,7 +591,12 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             messages.append(AIMessage(content=pregunta))
 
         ctx["cierre_realizado"] = True
-        return {"messages": messages, "contexto_tecnico": ctx}
+
+        # Retornar ambos campos actualizados (mensajes y contexto)
+        return {
+            "messages": messages,
+            "contexto_tecnico": ctx
+        }
 
     @observe_node(node_name="anexar_caso_respuesta")
     async def anexar_caso_respuesta_node(state: AgentState, config: RunnableConfig):
