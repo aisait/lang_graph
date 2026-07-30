@@ -1,13 +1,12 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.2.0 – Prioridad Ontológica: Producto → Topología.
+VERSIÓN 2.3.0 – Extracción semántica de checklist, precios dinámicos, sin # ni *.
 30JUL2026.
 """
 import os
 import time
 import uuid
 import asyncio
-import threading
 import requests
 import re
 import functools
@@ -24,9 +23,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-# Sanitización
 from utils.sanitize import sanitize_pii
-
 import config
 from audit import auditar_fase
 from ontology import (
@@ -42,13 +39,12 @@ from ontology import (
 from telemetry import trace_id_var, span_id_var, schedule_telemetry_event
 from ubicacion import buscar_ubicacion
 from prompt_manager import get_prompt
-from price_extractor import extract_price_from_url
 
 logger = logging.getLogger(__name__)
 from config import settings
 
 # =============================================================================
-# CONFIGURACIÓN DE API KEY (CON ROTACIÓN)
+# CONFIGURACIÓN DE API KEY
 # =============================================================================
 def get_llm():
     return ChatOpenAI(
@@ -57,7 +53,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.2.0"}
+        default_headers={"User-Agent": "JARVI/2.3.0"}
     )
 
 # =============================================================================
@@ -97,11 +93,27 @@ def normalizar_contacto(nombre_raw: str, whatsapp_raw: str, ubicacion_raw: str) 
     return nombre_normalizado, whatsapp_formateado
 
 # =============================================================================
-# ESQUEMAS (EXTENDIDO CON NUEVOS CAMPOS)
+# ESQUEMAS
 # =============================================================================
 class ExtractorContacto(BaseModel):
     nombre: Optional[str] = Field(None, description="Nombre de pila y apellidos.")
     telefono: Optional[str] = Field(None, description="Número telefónico.")
+
+class ChecklistExtract(BaseModel):
+    """Esquema para extracción semántica de los 13 campos del scoring."""
+    nombre: Optional[str] = Field(None, description="Nombre completo del cliente.")
+    whatsapp: Optional[str] = Field(None, description="Número de teléfono en formato E.164.")
+    departamento: Optional[str] = Field(None, description="Departamento de Guatemala.")
+    municipio: Optional[str] = Field(None, description="Municipio de Guatemala.")
+    ciudad: Optional[str] = Field(None, description="Ciudad o localidad.")
+    empresa_electrica: Optional[str] = Field(None, description="Empresa distribuidora de electricidad (EEGSA, DEOCSA, etc.).")
+    tarifa_base_gtq: Optional[float] = Field(None, description="Tarifa eléctrica en GTQ por kWh.")
+    topologia: Optional[str] = Field(None, description="On-Grid, Off-Grid, o No aplica.")
+    calculo_carga_completado: Optional[bool] = Field(None, description="Si ya se calculó la carga eléctrica.")
+    requiere_auditoria_electrica: Optional[bool] = Field(None, description="Si el producto requiere diagnóstico eléctrico.")
+    vendedor: Optional[str] = Field(None, description="Nombre del vendedor asignado.")
+    tipo_producto: Optional[str] = Field(None, description="sistema o unitario.")
+    productos_interes: Optional[List[str]] = Field(None, description="Lista de nombres de productos de interés.")
 
 class InferenciaEnergetica(TypedDict):
     ciudad: Optional[str]
@@ -123,6 +135,7 @@ class InferenciaEnergetica(TypedDict):
     fecha_estimada_compra: Optional[str]
     score_actual: Optional[float]
     cierre_realizado: Optional[bool]
+    iteraciones_sin_cambio: Optional[int]
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -204,7 +217,7 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA DE ENVÍO A N8N (CON DOCSTRING)
+# HERRAMIENTA DE ENVÍO A N8N
 # =============================================================================
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
@@ -219,28 +232,13 @@ async def procesar_oportunidad_backend(
     resumen_18_palabras: str
 ) -> str:
     """
-    Envía los datos de una oportunidad de negocio al backend de n8n para su procesamiento y creación de lead.
-    Esta herramienta debe ser invocada cuando el cliente haya definido completamente su necesidad y se tenga
-    un resumen de los equipos recomendados.
-
-    Parámetros:
-        nombre_apellidos (str): Nombre completo del cliente.
-        departamento_municipio (str): Ubicación (departamento y municipio).
-        consumo_actual (str): Consumo eléctrico actual (ej. "250 kWh").
-        empresa_electrica (str): Empresa distribuidora (EEGSA, DEOCSA, etc.).
-        definicion_necesidad (str): Descripción clara de la necesidad del cliente.
-        listado_equipos_html (str): Listado de equipos recomendados en formato HTML.
-        numero_whatsapp (str): Número de teléfono del cliente (formato E.164).
-        resumen_18_palabras (str): Resumen de la conversación en 18 palabras o menos.
-
-    Retorna:
-        str: Mensaje de confirmación o error del envío.
+    Envía los datos de una oportunidad de negocio al backend de n8n para su procesamiento.
     """
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
     endpoint = os.getenv("N8N_WEBHOOK_URL", "")
     if not endpoint:
         logger.warning("N8N_WEBHOOK_URL no configurado. Lead no enviado.")
-        return "⚠️ No se pudo enviar el lead: webhook no configurado."
+        return "No se pudo enviar el lead: webhook no configurado."
     num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
     payload = {
         "nombre": nombre_norm,
@@ -255,10 +253,10 @@ async def procesar_oportunidad_backend(
     try:
         await asyncio.to_thread(requests.post, endpoint, json=payload, headers={"Content-Type": "application/json"}, timeout=15)
         logger.info(f"Lead enviado exitosamente a N8N para {whatsapp_norm}")
-        return f"✅ Lead enviado a N8N. Contacto: {whatsapp_norm}."
+        return f"Lead enviado a N8N. Contacto: {whatsapp_norm}."
     except Exception as e:
         logger.error(f"Fallo en envío a N8N: {e}")
-        return f"❌ Error al enviar lead: {str(e)}"
+        return f"Error al enviar lead: {str(e)}"
 
 # =============================================================================
 # FUNCIONES AUXILIARES
@@ -277,33 +275,17 @@ def extraer_intencion_humana(messages: list) -> str:
     return ""
 
 def extraer_tipo_producto(mensaje: str) -> Optional[str]:
-    """
-    Versión mejorada con detección de sinónimos y variantes contextuales.
-    """
     if not mensaje:
         return None
-    
     mensaje_lower = mensaje.lower()
-    
-    # Palabras clave para SISTEMA (On-Grid, Off-Grid, kits completos)
     patron_sistema = r'\b(sistema|kit|completo|llave en mano|instalación completa|pack solar|planta solar|proyecto llave en mano|integral)\b'
-    # Palabras clave para UNITARIO (componentes específicos)
     patron_unitario = r'\b(producto|unitario|componente|inversor|panel|módulo|batería|acumulador|calentador|termo|bomba|controlador|cargador|estructura|soporte|cable|conector|regulador)\b'
-    
-    # Primero, verificar si se menciona claramente "sistema" o "kit" (prioridad)
     if re.search(patron_sistema, mensaje_lower):
         return "sistema"
-    
-    # Luego, verificar si se menciona un componente unitario
     if re.search(patron_unitario, mensaje_lower):
         return "unitario"
-    
-    # Si no se detecta explícitamente, pero el mensaje contiene "solar" o "fotovoltaico"
-    # y no hay otras pistas, asumir unitario por defecto (caso común)
     if re.search(r'\b(solar|fotovoltaico|fotovoltaica|energía solar)\b', mensaje_lower):
-        # Si no hay palabra que indique sistema, asumimos que busca un producto específico
         return "unitario"
-    
     return None
 
 # =============================================================================
@@ -313,46 +295,31 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
     llm = get_llm().bind_tools([procesar_oportunidad_backend])
     extractor_llm = llm.with_structured_output(ExtractorContacto)
+    checklist_llm = llm.with_structured_output(ChecklistExtract)
 
-    # =========================================================================
-    # NODO: CLASIFICADOR DE INTENCIÓN (SOLO DETECCIÓN EXPLÍCITA)
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # NODO 1: CLASIFICADOR DE INTENCIÓN (SOLO DETECCIÓN EXPLÍCITA)
+    # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Clasificador de Intención Comercial", criticidad="MEDIA")
     @observe_node(node_name="clasificar_intencion_comercial")
     async def clasificar_intencion_comercial_node(state: AgentState):
-        """
-        Versión corregida: solo detecta si el usuario MENCIONA EXPLÍCITAMENTE On-Grid o Off-Grid.
-        No infiere topología por defecto. La topología se asigna en seleccionar_productos
-        basándose en el tipo de producto detectado (sistema o unitario).
-        """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
-        
         if not ultimo:
             return {"contexto_tecnico": ctx}
-        
-        # Si ya tenemos topología, no sobreescribir
         if ctx.get("topologia"):
             return {"contexto_tecnico": ctx}
-        
-        # Solo asignar topología si el usuario la MENCIONA EXPLÍCITAMENTE
-        # Esto evita inferencias erróneas basadas en palabras sueltas
         if re.search(r'\b(on\s*grid|conectado a la red|atado a la red|sistema de red)\b', ultimo, re.IGNORECASE):
             ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
-            logger.info(f"Topología On-Grid detectada explícitamente en mensaje.")
-            return {"contexto_tecnico": ctx}
-        
-        if re.search(r'\b(off\s*grid|aislado|sin red|autónomo|independiente)\b', ultimo, re.IGNORECASE):
+            logger.info(f"Topología On-Grid detectada explícitamente.")
+        elif re.search(r'\b(off\s*grid|aislado|sin red|autónomo|independiente)\b', ultimo, re.IGNORECASE):
             ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
-            logger.info(f"Topología Off-Grid detectada explícitamente en mensaje.")
-            return {"contexto_tecnico": ctx}
-        
-        # Si no se menciona explícitamente, no forzar asignación.
+            logger.info(f"Topología Off-Grid detectada explícitamente.")
         return {"contexto_tecnico": ctx}
 
-    # =========================================================================
-    # NODO: VALIDADOR DE UBICACIÓN
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # NODO 2: VALIDADOR DE UBICACIÓN
+    # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Validador de Ubicación del Cliente", criticidad="MEDIA")
     @observe_node(node_name="validar_ubicacion_cliente")
     async def validar_ubicacion_cliente_node(state: AgentState):
@@ -373,146 +340,100 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["tarifa_base_gtq"] = 1.45
         return {"contexto_tecnico": ctx}
 
-    # =========================================================================
-    # NODO: SELECCIÓN DE PRODUCTOS (PRIORIDAD ONTOLÓGICA - PRODUCTO → TOPOLOGÍA)
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # NODO 3: SELECCIÓN DE PRODUCTOS (PRIORIDAD ONTOLÓGICA)
+    # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Selección de Productos", criticidad="ALTA")
     @observe_node(node_name="seleccionar_productos")
     async def seleccionar_productos_node(state: AgentState):
-        """
-        Versión corregida con prioridad ontológica:
-        1. Primero infiere el producto (tag).
-        2. Si lo encuentra, consulta la ontología.
-        3. Si es unitario → topologia = "No aplica".
-        4. Si es sistema → asigna On-Grid u Off-Grid según tag.
-        Esto resuelve el estancamiento del scoring al no depender de regex para topología.
-        """
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
 
-        # Si ya tenemos un tag, no volver a procesar
         if ctx.get("product_tag"):
             return {"contexto_tecnico": ctx}
 
-        # 1. Intentar inferir el producto del mensaje
         tag = inferir_tag_por_mensaje(ultimo)
-        
         if tag:
             ctx["product_tag"] = tag
             logger.info(f"Producto detectado: tag={tag}")
-            
-            # 2. Consultar la ontología para obtener el tipo y otros atributos
             ontologia = cargar_ontologia()
             item = ontologia.get(tag, {})
-            tipo_producto = item.get("tipo", "unitario")  # Por defecto unitario si no se especifica
-            
-            # 3. Cargar requisitos específicos del producto
+            tipo_producto = item.get("tipo", "unitario")
             requisitos = get_requirements_by_tag(tag)
             ctx["requisitos"] = requisitos
-            
-            # 4. Asignar flag de diagnóstico eléctrico (solo para sistemas On-Grid)
             requires_diagnostic = get_requires_diagnostic(tag)
             ctx["requiere_auditoria_electrica"] = requires_diagnostic
-            
-            # 5. --- LÓGICA NUEVA: ASIGNAR TOPOLOGÍA SEGÚN EL TIPO DE PRODUCTO ---
+
             if tipo_producto == "sistema":
-                # El producto es un sistema (On-Grid u Off-Grid)
                 tag_int = int(tag) if tag.isdigit() else 0
-                
-                # Definir rangos de tags para sistemas (basado en catalog_ontology.json)
                 ongrid_tags = list(range(1, 11)) + [20, 35, 37, 38, 60, 61, 64, 79, 80, 81, 85]
                 offgrid_tags = [19, 50, 51, 52, 53, 56, 57, 58, 59, 62, 66, 69, 70, 71]
-                
                 if tag_int in ongrid_tags:
                     ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
                     ctx["tipo_producto"] = "sistema"
-                    logger.info(f"Topología On-Grid asignada por tag={tag}")
                 elif tag_int in offgrid_tags:
                     ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
                     ctx["tipo_producto"] = "sistema"
-                    logger.info(f"Topología Off-Grid asignada por tag={tag}")
                 else:
-                    # Fallback: si el tag es sistema pero no está en los rangos, preguntar
                     ctx["topologia"] = "Pendiente (sistema no clasificado)"
-                    logger.warning(f"Tag {tag} es sistema pero no está en rangos On/Off-Grid. Queda pendiente.")
             else:
-                # 6. Producto unitario: la topología NO APLICA
                 ctx["topologia"] = "No aplica (Producto unitario)"
                 ctx["tipo_producto"] = "unitario"
-                logger.info(f"Producto unitario detectado (tag={tag}). Topología marcada como 'No aplica'.")
-            
-            # 7. Inicializar o actualizar checklist universal
+
             if not ctx.get("checklist_universal"):
                 ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
-            
-            # 8. Actualizar checklist con los requisitos y los nuevos campos
             checklist = ctx["checklist_universal"]
-            
-            # Marcar topologia como completada si ya se asignó (incluye "No aplica")
-            if ctx.get("topologia") and ctx["topologia"] != "Pendiente (sistema no clasificado)":
+            if ctx.get("topologia") and "Pendiente" not in ctx["topologia"]:
                 checklist["topologia"] = "completado"
-            
-            # Marcar tipo_producto como completado si se asignó
             if ctx.get("tipo_producto"):
                 checklist["tipo_producto"] = "completado"
-            
-            # Procesar requisitos del producto
             for req in requisitos:
                 field = req.get("field")
                 if field and ctx.get(field) is not None:
                     checklist[field] = "completado"
                 elif field:
                     checklist[field] = "pendiente"
-            
             ctx["checklist_universal"] = checklist
-            logger.info(f"Checklist actualizada tras detectar producto. Score potencial: {calcular_puntaje_completitud(ctx)}%")
             return {"contexto_tecnico": ctx}
 
-        # 9. Si no se infiere producto, preguntar al usuario
         pregunta = "¿Sobre qué tipo de equipo le gustaría recibir asesoría? (ej. paneles solares, calentadores, bombas de agua, iluminación...)"
         new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
         return {"messages": new_messages, "contexto_tecnico": ctx}
 
-    # =========================================================================
-    # NODO: CÁLCULO DE CARGA OFF-GRID
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # NODO 4: CÁLCULO DE CARGA OFF-GRID
+    # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Cálculo de Carga Off‑Grid", criticidad="ALTA")
     @observe_node(node_name="calcular_carga_offgrid")
     async def calcular_carga_offgrid_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
-        ultimo = extraer_intencion_humana(state.get("messages", []))
-
         topologia = ctx.get("topologia", "")
         if "OFF-GRID" not in topologia.upper():
             return {"contexto_tecnico": ctx}
         if ctx.get("calculo_carga_completado"):
             return {"contexto_tecnico": ctx}
-
         tag = ctx.get("product_tag")
         if not tag:
             return {"contexto_tecnico": ctx}
         dimensionamiento = get_dimensionamiento_by_tag(tag)
         if not dimensionamiento:
-            logger.warning(f"No hay dimensionamiento para tag {tag}")
             return {"contexto_tecnico": ctx}
-
-        equipos_tipicos = dimensionamiento.get("equipos_tipicos", [])
         if not ctx.get("equipos_usuario"):
-            pregunta = "Para dimensionar su sistema Off‑Grid, ¿qué equipos planea usar y cuántas horas al día? (ej. 'Nevera 24h, TV 6h, bombillas 8h')"
+            pregunta = "Para dimensionar su sistema Off‑Grid, ¿qué equipos planea usar y cuántas horas al día? (ej. Nevera 24h, TV 6h, bombillas 8h)"
             new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
             return {"messages": new_messages, "contexto_tecnico": ctx}
-
         return {"contexto_tecnico": ctx}
 
-    # =========================================================================
-    # NODO: GENERAR RESPUESTA COMERCIAL
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # NODO 5: GENERAR RESPUESTA COMERCIAL
+    # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Generación de Respuesta Comercial", criticidad="ALTA")
     @observe_node(node_name="generar_respuesta_comercial")
     async def generar_respuesta_comercial_node(state: AgentState, config: RunnableConfig):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
+        # Extracción básica por regex (fallback)
         if ultimo_mensaje:
             num_match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', ultimo_mensaje)
             if num_match:
@@ -652,31 +573,152 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         respuesta = await llm.ainvoke([prompt_sistema] + state["messages"], config=config)
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
-    # =========================================================================
-    # NODO: VERIFICAR CIERRE (VERSIÓN DEFINITIVA – NUNCA RETORNA {})
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # NODO 6: ACTUALIZAR CHECKLIST (EXTRACCIÓN SEMÁNTICA CON LLM)
+    # -------------------------------------------------------------------------
+    @auditar_fase(nombre_fase="Actualización Semántica de Checklist", criticidad="ALTA")
+    @observe_node(node_name="actualizar_checklist")
+    async def actualizar_checklist_node(state: AgentState):
+        """
+        Nodo que utiliza el LLM para extraer los 13 campos del scoring
+        de todo el historial de conversación. Esto desbloquea el scoring
+        al interpretar semánticamente las respuestas del usuario.
+        """
+        ctx = dict(state.get("contexto_tecnico") or {})
+        messages = state.get("messages", [])
+
+        # Construir el historial completo como texto
+        historial_texto = ""
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                historial_texto += f"Usuario: {msg.content}\n"
+            elif isinstance(msg, AIMessage):
+                historial_texto += f"Asistente: {msg.content}\n"
+
+        if not historial_texto:
+            return {"contexto_tecnico": ctx}
+
+        # Si ya tenemos un tag, lo usamos para mejorar la extracción
+        tag_info = ""
+        if ctx.get("product_tag"):
+            ontologia = cargar_ontologia()
+            item = ontologia.get(ctx["product_tag"], {})
+            tag_info = f"Producto detectado: {item.get('nombre', '')} (tag {ctx['product_tag']})"
+
+        prompt_extract = f"""
+        Extrae los siguientes campos de la conversación. Si no se mencionan, déjalos como null.
+        Usa solo la información explícitamente mencionada por el usuario.
+        No inventes datos.
+
+        {tag_info}
+
+        Historial de la conversación:
+        {historial_texto}
+
+        Campos a extraer:
+        - nombre: Nombre completo del cliente.
+        - whatsapp: Número de teléfono (formato E.164, ej. +50212345678).
+        - departamento: Departamento de Guatemala.
+        - municipio: Municipio de Guatemala.
+        - ciudad: Ciudad o localidad.
+        - empresa_electrica: Empresa distribuidora (EEGSA, DEOCSA, etc.).
+        - tarifa_base_gtq: Tarifa eléctrica en GTQ/kWh (número).
+        - topologia: On-Grid, Off-Grid, o No aplica.
+        - calculo_carga_completado: true/false.
+        - requiere_auditoria_electrica: true/false.
+        - vendedor: Nombre del vendedor asignado.
+        - tipo_producto: sistema o unitario.
+        - productos_interes: Lista de nombres de productos mencionados.
+        """
+
+        try:
+            extraccion: ChecklistExtract = await checklist_llm.ainvoke(prompt_extract)
+        except Exception as e:
+            logger.error(f"Error en extracción semántica: {e}")
+            return {"contexto_tecnico": ctx}
+
+        # Actualizar ctx con los valores extraídos (solo si no están ya seteados)
+        if extraccion.nombre and not ctx.get("nombre"):
+            ctx["nombre"] = extraccion.nombre
+        if extraccion.whatsapp and not ctx.get("whatsapp"):
+            ctx["whatsapp"] = extraccion.whatsapp
+        if extraccion.departamento and not ctx.get("departamento"):
+            ctx["departamento"] = extraccion.departamento
+        if extraccion.municipio and not ctx.get("municipio"):
+            ctx["municipio"] = extraccion.municipio
+        if extraccion.ciudad and not ctx.get("ciudad"):
+            ctx["ciudad"] = extraccion.ciudad
+        if extraccion.empresa_electrica and not ctx.get("empresa_electrica"):
+            ctx["empresa_electrica"] = extraccion.empresa_electrica
+        if extraccion.tarifa_base_gtq and not ctx.get("tarifa_base_gtq"):
+            ctx["tarifa_base_gtq"] = extraccion.tarifa_base_gtq
+        if extraccion.topologia and not ctx.get("topologia"):
+            ctx["topologia"] = extraccion.topologia
+        if extraccion.calculo_carga_completado is not None and not ctx.get("calculo_carga_completado"):
+            ctx["calculo_carga_completado"] = extraccion.calculo_carga_completado
+        if extraccion.requiere_auditoria_electrica is not None and not ctx.get("requiere_auditoria_electrica"):
+            ctx["requiere_auditoria_electrica"] = extraccion.requiere_auditoria_electrica
+        if extraccion.vendedor and not ctx.get("vendedor"):
+            ctx["vendedor"] = extraccion.vendedor
+        if extraccion.tipo_producto and not ctx.get("tipo_producto"):
+            ctx["tipo_producto"] = extraccion.tipo_producto
+        if extraccion.productos_interes and not ctx.get("productos_interes"):
+            ctx["productos_interes"] = extraccion.productos_interes
+
+        # Actualizar checklist
+        if not ctx.get("checklist_universal"):
+            ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
+        checklist = ctx["checklist_universal"]
+
+        for campo in CAMPOS_SCORE_UNIVERSAL:
+            valor = ctx.get(campo)
+            if campo == "productos_interes" and isinstance(valor, list) and valor:
+                checklist[campo] = "completado"
+            elif campo == "tipo_producto" and valor:
+                checklist[campo] = "completado"
+            elif campo == "vendedor" and valor:
+                checklist[campo] = "completado"
+            elif campo == "calculo_carga_completado" and valor:
+                checklist[campo] = "completado"
+            elif campo == "requiere_auditoria_electrica" and valor is not None:
+                checklist[campo] = "completado"
+            elif isinstance(valor, str) and valor and valor != "Pendiente":
+                checklist[campo] = "completado"
+            elif isinstance(valor, float) and valor > 0:
+                checklist[campo] = "completado"
+            elif checklist.get(campo) != "completado":
+                checklist[campo] = "pendiente"
+
+        ctx["checklist_universal"] = checklist
+        score = calcular_puntaje_completitud(ctx)
+        ctx["score_actual"] = score
+        logger.info(f"Score tras extracción semántica: {score}%")
+
+        return {"contexto_tecnico": ctx}
+
+    # -------------------------------------------------------------------------
+    # NODO 7: VERIFICAR CIERRE (VERSIÓN DEFINITIVA – SIN # NI *)
+    # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Verificación de Cierre Comercial", criticidad="ALTA")
     @observe_node(node_name="verificar_cierre")
     async def verificar_cierre_node(state: AgentState, config: RunnableConfig):
         """
-        Nodo que evalúa el score de completitud y, si es ≥ 60%, activa el flujo de cierre SMART.
-        Siempre retorna al menos 'contexto_tecnico' para satisfacer el contrato de LangGraph.
+        Nodo que evalúa el score y, si es >= 60%, activa el cierre SMART.
+        Usa get_precio_by_tag para obtener el precio exacto desde la URL del producto.
         """
         ctx = dict(state.get("contexto_tecnico") or {})
         score = ctx.get("score_actual", 0.0)
         messages = state.get("messages", [])
 
-        # Caso 1: Score bajo → no se activa cierre, pero se devuelve contexto
         if score < 60.0:
             logger.debug(f"Score {score} < 60, no se activa cierre.")
             return {"contexto_tecnico": ctx}
 
-        # Caso 2: Cierre ya realizado → no repetir
         if ctx.get("cierre_realizado"):
             logger.debug("Cierre ya realizado, omitiendo.")
             return {"contexto_tecnico": ctx}
 
-        # --- Caso 3: Ejecutar cierre SMART ---
+        # Obtener precio exacto desde la URL
         precio_texto = ""
         tag = ctx.get("product_tag")
         if tag:
@@ -685,12 +727,14 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 if precio_data and precio_data.get("precio"):
                     precio = precio_data["precio"]
                     moneda = precio_data.get("moneda", "GTQ")
-                    precio_texto = f"**{precio:,.2f} {moneda}**"
+                    precio_texto = f"{precio:,.2f} {moneda}"
                 else:
                     precio_texto = "disponible bajo consulta"
             except Exception as e:
                 logger.error(f"Error al obtener precio para tag {tag}: {e}")
                 precio_texto = "disponible bajo consulta"
+        else:
+            precio_texto = "disponible bajo consulta"
 
         nombre_producto = ""
         if tag:
@@ -713,15 +757,14 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         ctx["cierre_realizado"] = True
 
-        # Retornar ambos campos actualizados (siempre mensajes y contexto)
         return {
             "messages": messages,
             "contexto_tecnico": ctx
         }
 
-    # =========================================================================
-    # NODO: ANEXAR CASO
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # NODO 8: ANEXAR CASO
+    # -------------------------------------------------------------------------
     @observe_node(node_name="anexar_caso_respuesta")
     async def anexar_caso_respuesta_node(state: AgentState, config: RunnableConfig):
         messages = state.get("messages", [])
@@ -734,13 +777,14 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": messages}
 
     # =========================================================================
-    # ENSAMBLAJE DEL GRAFO
+    # ENSAMBLAJE DEL GRAFO (CON NUEVO NODO actualizar_checklist)
     # =========================================================================
     graph_builder.add_node("clasificar_intencion_comercial", clasificar_intencion_comercial_node)
     graph_builder.add_node("validar_ubicacion_cliente", validar_ubicacion_cliente_node)
     graph_builder.add_node("seleccionar_productos", seleccionar_productos_node)
     graph_builder.add_node("calcular_carga_offgrid", calcular_carga_offgrid_node)
     graph_builder.add_node("generar_respuesta_comercial", generar_respuesta_comercial_node)
+    graph_builder.add_node("actualizar_checklist", actualizar_checklist_node)  # NUEVO
     graph_builder.add_node("verificar_cierre", verificar_cierre_node)
     graph_builder.add_node("anexar_caso_respuesta", anexar_caso_respuesta_node)
     graph_builder.add_node("tools", ToolNode([procesar_oportunidad_backend]))
@@ -749,7 +793,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         messages = state.get("messages", [])
         if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
             return "tools"
-        return "verificar_cierre"
+        return "actualizar_checklist"  # Cambio: ir a actualizar_checklist antes de cierre
 
     graph_builder.add_edge(START, "clasificar_intencion_comercial")
     graph_builder.add_edge("clasificar_intencion_comercial", "validar_ubicacion_cliente")
@@ -757,7 +801,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder.add_edge("seleccionar_productos", "calcular_carga_offgrid")
     graph_builder.add_edge("calcular_carga_offgrid", "generar_respuesta_comercial")
     graph_builder.add_conditional_edges("generar_respuesta_comercial", my_tools_condition)
-    graph_builder.add_edge("tools", "anexar_caso_respuesta")
+    graph_builder.add_edge("tools", "actualizar_checklist")
+    graph_builder.add_edge("actualizar_checklist", "verificar_cierre")
     graph_builder.add_edge("verificar_cierre", "anexar_caso_respuesta")
     graph_builder.add_edge("anexar_caso_respuesta", END)
 
