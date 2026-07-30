@@ -644,7 +644,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 respuesta_final = evaluacion["modified_response"]
                 logger.info(f"Supervisor reescribió respuesta: {evaluacion['rule_id']}")
         elif evaluacion["decision"] == "block":
-            respuesta_final = "Lo siento, no puedo proporcionar esa información. ¿Puedo ayudarle con otra cosa?"
+            respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada?"
             logger.warning(f"Supervisor bloqueó respuesta: {evaluacion['rule_id']}")
         elif evaluacion["decision"] == "rewrite_context":
             if evaluacion.get("modified_context"):
@@ -655,7 +655,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             if evaluacion.get("modified_response"):
                 respuesta_final = evaluacion["modified_response"]
             else:
-                respuesta_final = "Para poder ayudarle mejor, ¿podría indicarme su nombre y número de teléfono?"
+                respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada?"
             logger.info(f"Supervisor activó modo escalación: {evaluacion['rule_id']}")
         # Si se fuerza cierre, ya se inyectan preguntas en modified_response
         elif evaluacion["decision"] == "force_closure":
