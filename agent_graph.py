@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.1.0 – Checklist Universal, Cierre SMART, Diagnóstico Ontológico y Cálculo Off‑Grid 30JUL2026.
+VERSIÓN 2.1.0 – Checklist Universal, Cierre SMART, Diagnóstico Ontológico y Cálculo Off‑Grid 29JUL2026.
 """
 import os
 import time
@@ -34,14 +34,14 @@ from ontology import (
     obtener_productos_relevantes,
     inferir_tag_por_mensaje,
     get_requirements_by_tag,
-    get_requires_diagnostic,          # Nueva función
-    get_dimensionamiento_by_tag,      # Nueva función
-    get_precio_by_tag                 # Nueva función (extrae precio desde la URL)
+    get_requires_diagnostic,
+    get_dimensionamiento_by_tag,
+    get_precio_by_tag
 )
 from telemetry import trace_id_var, span_id_var, schedule_telemetry_event
 from ubicacion import buscar_ubicacion
 from prompt_manager import get_prompt
-from price_extractor import extract_price_from_url  # Nuevo módulo
+from price_extractor import extract_price_from_url
 
 logger = logging.getLogger(__name__)
 from config import settings
@@ -116,10 +116,9 @@ class InferenciaEnergetica(TypedDict):
     vendedor: Optional[str]
     tipo_producto: Optional[str]
     productos_interes: Optional[list]
-    # Nuevos campos para requisitos dinámicos y cierre
     product_tag: Optional[str]
     requisitos: Optional[List[Dict]]
-    checklist_universal: Optional[Dict]      # Estado de los 13 campos
+    checklist_universal: Optional[Dict]
     fecha_estimada_compra: Optional[str]
     score_actual: Optional[float]
 
@@ -138,7 +137,6 @@ CAMPOS_SCORE_UNIVERSAL = [
 ]
 
 def inicializar_checklist_universal(ctx: dict) -> dict:
-    """Inicializa la checklist con los 13 campos del scoring, marcando como completados los que ya están en ctx."""
     checklist = {}
     for campo in CAMPOS_SCORE_UNIVERSAL:
         valor = ctx.get(campo)
@@ -161,7 +159,6 @@ def inicializar_checklist_universal(ctx: dict) -> dict:
     return checklist
 
 def calcular_puntaje_completitud(ctx: dict) -> float:
-    """Calcula el score basado en la checklist universal."""
     checklist = ctx.get("checklist_universal")
     if not checklist:
         checklist = inicializar_checklist_universal(ctx)
@@ -205,7 +202,7 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA DE ENVÍO A N8N (SIN CAMBIOS)
+# HERRAMIENTA DE ENVÍO A N8N (CORREGIDA CON DOCSTRING Y ORDEN DE DECORADORES)
 # =============================================================================
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
@@ -219,6 +216,24 @@ async def procesar_oportunidad_backend(
     numero_whatsapp: str,
     resumen_18_palabras: str
 ) -> str:
+    """
+    Envía los datos de una oportunidad de negocio al backend de n8n para su procesamiento y creación de lead.
+    Esta herramienta debe ser invocada cuando el cliente haya definido completamente su necesidad y se tenga
+    un resumen de los equipos recomendados.
+
+    Parámetros:
+        nombre_apellidos (str): Nombre completo del cliente.
+        departamento_municipio (str): Ubicación (departamento y municipio).
+        consumo_actual (str): Consumo eléctrico actual (ej. "250 kWh").
+        empresa_electrica (str): Empresa distribuidora (EEGSA, DEOCSA, etc.).
+        definicion_necesidad (str): Descripción clara de la necesidad del cliente.
+        listado_equipos_html (str): Listado de equipos recomendados en formato HTML.
+        numero_whatsapp (str): Número de teléfono del cliente (formato E.164).
+        resumen_18_palabras (str): Resumen de la conversación en 18 palabras o menos.
+
+    Retorna:
+        str: Mensaje de confirmación o error del envío.
+    """
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
     endpoint = os.getenv("N8N_WEBHOOK_URL", "")
     if not endpoint:
@@ -244,7 +259,7 @@ async def procesar_oportunidad_backend(
         return f"❌ Error al enviar lead: {str(e)}"
 
 # =============================================================================
-# FUNCIONES AUXILIARES (SIN CAMBIOS)
+# FUNCIONES AUXILIARES
 # =============================================================================
 def extraer_intencion_humana(messages: list) -> str:
     for msg in reversed(messages):
@@ -275,9 +290,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     llm = get_llm().bind_tools([procesar_oportunidad_backend])
     extractor_llm = llm.with_structured_output(ExtractorContacto)
 
-    # --------------------------------------------------------------------------
-    # NODO: CLASIFICADOR DE INTENCIÓN (sin asignación de diagnóstico)
-    # --------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Clasificador de Intención Comercial", criticidad="MEDIA")
     @observe_node(node_name="clasificar_intencion_comercial")
     async def clasificar_intencion_comercial_node(state: AgentState):
@@ -285,18 +297,13 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ultimo = extraer_intencion_humana(state.get("messages", []))
         if not ultimo:
             return {"contexto_tecnico": ctx}
-        # Solo se asigna topologia si no viene del producto (respaldo)
         if not ctx.get("topologia"):
             if any(k in ultimo for k in ["red", "atado", "interconectado", "ahorro", "eegsa", "factura"]):
                 ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
-                # No se asigna requiere_auditoria_electrica aquí; se hará en seleccionar_productos
             elif any(k in ultimo for k in ["aislado", "batería", "bateria", "finca", "autónomo", "off-grid"]):
                 ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
         return {"contexto_tecnico": ctx}
 
-    # --------------------------------------------------------------------------
-    # NODO: VALIDADOR DE UBICACIÓN (SIN CAMBIOS)
-    # --------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Validador de Ubicación del Cliente", criticidad="MEDIA")
     @observe_node(node_name="validar_ubicacion_cliente")
     async def validar_ubicacion_cliente_node(state: AgentState):
@@ -317,33 +324,24 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["tarifa_base_gtq"] = 1.45
         return {"contexto_tecnico": ctx}
 
-    # --------------------------------------------------------------------------
-    # NODO: SELECCIÓN DE PRODUCTOS (NUEVA LÓGICA ONTOLÓGICA)
-    # --------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Selección de Productos", criticidad="ALTA")
     @observe_node(node_name="seleccionar_productos")
     async def seleccionar_productos_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
 
-        # Si ya tenemos tag, no volvemos a preguntar
         if ctx.get("product_tag"):
             return {"contexto_tecnico": ctx}
 
-        # Intentar inferir producto del mensaje
         tag = inferir_tag_por_mensaje(ultimo)
         if tag:
             ctx["product_tag"] = tag
-            # Cargar requisitos del producto
             requisitos = get_requirements_by_tag(tag)
             ctx["requisitos"] = requisitos
-            # Leer flag de diagnóstico desde la ontología
             requires_diagnostic = get_requires_diagnostic(tag)
             ctx["requiere_auditoria_electrica"] = requires_diagnostic
-            # Inicializar checklist universal (si no existe)
             if not ctx.get("checklist_universal"):
                 ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
-            # Actualizar checklist con requisitos específicos
             checklist = ctx["checklist_universal"]
             for req in requisitos:
                 field = req.get("field")
@@ -355,28 +353,22 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             logger.info(f"Producto detectado: tag={tag}, requisitos={len(requisitos)}")
             return {"contexto_tecnico": ctx}
 
-        # Si no se infiere producto, preguntar al usuario
         pregunta = "¿Sobre qué tipo de equipo le gustaría recibir asesoría? (ej. paneles solares, calentadores, bombas de agua, iluminación...)"
         new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
         return {"messages": new_messages, "contexto_tecnico": ctx}
 
-    # --------------------------------------------------------------------------
-    # NODO: CÁLCULO DE CARGA OFF‑GRID (NUEVO)
-    # --------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Cálculo de Carga Off‑Grid", criticidad="ALTA")
     @observe_node(node_name="calcular_carga_offgrid")
     async def calcular_carga_offgrid_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
 
-        # Verificar si es Off‑Grid y aún no se ha calculado la carga
         topologia = ctx.get("topologia", "")
         if "OFF-GRID" not in topologia.upper():
             return {"contexto_tecnico": ctx}
         if ctx.get("calculo_carga_completado"):
             return {"contexto_tecnico": ctx}
 
-        # Obtener datos de dimensionamiento desde la ontología
         tag = ctx.get("product_tag")
         if not tag:
             return {"contexto_tecnico": ctx}
@@ -386,29 +378,19 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             return {"contexto_tecnico": ctx}
 
         equipos_tipicos = dimensionamiento.get("equipos_tipicos", [])
-        # Si el mensaje contiene números y palabras clave, intentar extraer equipos
-        # Por simplicidad, aquí se pregunta al usuario si no se ha hecho antes
-        # Se puede implementar una lógica de extracción, pero por ahora preguntamos
         if not ctx.get("equipos_usuario"):
             pregunta = "Para dimensionar su sistema Off‑Grid, ¿qué equipos planea usar y cuántas horas al día? (ej. 'Nevera 24h, TV 6h, bombillas 8h')"
             new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
             return {"messages": new_messages, "contexto_tecnico": ctx}
 
-        # Si ya hay respuesta, procesar el cálculo (esto se haría en otro nodo o en el mismo)
-        # Por ahora, solo marcamos como completado si ya hay equipos
-        # La lógica completa se puede implementar en un nodo posterior.
         return {"contexto_tecnico": ctx}
 
-    # --------------------------------------------------------------------------
-    # NODO: GENERAR RESPUESTA (DINÁMICO Y CONTEXTUAL)
-    # --------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Generación de Respuesta Comercial", criticidad="ALTA")
     @observe_node(node_name="generar_respuesta_comercial")
     async def generar_respuesta_comercial_node(state: AgentState, config: RunnableConfig):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
-        # --- 1. Extraer nombre/whatsapp (respaldo) ---
         if ultimo_mensaje:
             num_match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', ultimo_mensaje)
             if num_match:
@@ -445,7 +427,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             if tipo:
                 ctx["tipo_producto"] = tipo
 
-        # --- 2. Obtener productos relevantes (si no existen) ---
         if ctx.get("topologia") and ctx.get("tipo_producto") and not ctx.get("productos_interes"):
             ctx["productos_interes"] = obtener_productos_relevantes(
                 topologia=ctx["topologia"],
@@ -453,12 +434,10 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 max_items=5
             )
 
-        # --- 3. Asegurar que existe checklist universal ---
         if not ctx.get("checklist_universal"):
             ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
         checklist = ctx["checklist_universal"]
 
-        # --- 4. Actualizar checklist con datos extraídos ---
         for campo in CAMPOS_SCORE_UNIVERSAL:
             valor = ctx.get(campo)
             if campo == "productos_interes" and isinstance(valor, list) and valor:
@@ -479,22 +458,17 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 checklist[campo] = "pendiente"
         ctx["checklist_universal"] = checklist
 
-        # --- 5. Calcular score ---
         score = calcular_puntaje_completitud(ctx)
         ctx["score_actual"] = score
         logger.info(f"Score actual: {score}%")
 
-        # --- 6. Construir regla_datos desde la checklist ---
         pendientes = [campo for campo, status in checklist.items() if status == "pendiente"]
         if pendientes:
-            # Priorizar preguntas: primero topologia, luego tipo_producto, luego productos_interes, luego el resto
             prioridad = ["topologia", "tipo_producto", "productos_interes", "departamento", "municipio", "ciudad",
                          "empresa_electrica", "tarifa_base_gtq", "consumo_mensual_kwh", "vendedor"]
-            # Ordenar pendientes según prioridad
             pendientes_ordenados = sorted(pendientes, key=lambda x: prioridad.index(x) if x in prioridad else 99)
             preguntas = []
             for campo in pendientes_ordenados:
-                # Buscar pregunta asociada en requisitos (si existe)
                 pregunta = f"¿Cuál es su {campo.replace('_',' ')}?"
                 if ctx.get("requisitos"):
                     for req in ctx.get("requisitos", []):
@@ -506,10 +480,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         else:
             regla_datos = "Ya tienes toda la información técnica. Enfócate en ofrecer una solución y cerrar la conversación."
 
-        # --- 7. Obtener ontología dinámica ---
         ontologia_dinamica = obtener_fragmento_ontologia(ctx.get('topologia'))
 
-        # --- 8. Normalizar contacto para metadata ---
         nombre_ctx = ctx.get("nombre", "Usuario")
         whatsapp_ctx = ctx.get("whatsapp", "Pendiente")
         nombre_run, whatsapp_run = normalizar_contacto(nombre_ctx, whatsapp_ctx, ctx.get("ciudad", ""))
@@ -523,7 +495,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if ctx.get("productos_interes"):
             config["metadata"]["productos_tags"] = [p["tag"] for p in ctx["productos_interes"]]
 
-        # --- 9. Construir conocimiento_usuario ---
         conocimiento_usuario = ""
         if ctx.get("nombre") and ctx.get("nombre") != "Usuario":
             conocimiento_usuario += f"El usuario se llama {ctx['nombre']}. "
@@ -545,7 +516,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if not conocimiento_usuario:
             conocimiento_usuario = "No se tiene información previa del usuario."
 
-        # --- 10. Compilar y ejecutar el prompt del sistema ---
         prompt_content = get_prompt(
             "jarvi_system_prompt",
             ciudad=ctx.get('ciudad', 'PENDIENTE'),
@@ -560,9 +530,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         respuesta = await llm.ainvoke([prompt_sistema] + state["messages"], config=config)
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
-    # --------------------------------------------------------------------------
-    # NODO: VERIFICAR CIERRE (NUEVO)
-    # --------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Verificación de Cierre Comercial", criticidad="ALTA")
     @observe_node(node_name="verificar_cierre")
     async def verificar_cierre_node(state: AgentState, config: RunnableConfig):
@@ -570,15 +537,12 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         score = ctx.get("score_actual", 0.0)
         messages = state.get("messages", [])
 
-        # Si el score es menor a 60%, no activar cierre
         if score < 60.0:
             return {}
 
-        # Verificar si ya se hizo el cierre (para no repetir)
         if ctx.get("cierre_realizado"):
             return {}
 
-        # Obtener precio del producto (desde la URL)
         precio_texto = ""
         tag = ctx.get("product_tag")
         if tag:
@@ -594,18 +558,15 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 logger.error(f"Error al obtener precio para tag {tag}: {e}")
                 precio_texto = "disponible bajo consulta"
 
-        # Construir mensaje de cierre
         nombre_producto = ""
         if tag:
             ontologia = cargar_ontologia()
             item = ontologia.get(tag, {})
             nombre_producto = item.get("nombre", "el producto")
 
-        # Resumen de la solución
         resumen = f"Resumen de su solución: {nombre_producto} con un costo aproximado de {precio_texto}."
         advertencia = "Le recuerdo que este precio no incluye instalación, mano de obra, servicios adicionales ni costos de envío."
 
-        # Preguntas de cierre
         preguntas = [
             f"{resumen} {advertencia}",
             "¿Cómo visualiza esta solución para su caso?",
@@ -613,17 +574,12 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             "Actualmente, ¿tiene un vendedor asignado? Si no es así, ¿le gustaría que uno de nuestro equipo lo contacte?"
         ]
 
-        # Añadir preguntas al historial de mensajes
         for pregunta in preguntas:
             messages.append(AIMessage(content=pregunta))
 
-        # Marcar cierre como realizado
         ctx["cierre_realizado"] = True
         return {"messages": messages, "contexto_tecnico": ctx}
 
-    # --------------------------------------------------------------------------
-    # NODO: ANEXAR CASO (SIN CAMBIOS)
-    # --------------------------------------------------------------------------
     @observe_node(node_name="anexar_caso_respuesta")
     async def anexar_caso_respuesta_node(state: AgentState, config: RunnableConfig):
         messages = state.get("messages", [])
@@ -651,7 +607,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         messages = state.get("messages", [])
         if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
             return "tools"
-        return "verificar_cierre"  # Cambio: después de generar respuesta, verificar cierre
+        return "verificar_cierre"
 
     graph_builder.add_edge(START, "clasificar_intencion_comercial")
     graph_builder.add_edge("clasificar_intencion_comercial", "validar_ubicacion_cliente")
