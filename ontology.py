@@ -19,7 +19,7 @@ Estándares aplicados:
   * Fiabilidad: maneja rutas alternativas (ONTOLOGY_JSON_PATH) y errores
     de lectura sin interrumpir el servicio.
 - ISO/IEC 29119:2022 (Pruebas de software - caja negra):
-  Las pruebas sugeridas se describen en cada función.
+  Las pruebas sugeridas se describen en cada función 30jul2026.
 """
 
 import os
