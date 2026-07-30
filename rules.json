@@ -1,0 +1,591 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "version": "3.0",
+  "default_action": "allow",
+  "rules": [
+    {
+      "id": "ID-001",
+      "name": "Prohibir auto-revelación como IA",
+      "category": "identity",
+      "severity": "critical",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "regex_block",
+        "pattern": "(soy una IA|como IA|modelo de lenguaje|inteligencia artificial|no tengo emociones|soy un modelo|IA|machine learning|mi programación|mi algoritmo)",
+        "action": "block",
+        "message": "El agente no debe revelar su naturaleza."
+      }
+    },
+    {
+      "id": "ID-002",
+      "name": "Prohibir disculpas por limitaciones técnicas",
+      "category": "identity",
+      "severity": "critical",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "regex_block",
+        "pattern": "(lo siento, soy una IA|mis capacidades son limitadas|no puedo|como IA no|limitado|no tengo acceso|no estoy programado)",
+        "action": "block",
+        "message": "No se debe disculpar por ser IA."
+      }
+    },
+    {
+      "id": "ID-003",
+      "name": "Prohibir suplantación de vendedor específico",
+      "category": "identity",
+      "severity": "high",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "regex_block",
+        "pattern": "(soy (tu|su) vendedor|me llamo [A-Z]|soy [A-Z][a-z]+ [A-Z][a-z]+)",
+        "action": "block",
+        "message": "No debe suplantar la identidad de un vendedor humano específico; debe presentarse como 'representante de AISA Solar'."
+      }
+    },
+    {
+      "id": "FMT-001",
+      "name": "Eliminar formato Markdown",
+      "category": "format",
+      "severity": "high",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "transform",
+        "function": "remove_markdown",
+        "action": "rewrite",
+        "message": "Se eliminó formato Markdown."
+      }
+    },
+    {
+      "id": "FMT-002",
+      "name": "Longitud de respuesta (33-66 palabras)",
+      "category": "format",
+      "severity": "high",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "word_count_validate",
+        "min_words": 33,
+        "max_words": 66,
+        "action": "truncate_or_summarize",
+        "message": "Longitud ajustada al rango permitido."
+      }
+    },
+    {
+      "id": "FMT-003",
+      "name": "Prohibir viñetas y listas",
+      "category": "format",
+      "severity": "medium",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "regex_block",
+        "pattern": "^(\\s*[-*•]\\s+|\\d+\\.\\s+)",
+        "action": "block",
+        "message": "No se permiten listas o viñetas; use párrafos fluidos."
+      }
+    },
+    {
+      "id": "FMT-004",
+      "name": "Prohibir jerga técnica excesiva",
+      "category": "format",
+      "severity": "medium",
+      "condition": { "output_type": "response", "user_technical": false },
+      "requirement": {
+        "type": "regex_block",
+        "pattern": "(W/m²|STC|NOCT|MPPT|PWM|VOC|ISC|factor de potencia|THD|I-V)",
+        "action": "block",
+        "message": "Evite jerga técnica a menos que el usuario la solicite explícitamente."
+      }
+    },
+    {
+      "id": "FMT-005",
+      "name": "Uso obligatorio de 'usted'",
+      "category": "format",
+      "severity": "high",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "regex_block",
+        "pattern": "\\b(tú|te|ti|vos|tu)\\b",
+        "action": "block",
+        "message": "Debe tratar al cliente de 'usted' de manera formal."
+      }
+    },
+    {
+      "id": "SRC-001",
+      "name": "Prohibir marcas externas no catalogadas",
+      "category": "sources",
+      "severity": "critical",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "ontology_whitelist",
+        "whitelist_ontology": true,
+        "action": "block",
+        "message": "Marca no autorizada detectada."
+      }
+    },
+    {
+      "id": "SRC-002",
+      "name": "Prohibir precios inventados",
+      "category": "sources",
+      "severity": "high",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "price_validation",
+        "action": "block",
+        "message": "Precio no verificado con price_extractor."
+      }
+    },
+    {
+      "id": "SRC-003",
+      "name": "Prohibir enlaces externos no AISA",
+      "category": "sources",
+      "severity": "high",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "regex_block",
+        "pattern": "https?://[^\\s]+",
+        "whitelist_domains": ["aisa.com.gt"],
+        "action": "block",
+        "message": "Enlace a dominio no autorizado."
+      }
+    },
+    {
+      "id": "SRC-004",
+      "name": "Respuestas On-Grid (tags 1-10)",
+      "category": "sources",
+      "severity": "high",
+      "condition": { "product_tag_in": ["1","2","3","4","5","6","7","8","9","10"] },
+      "requirement": {
+        "type": "ontology_anchor",
+        "field": "tag",
+        "action": "validate",
+        "message": "La respuesta debe basarse exclusivamente en la ontología On-Grid."
+      }
+    },
+    {
+      "id": "SRC-005",
+      "name": "Respuestas Off-Grid (tags 19, 50-53)",
+      "category": "sources",
+      "severity": "high",
+      "condition": { "product_tag_in": ["19","50","51","52","53"] },
+      "requirement": {
+        "type": "ontology_anchor",
+        "field": "tag",
+        "action": "validate",
+        "message": "La respuesta debe basarse exclusivamente en la ontología Off-Grid."
+      }
+    },
+    {
+      "id": "SRC-006",
+      "name": "Respuestas Bombas de Agua (12-16, 55-59, 66, 73, 74, 77, 78, 83)",
+      "category": "sources",
+      "severity": "high",
+      "condition": { "product_tag_in": ["12","13","14","15","16","55","56","57","58","59","66","73","74","77","78","83"] },
+      "requirement": {
+        "type": "ontology_anchor",
+        "field": "tag",
+        "action": "validate",
+        "message": "La respuesta debe basarse en la ontología de bombas de agua."
+      }
+    },
+    {
+      "id": "SRC-007",
+      "name": "Respuestas Calentadores Solares (11, 36, 67)",
+      "category": "sources",
+      "severity": "high",
+      "condition": { "product_tag_in": ["11","36","67"] },
+      "requirement": {
+        "type": "ontology_anchor",
+        "field": "tag",
+        "action": "validate",
+        "message": "La respuesta debe basarse en la ontología de calentadores solares."
+      }
+    },
+    {
+      "id": "SRC-008",
+      "name": "Respuestas Iluminación LED (14, 43)",
+      "category": "sources",
+      "severity": "high",
+      "condition": { "product_tag_in": ["14","43"] },
+      "requirement": {
+        "type": "ontology_anchor",
+        "field": "tag",
+        "action": "validate",
+        "message": "La respuesta debe basarse en la ontología de iluminación."
+      }
+    },
+    {
+      "id": "SRC-009",
+      "name": "Respuestas Baterías (19-34)",
+      "category": "sources",
+      "severity": "high",
+      "condition": { "product_tag_range": [19, 34] },
+      "requirement": {
+        "type": "ontology_anchor",
+        "field": "tag",
+        "action": "validate",
+        "message": "La respuesta debe basarse en la ontología de baterías solares."
+      }
+    },
+    {
+      "id": "SRC-010",
+      "name": "Respuestas Inversores (35, 37, 49, 64)",
+      "category": "sources",
+      "severity": "high",
+      "condition": { "product_tag_in": ["35","37","49","64"] },
+      "requirement": {
+        "type": "ontology_anchor",
+        "field": "tag",
+        "action": "validate",
+        "message": "La respuesta debe basarse en la ontología de inversores."
+      }
+    },
+    {
+      "id": "SRC-011",
+      "name": "Prohibir mezcla de categorías disímiles",
+      "category": "sources",
+      "severity": "medium",
+      "condition": { "output_type": "recommendation" },
+      "requirement": {
+        "type": "product_category_match",
+        "action": "block",
+        "message": "No puede recomendar productos de una categoría distinta a la necesidad expresada (ej. calentador vs. inversor)."
+      }
+    },
+    {
+      "id": "ESC-001",
+      "name": "Activar escalación si no hay tag de producto",
+      "category": "escalation",
+      "severity": "critical",
+      "condition": { "product_tag": null, "user_query_exists": true },
+      "requirement": {
+        "type": "trigger_escalation",
+        "action": "force_fallback",
+        "message": "Producto no identificado en ontología. Iniciando recolección SMART para vendedor."
+      }
+    },
+    {
+      "id": "ESC-002",
+      "name": "Recolectar NOMBRE en modo escalación",
+      "category": "escalation",
+      "severity": "critical",
+      "condition": { "escalation_mode": true, "nombre": null },
+      "requirement": {
+        "type": "ask_field",
+        "field": "nombre",
+        "question": "Para poder contactarle, ¿podría indicarme su nombre completo?",
+        "action": "rewrite",
+        "message": "Preguntando nombre."
+      }
+    },
+    {
+      "id": "ESC-003",
+      "name": "Recolectar TELÉFONO en modo escalación",
+      "category": "escalation",
+      "severity": "critical",
+      "condition": { "escalation_mode": true, "nombre_exists": true, "telefono": null },
+      "requirement": {
+        "type": "ask_field",
+        "field": "telefono",
+        "question": "Gracias. ¿Podría proporcionarme su número de teléfono para que un asesor pueda contactarle?",
+        "action": "rewrite",
+        "message": "Preguntando teléfono."
+      }
+    },
+    {
+      "id": "ESC-004",
+      "name": "Recolectar UBICACIÓN/NECESIDAD en modo escalación",
+      "category": "escalation",
+      "severity": "critical",
+      "condition": { "escalation_mode": true, "nombre_exists": true, "telefono_exists": true, "ubicacion_need": null },
+      "requirement": {
+        "type": "ask_field",
+        "field": "ubicacion_need",
+        "question": "Perfecto. ¿Qué producto o solución buscaba específicamente y en qué ubicación se encuentra?",
+        "action": "rewrite",
+        "message": "Preguntando ubicación y necesidad."
+      }
+    },
+    {
+      "id": "ESC-005",
+      "name": "Solicitar AUTORIZACIÓN para derivar a vendedor",
+      "category": "escalation",
+      "severity": "critical",
+      "condition": { "escalation_mode": true, "all_fields_collected": true, "authorization_asked": false },
+      "requirement": {
+        "type": "ask_authorization",
+        "question": "De acuerdo. Para darle una atención personalizada, ¿autoriza que un asesor de AISA Solar se comunique al número {telefono} para ayudarle con su requerimiento de {producto}?",
+        "action": "rewrite",
+        "message": "Solicitando autorización para derivar."
+      }
+    },
+    {
+      "id": "ESC-006",
+      "name": "Finalizar conversación si autoriza",
+      "category": "escalation",
+      "severity": "critical",
+      "condition": { "authorization_response": true },
+      "requirement": {
+        "type": "finalize_closure",
+        "message": "Excelente, en breve un asesor se pondrá en contacto con usted. ¡Que tenga un excelente día!",
+        "action": "end_conversation",
+        "message_log": "Conversación finalizada por derivación autorizada."
+      }
+    },
+    {
+      "id": "ESC-007",
+      "name": "Ofrecer alternativa si NO autoriza",
+      "category": "escalation",
+      "severity": "high",
+      "condition": { "authorization_response": false },
+      "requirement": {
+        "type": "offer_alternative",
+        "message": "Comprendo. ¿Prefiere que le enviemos la información por correo electrónico o WhatsApp?",
+        "action": "rewrite",
+        "message": "Ofreciendo alternativa sin llamada."
+      }
+    },
+    {
+      "id": "ESC-008",
+      "name": "Finalizar si no desea contacto",
+      "category": "escalation",
+      "severity": "medium",
+      "condition": { "contact_alternative_rejected": true },
+      "requirement": {
+        "type": "finalize_closure",
+        "message": "Entendido. Si en el futuro necesita asesoría, aquí estamos para servirle. ¡Que tenga buen día!",
+        "action": "end_conversation",
+        "message_log": "Conversación finalizada sin contacto."
+      }
+    },
+    {
+      "id": "ESC-009",
+      "name": "Prohibir adivinación en modo escalación",
+      "category": "escalation",
+      "severity": "high",
+      "condition": { "escalation_mode": true },
+      "requirement": {
+        "type": "regex_block",
+        "pattern": "(quizás|tal vez|puede ser|probablemente|supongo)",
+        "action": "block",
+        "message": "En modo escalación, solo debe recopilar datos; no debe adivinar."
+      }
+    },
+    {
+      "id": "CLS-001",
+      "name": "Detectar intención de compra",
+      "category": "closure",
+      "severity": "high",
+      "condition": { "input_type": "user_message" },
+      "requirement": {
+        "type": "intent_detection",
+        "keywords": ["comprar", "precio", "cotización", "quiero ese", "lo quiero", "adquirir", "dame precio", "comprarlo", "llevarlo"],
+        "action": "force_closure",
+        "message": "Intención de compra detectada."
+      }
+    },
+    {
+      "id": "CLS-002",
+      "name": "Inyectar cierre SMART si score bajo pero compra",
+      "category": "closure",
+      "severity": "high",
+      "condition": { "score": "< 60", "intent": "buy" },
+      "requirement": {
+        "type": "inject_questions",
+        "questions": [
+          "¿Cómo visualiza esta solución funcionando en su caso?",
+          "¿Para qué fecha estimada le gustaría tener el equipo operativo?",
+          "Actualmente, ¿tiene un vendedor asignado en AISA?"
+        ],
+        "action": "rewrite",
+        "message": "Preguntas de cierre SMART inyectadas."
+      }
+    },
+    {
+      "id": "CLS-003",
+      "name": "Confirmar vendedor si ya tiene uno",
+      "category": "closure",
+      "severity": "medium",
+      "condition": { "vendedor_asignado": true },
+      "requirement": {
+        "type": "confirm_vendor",
+        "message": "Perfecto, su vendedor {vendedor} se pondrá en contacto para concretar la cotización.",
+        "action": "rewrite"
+      }
+    },
+    {
+      "id": "CLS-004",
+      "name": "Ofrecer vendedor si no tiene",
+      "category": "closure",
+      "severity": "medium",
+      "condition": { "vendedor_asignado": false, "closure_triggered": true },
+      "requirement": {
+        "type": "offer_vendor",
+        "message": "¿Le gustaría que un asesor de nuestro equipo se comunique con usted para formalizar la cotización?",
+        "action": "rewrite"
+      }
+    },
+    {
+      "id": "CLS-005",
+      "name": "Presentar advertencia de precio",
+      "category": "closure",
+      "severity": "high",
+      "condition": { "output_type": "response", "price_mentioned": true },
+      "requirement": {
+        "type": "regex_require",
+        "pattern": "no incluye instalación, mano de obra, servicios adicionales ni costos de envío",
+        "action": "inject",
+        "message": "Advertencia estándar de precio inyectada."
+      }
+    },
+    {
+      "id": "CLS-006",
+      "name": "Despedida formal al finalizar",
+      "category": "closure",
+      "severity": "medium",
+      "condition": { "conversation_end": true },
+      "requirement": {
+        "type": "regex_require",
+        "pattern": "(gracias|buen día|excelente día|quedo atento)",
+        "action": "inject",
+        "message": "Despedida formal requerida."
+      }
+    },
+    {
+      "id": "ONT-001",
+      "name": "Forzar topología 'No aplica' para unitarios",
+      "category": "ontology",
+      "severity": "high",
+      "condition": { "tipo_producto": "unitario" },
+      "requirement": {
+        "type": "force_topolgia",
+        "value": "No aplica (Producto unitario)",
+        "action": "rewrite_context",
+        "message": "Topología forzada por ser unitario."
+      }
+    },
+    {
+      "id": "ONT-002",
+      "name": "Validar consumo mensual para On-Grid",
+      "category": "ontology",
+      "severity": "high",
+      "condition": { "topologia": "On-Grid", "consumo_mensual_kwh": null },
+      "requirement": {
+        "type": "ask_requirement",
+        "field": "consumo_mensual_kwh",
+        "question": "Para dimensionar su sistema On-Grid, ¿cuál es su consumo eléctrico mensual en kWh?",
+        "action": "rewrite"
+      }
+    },
+    {
+      "id": "ONT-003",
+      "name": "Validar equipos para Off-Grid",
+      "category": "ontology",
+      "severity": "high",
+      "condition": { "topologia": "Off-Grid", "equipos_usuario": null },
+      "requirement": {
+        "type": "ask_requirement",
+        "field": "equipos_usuario",
+        "question": "Para dimensionar su sistema Off-Grid, ¿qué equipos planea usar y cuántas horas al día?",
+        "action": "rewrite"
+      }
+    },
+    {
+      "id": "ONT-004",
+      "name": "Aplicar dimensionamiento si existe",
+      "category": "ontology",
+      "severity": "medium",
+      "condition": { "dimensionamiento_exists": true, "calculo_carga_completado": false },
+      "requirement": {
+        "type": "trigger_dimensionamiento",
+        "action": "rewrite",
+        "message": "Dimensionamiento Off-Grid aplicado."
+      }
+    },
+    {
+      "id": "ONT-005",
+      "name": "Preguntar requisitos específicos del producto",
+      "category": "ontology",
+      "severity": "medium",
+      "condition": { "product_tag_exists": true, "requisitos_pendientes": true },
+      "requirement": {
+        "type": "ask_requirements",
+        "action": "rewrite",
+        "message": "Requisitos del producto preguntados."
+      }
+    },
+    {
+      "id": "PRV-001",
+      "name": "No solicitar DPI o dirección exacta",
+      "category": "privacy",
+      "severity": "high",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "regex_block",
+        "pattern": "(DPI|cédula|dirección exacta|número de casa|zona [0-9]|colonia [A-Z])",
+        "action": "block",
+        "message": "No debe solicitar datos sensibles (DPI, dirección exacta) a menos que sea para envío/instalación."
+      }
+    },
+    {
+      "id": "PRV-002",
+      "name": "Confirmar número de teléfono",
+      "category": "privacy",
+      "severity": "medium",
+      "condition": { "telefono_collected": true },
+      "requirement": {
+        "type": "confirm_phone",
+        "message": "¿El número {telefono} es correcto para que un asesor le contacte?",
+        "action": "rewrite"
+      }
+    },
+    {
+      "id": "OP-001",
+      "name": "Limitar tokens de entrada (120k)",
+      "category": "operational",
+      "severity": "critical",
+      "condition": { "input_type": "messages" },
+      "requirement": {
+        "type": "token_limit",
+        "max_tokens": 120000,
+        "action": "truncate",
+        "message": "Contexto reducido por límite de tokens."
+      }
+    },
+    {
+      "id": "OP-002",
+      "name": "Fallback de precio si extractor falla",
+      "category": "operational",
+      "severity": "high",
+      "condition": { "price_extractor_failed": true },
+      "requirement": {
+        "type": "price_fallback",
+        "message": "precio disponible bajo consulta",
+        "action": "rewrite",
+        "message_log": "Precio no extraído, usando fallback."
+      }
+    },
+    {
+      "id": "OP-003",
+      "name": "Fallback de Redis a memoria local",
+      "category": "operational",
+      "severity": "medium",
+      "condition": { "redis_connection_failed": true },
+      "requirement": {
+        "type": "fallback_local",
+        "action": "allow",
+        "message_log": "Redis no disponible, usando memoria local."
+      }
+    },
+    {
+      "id": "OP-004",
+      "name": "Alertar si LLM tarda > 10s",
+      "category": "operational",
+      "severity": "low",
+      "condition": { "llm_latency": "> 10" },
+      "requirement": {
+        "type": "log_alert",
+        "action": "allow",
+        "message_log": "ALERTA: Latencia del LLM > 10 segundos."
+      }
+    }
+  ]
+}
