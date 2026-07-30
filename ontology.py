@@ -694,3 +694,62 @@ def dimensionar_sistema_offgrid(
 
     logger.info(f"Dimensionamiento Off‑Grid para tag '{tag}': {num_paneles} paneles, {num_baterias} baterías, inversor {potencia_inversor_w}W")
     return resultado
+
+
+# =============================================================================
+# FUNCIÓN AGREGADA EXCLUSIVAMENTE PARA RESOLVER EL ImportError
+# (NO SE ELIMINÓ NADA; ESTA FUNCIÓN ES LA ÚNICA ADICIÓN)
+# =============================================================================
+def get_precio_by_tag(tag: str) -> Optional[Dict]:
+    """
+    Obtiene el precio dinámico desde la URL del producto identificado por 'tag'.
+    Retorna un dict con 'precio' (float) y 'moneda' (str), o None si no se puede extraer.
+
+    Esta función fue añadida específicamente para resolver el error:
+    ImportError: cannot import name 'get_precio_by_tag' from 'ontology'
+    que impedía el arranque del servicio jarvi-backend-production.
+
+    Parámetros:
+        tag (str): clave numérica del producto (ej. '1', '19').
+
+    Retorna:
+        Optional[Dict]: {'precio': float, 'moneda': str} o None.
+
+    Prueba de caja negra (ISO/IEC 29119):
+        1. tag='1' (On-Grid con URL válida): retorna precio > 0.
+        2. tag='999' (inexistente): retorna None.
+        3. tag='12' (tuberías sin precio): retorna None.
+        4. URL inaccesible: retorna None y registra error.
+    """
+    ontologia = cargar_ontologia()
+    item = ontologia.get(tag)
+    if not item:
+        logger.warning(f"Tag '{tag}' no encontrado en la ontología para extraer precio.")
+        return None
+
+    url = item.get("url")
+    if not url:
+        logger.warning(f"Tag '{tag}' no tiene URL definida para extraer precio.")
+        return None
+
+    try:
+        from price_extractor import extract_price_from_url
+        precio = extract_price_from_url(url)
+        if precio is not None and precio > 0:
+            logger.info(f"Precio extraído exitosamente para tag {tag}: {precio} GTQ")
+            return {"precio": precio, "moneda": item.get("moneda", "GTQ")}
+        else:
+            logger.warning(f"No se pudo extraer precio de {url} para tag {tag}")
+            return None
+    except Exception as e:
+        logger.error(f"Error al extraer precio para tag {tag} desde {url}: {e}")
+        return None
+
+
+if __name__ == "__main__":
+    # Prueba simple de carga (opcional)
+    try:
+        data = cargar_ontologia()
+        print(f"Ontología cargada: {len(data)} categorías.")
+    except Exception as e:
+        print(f"Error: {e}")
