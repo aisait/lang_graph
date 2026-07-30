@@ -440,6 +440,10 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
             ultimo_aimessage = msg
             break
 
+    # ===== LIMPIAR RESPUESTA (ELIMINAR *, #, FORMATOS MARKDOWN) =====
+    from text_normalizer import limpiar_respuesta_final  # <--- NUEVA
+    respuesta_final = limpiar_respuesta_final(respuesta_final)  # <--- NUEVA
+
     # ===== ACTUALIZAR SESIÓN EN REDIS CON EL NUEVO CONTEXTO =====
     sesion["contexto_tecnico"] = ctx
     await guardar_sesion_redis(redis_client, chat_id, sesion)
