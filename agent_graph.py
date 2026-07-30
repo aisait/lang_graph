@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.3.1 – Unificación de tipo de productos_interes (lista de dicts).
+VERSIÓN 2.4.0 – Integración del Supervisor Determinista.
 30JUL2026.
 """
 import os
@@ -40,8 +40,19 @@ from telemetry import trace_id_var, span_id_var, schedule_telemetry_event
 from ubicacion import buscar_ubicacion
 from prompt_manager import get_prompt
 
+# =============================================================================
+# IMPORTACIÓN DEL SUPERVISOR
+# =============================================================================
+from supervisor_jarvi import SupervisorJarvi
+
 logger = logging.getLogger(__name__)
 from config import settings
+
+# =============================================================================
+# INSTANCIA DEL SUPERVISOR (se crea una única vez)
+# =============================================================================
+_supervisor = SupervisorJarvi(rules_path="rules.json")
+logger.info("SupervisorJarvi inicializado con 45 reglas")
 
 # =============================================================================
 # CONFIGURACIÓN DE API KEY
@@ -53,7 +64,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.3.1"}
+        default_headers={"User-Agent": "JARVI/2.4.0"}
     )
 
 # =============================================================================
@@ -136,6 +147,9 @@ class InferenciaEnergetica(TypedDict):
     score_actual: Optional[float]
     cierre_realizado: Optional[bool]
     iteraciones_sin_cambio: Optional[int]
+    escalation_mode: Optional[bool]
+    authorization_asked: Optional[bool]
+    conversation_end: Optional[bool]
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -365,7 +379,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 3: SELECCIÓN DE PRODUCTOS
+    # NODO 3: SELECCIÓN DE PRODUCTOS (CON SUPERVISIÓN)
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Selección de Productos", criticidad="ALTA")
     @observe_node(node_name="seleccionar_productos")
@@ -403,6 +417,17 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             else:
                 ctx["topologia"] = "No aplica (Producto unitario)"
                 ctx["tipo_producto"] = "unitario"
+
+            # ===== APLICAR SUPERVISIÓN ONTOLÓGICA (regla ONT-001) =====
+            eval_data = {
+                "contexto": ctx,
+                "tipo_producto": ctx.get("tipo_producto"),
+                "product_tag": ctx.get("product_tag")
+            }
+            evaluacion = _supervisor.evaluate(eval_data)
+            if evaluacion["decision"] == "rewrite_context":
+                ctx.update(evaluacion.get("modified_context", {}))
+                logger.info(f"Supervisor aplicó regla {evaluacion['rule_id']} en selección de productos")
 
             if not ctx.get("checklist_universal"):
                 ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
@@ -449,7 +474,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 5: GENERAR RESPUESTA COMERCIAL (CON UNIFICACIÓN DE productos_interes)
+    # NODO 5: GENERAR RESPUESTA COMERCIAL (CON SUPERVISIÓN)
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Generación de Respuesta Comercial", criticidad="ALTA")
     @observe_node(node_name="generar_respuesta_comercial")
@@ -501,7 +526,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 tipo=ctx["tipo_producto"],
                 max_items=5
             )
-            # Asegurar que sea lista de dicts
             ctx["productos_interes"] = normalizar_productos_interes(productos)
 
         # Inicializar checklist
@@ -564,7 +588,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         config["metadata"]["topologia"] = ctx.get("topologia", "Desconocida")
         if ctx.get("tipo_producto"):
             config["metadata"]["tipo_producto"] = ctx["tipo_producto"]
-        # Normalizar productos_interes para metadata
         productos_normalizados = normalizar_productos_interes(ctx.get("productos_interes", []))
         config["metadata"]["productos_tags"] = [p.get("tag") for p in productos_normalizados if p.get("tag")]
 
@@ -600,11 +623,55 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         )
         prompt_sistema = SystemMessage(content=prompt_content)
 
-        respuesta = await llm.ainvoke([prompt_sistema] + state["messages"], config=config)
+        # Limitar contexto a últimos 10 mensajes para evitar exceder tokens (regla OP-001)
+        messages_limit = state["messages"][-10:] if len(state["messages"]) > 10 else state["messages"]
+        respuesta = await llm.ainvoke([prompt_sistema] + messages_limit, config=config)
+
+        # ===== APLICAR SUPERVISIÓN A LA RESPUESTA GENERADA =====
+        respuesta_final = respuesta.content
+        eval_data = {
+            "response": respuesta_final,
+            "contexto": ctx,
+            "messages": state["messages"],
+            "output_type": "response",
+            "user_message": ultimo_mensaje,
+            "price_extractor_failed": False  # Se puede mejorar con detección real
+        }
+        evaluacion = _supervisor.evaluate(eval_data)
+
+        if evaluacion["decision"] == "rewrite":
+            if evaluacion.get("modified_response"):
+                respuesta_final = evaluacion["modified_response"]
+                logger.info(f"Supervisor reescribió respuesta: {evaluacion['rule_id']}")
+        elif evaluacion["decision"] == "block":
+            respuesta_final = "Lo siento, no puedo proporcionar esa información. ¿Puedo ayudarle con otra cosa?"
+            logger.warning(f"Supervisor bloqueó respuesta: {evaluacion['rule_id']}")
+        elif evaluacion["decision"] == "rewrite_context":
+            if evaluacion.get("modified_context"):
+                ctx.update(evaluacion["modified_context"])
+                logger.info(f"Supervisor modificó contexto: {evaluacion['rule_id']}")
+        elif evaluacion["decision"] == "force_fallback":
+            ctx["escalation_mode"] = True
+            if evaluacion.get("modified_response"):
+                respuesta_final = evaluacion["modified_response"]
+            else:
+                respuesta_final = "Para poder ayudarle mejor, ¿podría indicarme su nombre y número de teléfono?"
+            logger.info(f"Supervisor activó modo escalación: {evaluacion['rule_id']}")
+        # Si se fuerza cierre, ya se inyectan preguntas en modified_response
+        elif evaluacion["decision"] == "force_closure":
+            if evaluacion.get("modified_response"):
+                respuesta_final = evaluacion["modified_response"]
+                logger.info(f"Supervisor forzó cierre: {evaluacion['rule_id']}")
+        elif evaluacion["decision"] == "end_conversation":
+            respuesta_final = evaluacion.get("modified_response", "Gracias por contactar a AISA Solar. ¡Que tenga un excelente día!")
+            ctx["conversation_end"] = True
+            logger.info(f"Supervisor finalizó conversación: {evaluacion['rule_id']}")
+
+        respuesta.content = respuesta_final
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 6: ACTUALIZAR CHECKLIST (CON UNIFICACIÓN DE productos_interes)
+    # NODO 6: ACTUALIZAR CHECKLIST
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Actualización Semántica de Checklist", criticidad="ALTA")
     @observe_node(node_name="actualizar_checklist")
@@ -690,12 +757,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if extraccion.tipo_producto and not ctx.get("tipo_producto"):
             ctx["tipo_producto"] = extraccion.tipo_producto
 
-        # Procesar productos_interes: convertir a lista de dicts
         if extraccion.productos_interes:
-            # Usar normalizar_productos_interes para convertir strings a dicts
             ctx["productos_interes"] = normalizar_productos_interes(extraccion.productos_interes)
 
-        # Actualizar checklist
         if not ctx.get("checklist_universal"):
             ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
         checklist = ctx["checklist_universal"]
