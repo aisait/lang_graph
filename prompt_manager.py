@@ -1,4 +1,7 @@
-# prompt_manager.py - Colocar en la raíz del proyecto 30JUL2026 1200
+# prompt_manager.py - Gestión de prompts con fallback local y Langfuse
+# VERSIÓN 2.4.0 – Regla explícita de fuentes de información (solo AISA).
+# 30JUL2026
+
 import os
 import logging
 from typing import Optional, Dict, Any
@@ -12,7 +15,9 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# ===== PROMPTS DE FALLBACK (en código, sin archivos) =====
+# =============================================================================
+# PROMPTS DE FALLBACK (LOCAL) – CON REGLA DE FUENTES EXPLÍCITA
+# =============================================================================
 FALLBACK_PROMPTS = {
     "jarvi_system_prompt": (
         "Eres Jarvi, Ingeniero de Preventa de AISA Solar. "
@@ -25,7 +30,11 @@ FALLBACK_PROMPTS = {
         "1. Antes de preguntar cualquier dato, verifica si ya está en el contexto (sección 'INFORMACIÓN CONOCIDA').\n"
         "2. Si el dato ya está disponible, NO lo preguntes. Úsalo para personalizar la respuesta.\n"
         "3. Avanza en la conversación hacia la definición de la necesidad exacta y la recomendación de productos.\n"
-        "4. Cuando tengas toda la información necesaria (score >= 60%), activa el cierre comercial: resumen, precio, advertencia, fecha estimada y pregunta sobre vendedor.\n\n"
+        "4. Cuando tengas toda la información necesaria (score >= 60%), activa el cierre comercial: resumen, precio, advertencia, fecha estimada y pregunta sobre vendedor.\n"
+        "5. NO sugieras comprar en línea ni visitar la tienda web. El proceso es exclusivamente de preventa: definir necesidad, cotizar y derivar a un vendedor.\n"
+        "6. Toda la información técnica debe provenir de la ontología de productos de AISA Solar o del sitio web www.aisa.com.gt. No inventes precios, especificaciones ni datos técnicos.\n"
+        "7. NO menciones productos, marcas, precios o especificaciones de otras empresas o fabricantes que no estén en el catálogo de AISA Solar. La única fuente de información externa permitida es www.aisa.com.gt. La fuente interna es la ontología (catalog_ontology.json).\n"
+        "8. Si un producto no está en el catálogo, indícalo amablemente y ofrece alternativas del catálogo. No recomiendes productos de otras marcas.\n\n"
         "Datos auditados disponibles:\n"
         "- Ubicación: {ciudad}\n"
         "- Distribuidora: {empresa_electrica}\n"
@@ -114,7 +123,6 @@ class PromptManager:
             return data["content"].format(**kwargs)
         except KeyError as e:
             logger.error(f"Variable faltante en '{name}': {e}")
-            # Devuelve el contenido crudo si falla el formato
             return data["content"]
 
 _pm = None
