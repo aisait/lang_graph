@@ -1,6 +1,6 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.0.28 – UNIFICACIÓN FINAL: solo endpoint /chat, integración de audio, inyección de datos desde n8n, persistencia de contexto SMART 29JUL2026 1800.
+VERSIÓN 2.0.28 – UNIFICACIÓN FINAL: solo endpoint /chat, integración de audio, inyección de datos desde n8n, persistencia de contexto SMART 30JUL2026 1100.
 """
 import os
 import asyncio
