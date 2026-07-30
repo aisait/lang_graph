@@ -1,7 +1,7 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.1.1 – Corrección de nodo verificar_cierre (siempre retorna contexto).
-29JUL2026.
+VERSIÓN 2.1.2 – Corrección definitiva del nodo verificar_cierre (nunca retorna {}).
+30JUL2026.
 """
 import os
 import time
@@ -57,7 +57,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.1.1"}
+        default_headers={"User-Agent": "JARVI/2.1.2"}
     )
 
 # =============================================================================
@@ -204,7 +204,7 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA DE ENVÍO A N8N (CORREGIDA CON DOCSTRING Y ORDEN DE DECORADORES)
+# HERRAMIENTA DE ENVÍO A N8N (CON DOCSTRING)
 # =============================================================================
 @tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
@@ -533,29 +533,30 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
     # =========================================================================
-    # NODO: VERIFICAR CIERRE (CORREGIDO - SIEMPRE RETORNA CONTEXTO)
+    # NODO: VERIFICAR CIERRE (VERSIÓN DEFINITIVA – NUNCA RETORNA {})
     # =========================================================================
     @auditar_fase(nombre_fase="Verificación de Cierre Comercial", criticidad="ALTA")
     @observe_node(node_name="verificar_cierre")
     async def verificar_cierre_node(state: AgentState, config: RunnableConfig):
         """
         Nodo que evalúa el score de completitud y, si es ≥ 60%, activa el flujo de cierre SMART.
-        En caso contrario, no modifica el estado (pero devuelve el contexto actual para cumplir
-        con el contrato del grafo de LangGraph, evitando el error 'Expected node ... to update').
+        Siempre retorna al menos 'contexto_tecnico' para satisfacer el contrato de LangGraph.
         """
         ctx = dict(state.get("contexto_tecnico") or {})
         score = ctx.get("score_actual", 0.0)
         messages = state.get("messages", [])
 
-        # Si el score es bajo, devolver el contexto sin cambios (pero siempre actualizar)
+        # Caso 1: Score bajo → no se activa cierre, pero se devuelve contexto
         if score < 60.0:
+            logger.debug(f"Score {score} < 60, no se activa cierre.")
             return {"contexto_tecnico": ctx}
 
-        # Si el cierre ya se realizó, devolver el contexto sin cambios
+        # Caso 2: Cierre ya realizado → no repetir
         if ctx.get("cierre_realizado"):
+            logger.debug("Cierre ya realizado, omitiendo.")
             return {"contexto_tecnico": ctx}
 
-        # --- Lógica de cierre SMART (solo si score >= 60% y no realizado) ---
+        # --- Caso 3: Ejecutar cierre SMART ---
         precio_texto = ""
         tag = ctx.get("product_tag")
         if tag:
@@ -592,7 +593,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         ctx["cierre_realizado"] = True
 
-        # Retornar ambos campos actualizados (mensajes y contexto)
+        # Retornar ambos campos actualizados (siempre mensajes y contexto)
         return {
             "messages": messages,
             "contexto_tecnico": ctx
