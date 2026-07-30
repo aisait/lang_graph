@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.1.0 – Checklist Universal, Cierre SMART, Diagnóstico Ontológico y Cálculo Off‑Grid 29JUL2026.
+VERSIÓN 2.1.0 – Checklist Universal, Cierre SMART, Diagnóstico Ontológico y Cálculo Off‑Grid 30JUL2026.
 """
 import os
 import time
