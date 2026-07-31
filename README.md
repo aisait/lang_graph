@@ -6,7 +6,7 @@
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115.0-green)
 ![LangGraph](https://img.shields.io/badge/LangGraph-0.2.56-purple)
-![Langfuse](https://img.shields.io/badge/Langfuse-v3.224.2-OSS-orange)
+![Langfuse](https://img.shields.io/badge/Langfuse-3.224.2-orange)
 ![ISO](https://img.shields.io/badge/ISO-25010%20%7C%2027001%20%7C%2029119-blue)
 ![CTFOM](https://img.shields.io/badge/CTFOM-telemetry-orange)
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-1.33.1-lightgrey)
