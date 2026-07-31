@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.5.2 – Incluye base académica y detección de consultas sobre metodología.
+VERSIÓN 2.5.3 – Eliminación de @auditar_fase en herramienta (corrige NameError).
 31JUL2026.
 """
 import os
@@ -111,7 +111,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.5.2"}
+        default_headers={"User-Agent": "JARVI/2.5.3"}
     )
 
 # =============================================================================
@@ -300,9 +300,8 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA DE ENVÍO A N8N (CORREGIDA: @auditar_fase ANTES DE @tool)
+# HERRAMIENTA DE ENVÍO A N8N (SIN @auditar_fase PARA EVITAR COLISIÓN)
 # =============================================================================
-@auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
 @tool
 async def procesar_oportunidad_backend(
     nombre_apellidos: str,
@@ -318,28 +317,41 @@ async def procesar_oportunidad_backend(
     Envía los datos del proyecto al backend de oportunidades (N8N) para su gestión comercial.
     Esta herramienta es invocada por el agente cuando el usuario ha definido claramente su necesidad.
     """
-    nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
-    endpoint = os.getenv("N8N_WEBHOOK_URL", "")
-    if not endpoint:
-        logger.warning("N8N_WEBHOOK_URL no configurado. Lead no enviado.")
-        return "No se pudo enviar el lead: webhook no configurado."
-    num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
-    payload = {
-        "nombre": nombre_norm,
-        "whatsapp": num_limpio,
-        "ubicacion": departamento_municipio,
-        "consumo": consumo_actual,
-        "empresa_electrica": empresa_electrica,
-        "necesidad": definicion_necesidad,
-        "equipos": listado_equipos_html,
-        "resumen": resumen_18_palabras
-    }
+    start_time = time.perf_counter()
     try:
+        nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
+        endpoint = os.getenv("N8N_WEBHOOK_URL", "")
+        if not endpoint:
+            logger.warning("N8N_WEBHOOK_URL no configurado. Lead no enviado.")
+            return "No se pudo enviar el lead: webhook no configurado."
+        num_limpio = ''.join(filter(str.isdigit, whatsapp_norm))
+        payload = {
+            "nombre": nombre_norm,
+            "whatsapp": num_limpio,
+            "ubicacion": departamento_municipio,
+            "consumo": consumo_actual,
+            "empresa_electrica": empresa_electrica,
+            "necesidad": definicion_necesidad,
+            "equipos": listado_equipos_html,
+            "resumen": resumen_18_palabras
+        }
         await asyncio.to_thread(requests.post, endpoint, json=payload, headers={"Content-Type": "application/json"}, timeout=15)
         logger.info(f"Lead enviado exitosamente a N8N para {whatsapp_norm}")
+        # Auditoría interna (reemplaza el decorador)
+        schedule_telemetry_event(
+            trace_id_var.get(), span_id_var.get(), "",
+            layer="tool", node_name="procesar_oportunidad_backend",
+            event_type="END", latency_ms=(time.perf_counter() - start_time) * 1000
+        )
         return f"Lead enviado a N8N. Contacto: {whatsapp_norm}."
     except Exception as e:
         logger.error(f"Fallo en envío a N8N: {e}")
+        schedule_telemetry_event(
+            trace_id_var.get(), span_id_var.get(), "",
+            layer="tool", node_name="procesar_oportunidad_backend",
+            event_type="ERROR", latency_ms=(time.perf_counter() - start_time) * 1000,
+            error_code=f"SWR-N8N-{type(e).__name__}"
+        )
         return f"Error al enviar lead: {str(e)}"
 
 # =============================================================================
@@ -525,7 +537,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
-        # --- DETECCIÓN DE CONSULTA ACADÉMICA (NUEVO) ---
+        # --- DETECCIÓN DE CONSULTA ACADÉMICA ---
         keywords_academic = [
             "base académica", "referencias apa", "fuente de información", "base académica",
             "metodología", "marco teórico", "fundamento científico", "bibliografía",
