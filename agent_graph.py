@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.5.6 – Corrección en rama rewrite para ofrecer MICDP.
+VERSIÓN 2.5.7 – Suspensión de reglas durante MICDP y detección de salida a asesor.
 31JUL2026.
 """
 import os
@@ -111,7 +111,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.5.6"}
+        default_headers={"User-Agent": "JARVI/2.5.7"}
     )
 
 # =============================================================================
@@ -199,6 +199,7 @@ class InferenciaEnergetica(TypedDict):
     derivation_offered: Optional[bool]
     micdp_accepted: Optional[bool]
     micdp_offered: Optional[bool]
+    micdp_active: Optional[bool]   # <-- NUEVO: indica que el MICDP está en curso
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -691,6 +692,18 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         respuesta = await llm.ainvoke([prompt_sistema] + messages_limit, config=config)
 
         respuesta_final = respuesta.content
+
+        # =========================================================================
+        # SI MICDP ESTÁ ACTIVO, SALTAR EL SUPERVISOR COMPLETAMENTE
+        # =========================================================================
+        if ctx.get("micdp_active", False):
+            logger.info("MICDP activo: saltando evaluación del supervisor para preservar integridad de la entrevista.")
+            respuesta.content = respuesta_final
+            return {"messages": [respuesta], "contexto_tecnico": ctx}
+
+        # =========================================================================
+        # DE LO CONTRARIO, APLICAR SUPERVISIÓN (FLUJO NORMAL)
+        # =========================================================================
         eval_data = {
             "response": respuesta_final,
             "contexto": ctx,
@@ -750,6 +763,10 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     async def actualizar_checklist_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         messages = state.get("messages", [])
+
+        # Si MICDP está activo, no actualizar checklist (para no interferir)
+        if ctx.get("micdp_active", False):
+            return {"contexto_tecnico": ctx}
 
         # =========================================================================
         # TRUNCAMIENTO DE HISTORIAL PARA EVITAR OVERFLOW DE CONTEXTO
@@ -870,12 +887,16 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 7: VERIFICAR CIERRE
+    # NODO 7: VERIFICAR CIERRE (SALTAR SI MICDP ACTIVO)
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Verificación de Cierre Comercial", criticidad="ALTA")
     @observe_node(node_name="verificar_cierre")
     async def verificar_cierre_node(state: AgentState, config: RunnableConfig):
         ctx = dict(state.get("contexto_tecnico") or {})
+        # Si MICDP está activo, no hacer cierre comercial
+        if ctx.get("micdp_active", False):
+            return {"contexto_tecnico": ctx}
+
         score = ctx.get("score_actual", 0.0)
         messages = state.get("messages", [])
 
@@ -929,7 +950,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         }
 
     # -------------------------------------------------------------------------
-    # NODO 8: ANEXAR CASO
+    # NODO 8: ANEXAR CASO (NO APLICA DURANTE MICDP)
     # -------------------------------------------------------------------------
     @observe_node(node_name="anexar_caso_respuesta")
     async def anexar_caso_respuesta_node(state: AgentState, config: RunnableConfig):
@@ -943,7 +964,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": messages}
 
     # =========================================================================
-    # NUEVO NODO 9: EJECUTAR ENTREVISTA (MICDP)
+    # NUEVO NODO 9: EJECUTAR ENTREVISTA (MICDP) CON DETECCIÓN DE SALIDA A ASESOR
     # =========================================================================
     @auditar_fase(nombre_fase="Ejecución de Entrevista MICDP", criticidad="ALTA")
     @observe_node(node_name="ejecutar_entrevista")
@@ -951,8 +972,26 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
         thread_id = config.get("configurable", {}).get("thread_id", "unknown")
+
+        # Detectar si el usuario pide asesor durante el MICDP
+        if ctx.get("micdp_active", False):
+            asesor_keywords = ["asesor", "vendedor", "llamada", "hablar con", "contactar", "humano", "ayuda real"]
+            if any(k in ultimo for k in asesor_keywords):
+                logger.info(f"Usuario solicita asesor durante MICDP, finalizando proceso.")
+                ctx["micdp_active"] = False
+                ctx["conversation_end"] = True
+                respuesta = "Entendido, derivaré su solicitud a un asesor especializado de AISA Solar. En breve se pondrá en contacto con usted. ¡Que tenga un excelente día!"
+                return {"messages": [AIMessage(content=respuesta)], "contexto_tecnico": ctx}
+
         if _epistemology is None:
             return {"messages": [AIMessage(content="Error: orquestador no inicializado.")]}
+
+        # Si no está activo, iniciar
+        if not ctx.get("micdp_active", False):
+            ctx["micdp_active"] = True
+            ctx["micdp_accepted"] = False
+            ctx["micdp_offered"] = False
+
         definition = await _epistemology.repo.get_definition(thread_id)
         if not definition:
             nombre = ctx.get("nombre", "Usuario")
@@ -961,15 +1000,17 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             if nombre:
                 await _epistemology.repo.update_state(thread_id, "IDENTIDAD", {"variables": {"nombre": nombre}})
             return {"messages": [AIMessage(content=welcome)], "contexto_tecnico": ctx}
+
         result = await _epistemology.process_message(thread_id, ultimo)
         action = result.get("action", "question")
         response = result.get("response", "Continuemos.")
         if action == "completed" or action == "handoff":
             ctx["conversation_end"] = True
+            ctx["micdp_active"] = False
         return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
 
     # =========================================================================
-    # CONDICIÓN DE BORDE (con MICDP) – MODIFICADA PARA DETECTAR INTENCIÓN EXPLÍCITA
+    # CONDICIÓN DE BORDE (con MICDP)
     # =========================================================================
     def my_tools_condition(state: AgentState):
         messages = state.get("messages", [])
@@ -977,6 +1018,10 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             return "tools"
         ctx = state.get("contexto_tecnico", {})
         ultimo = extraer_intencion_humana(messages)
+
+        # Si MICDP está activo, siempre ir a ejecutar_entrevista
+        if ctx.get("micdp_active", False):
+            return "ejecutar_entrevista"
 
         # Detectar intención explícita de MICDP
         micdp_keywords = [
