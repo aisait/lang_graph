@@ -371,16 +371,17 @@ Bienvenido(a) al Proceso Conversacional para la Definición de Proyectos.
 
 Este espacio forma parte de una investigación académica orientada al desarrollo de un modelo inteligente para identificar necesidades y apoyar la formulación conceptual de proyectos relacionados con:
 
-- Energías renovables.
-- Sistemas fotovoltaicos.
-- Refrigeración industrial y doméstica.
-- Cadena de frío.
-- Bombeo de agua.
-- Eficiencia energética.
-- Procesos industriales.
-- Soluciones tecnológicas para hogares, comercios e industrias.
 
-Su participación es voluntaria y tiene fines exclusivamente académicos, científicos y educativos.
+✅ Energías renovables.
+✅ Sistemas fotovoltaicos.
+✅ Refrigeración industrial y doméstica.
+✅ Cadena de frío.
+✅ Bombeo de agua.
+✅ Eficiencia energética.
+✅ Procesos industriales.
+✅ Soluciones tecnológicas para hogares, comercios e industrias.
+
+Su participación es voluntaria y tiene fines exclusivamente académicos, científicos y de investigación de necesidades.
 
 Durante la conversación, le realizaré preguntas de forma natural para comprender su contexto, sus necesidades, sus objetivos y las condiciones técnicas de su proyecto. No existe un cuestionario fijo; la conversación se adapta a la información que usted proporciona.
 
