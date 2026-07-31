@@ -1,6 +1,6 @@
 """
 config.py - Configuración central con mapeo explícito de variables de entorno.
-VERSIÓN 2.0.18 – Centralizados project_id y release.
+VERSIÓN 2.0.19 – Centralizados project_id, release y constantes MICDP.
 """
 import os
 from dotenv import load_dotenv
@@ -25,13 +25,13 @@ class Settings(BaseSettings):
                 return key
         return os.getenv("OPENAI_API_KEY", "")
 
-    # Langfuse (Asegurar que están definidas)
+    # Langfuse
     langfuse_public_key: str = Field(default="", env="LANGFUSE_PUBLIC_KEY")
     langfuse_secret_key: str = Field(default="", env="LANGFUSE_SECRET_KEY")
     langfuse_host: str = Field(default="https://cloud.langfuse.com", env="LANGFUSE_HOST")
     langfuse_tracing_environment: str = Field(default="production", env="LANGFUSE_TRACING_ENVIRONMENT")
     langfuse_project_id: str = Field(default="", env="LANGFUSE_PROJECT_ID")
-    release_version: str = Field(default="jarvi-2.0.18", env="RELEASE_VERSION")
+    release_version: str = Field(default="jarvi-2.0.19", env="RELEASE_VERSION")
 
     # Bases de datos
     ctfom_database_url: str = Field(default="", env="CTFOM_DATABASE_URL")
@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="", env="REDIS_URL")
     redis_ttl: int = Field(default=604800, env="REDIS_TTL")
 
-    # Odoo (si se usa)
+    # Odoo
     odoo_host: str = Field(default="34.75.123.223", env="ODOO_HOST")
     odoo_db: str = Field(default="aisa_prod", env="ODOO_DB")
     odoo_user: str = Field(default="agente_n8n", env="ODOO_USER")
@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     odoo_product_model: str = Field(default="product.template", env="ODOO_PRODUCT_MODEL")
     odoo_ongrid_domain: str = Field(default='[["sale_ok","=",True],["type","=","product"]]', env="ODOO_ONGRID_DOMAIN")
 
-    # Webhook de salida
+    # Webhook
     n8n_webhook_url: str = Field(default="", env="N8N_WEBHOOK_URL")
 
     # URLs públicas
@@ -62,3 +62,10 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 settings = Settings()
+
+# =============================================================================
+# CONSTANTES PARA MICDP
+# =============================================================================
+MICDP_DIMENSIONS = ["IDENTIDAD", "PROBLEMA", "TECNICA", "COMPORTAMIENTO", "VIABILIDAD", "SINTESIS"]
+MICDP_WEIGHTS = {"IDENTIDAD": 0.05, "PROBLEMA": 0.10, "TECNICA": 0.25, "COMPORTAMIENTO": 0.25, "VIABILIDAD": 0.15, "SINTESIS": 0.20}
+MICDP_THRESHOLDS = {"IDENTIDAD": 0.85, "PROBLEMA": 0.80, "TECNICA": 0.90, "COMPORTAMIENTO": 0.85, "VIABILIDAD": 0.80, "SINTESIS": 0.95}
