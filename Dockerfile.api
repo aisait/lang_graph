@@ -1,33 +1,27 @@
 # =============================================================================
-# JARVI 2.0.23 | Dockerfile.api – Ingestion API
+# Dockerfile - JARVI 2.0 API (con MICDP)
 # =============================================================================
-ARG CACHE_BUST=20260728_INGESTION_FINAL
-
 FROM python:3.11-slim
 
+# Actualizar e instalar dependencias del sistema (si es necesario)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libstdc++6 \
-    libgcc-s1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-RUN echo "Cache bust version: ${CACHE_BUST}"
-
+# Copiar requirements primero para aprovechar caché
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-RUN python -c "import asyncpg, redis, openai, requests; print('✅ Dependencias OK')"
-
+# Copiar todo el código
 COPY . .
 
-RUN rm -f /app/api.py /app/api_server.py /app/api_buffer.py 2>/dev/null || true
-RUN find . -type d -name __pycache__ -exec rm -rf {} + || true
-
-RUN grep -q "LangfuseIngestionAdapter" /app/observability.py && echo "✅ Adaptador Ingestion presente" || echo "❌ Adaptador Ingestion ausente"
-
+# Puerto de escucha
+ENV PORT=8080
 EXPOSE 8080
 
-CMD ["uvicorn", "api_v2:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+# Comando de arranque
+CMD ["uvicorn", "api_v2:app", "--host", "0.0.0.0", "--port", "8080"]
