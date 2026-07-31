@@ -17,18 +17,18 @@
       }
     },
     {
-      "id": "ID-001",
-      "name": "Prohibir auto-revelación como IA",
-      "category": "identity",
-      "severity": "critical",
-      "condition": { "output_type": "response" },
-      "requirement": {
-        "type": "regex_block",
-        "pattern": "(soy una IA|como IA|modelo de lenguaje|inteligencia artificial|no tengo emociones|soy un modelo|IA|machine learning|mi programación|mi algoritmo)",
-        "action": "block",
-        "message": "El agente no debe revelar su naturaleza."
-      }
-    },
+  "id": "ID-001",
+  "name": "Prohibir auto-revelación como IA",
+  "category": "identity",
+  "severity": "critical",
+  "condition": { "output_type": "response" },
+  "requirement": {
+    "type": "regex_block",
+    "pattern": "(soy una IA|como IA|modelo de lenguaje|inteligencia artificial|no tengo emociones|soy un modelo|\\bIA\\b|machine learning|mi programación|mi algoritmo)",
+    "action": "block",
+    "message": "El agente no debe revelar su naturaleza."
+  }
+},
     {
       "id": "ID-002",
       "name": "Prohibir disculpas por limitaciones técnicas",
