@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.5.1 – Corrección de orden de decoradores @tool/@auditar_fase.
+VERSIÓN 2.5.2 – Incluye base académica y detección de consultas sobre metodología.
 31JUL2026.
 """
 import os
@@ -9,6 +9,7 @@ import uuid
 import asyncio
 import requests
 import re
+import json
 import functools
 import logging
 from typing import Annotated, TypedDict, Optional, List, Dict, Any
@@ -59,6 +60,48 @@ logger.info("SupervisorJarvi inicializado con 45 reglas")
 _epistemology = None  # Se inicializa en el lifespan con el pool de CTFOM
 
 # =============================================================================
+# CARGA DEL MARCO ACADÉMICO (REFERENCIAS APA)
+# =============================================================================
+_ACADEMIC_FRAMEWORK = None
+
+def get_academic_framework() -> str:
+    """Retorna el marco ontológico, epistemológico y fenomenológico con referencias APA 8ª."""
+    global _ACADEMIC_FRAMEWORK
+    if _ACADEMIC_FRAMEWORK is not None:
+        return _ACADEMIC_FRAMEWORK
+
+    json_path = os.path.join(os.path.dirname(__file__), "academic_framework.json")
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        logger.error(f"No se pudo cargar academic_framework.json: {e}")
+        return "Lo siento, no puedo acceder a la base académica en este momento. Por favor, intente más tarde."
+
+    lines = []
+    lines.append("📘 **BASE ACADÉMICA Y METODOLÓGICA DE JARVI – MICDP**")
+    lines.append("")
+    lines.append("**🔍 Marco Ontológico:**")
+    lines.append(data["framework"]["ontological"])
+    lines.append("")
+    lines.append("**🧠 Marco Epistemológico:**")
+    lines.append(data["framework"]["epistemological"])
+    lines.append("")
+    lines.append("**💬 Marco Fenomenológico:**")
+    lines.append(data["framework"]["phenomenological"])
+    lines.append("")
+    lines.append("**📋 Metodología:**")
+    lines.append(data["methodology"])
+    lines.append("")
+    lines.append("**📚 Referencias Bibliográficas (APA 8ª edición):**")
+    for i, ref in enumerate(data["references"], 1):
+        lines.append(f"{i}. {ref['authors']} ({ref['year']}). *{ref['title']}*. {ref['source']}.")
+    lines.append("")
+    lines.append("Estos fundamentos garantizan el rigor científico y la trazabilidad de cada interacción.")
+    _ACADEMIC_FRAMEWORK = "\n".join(lines)
+    return _ACADEMIC_FRAMEWORK
+
+# =============================================================================
 # CONFIGURACIÓN DE API KEY
 # =============================================================================
 def get_llm():
@@ -68,7 +111,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.5.1"}
+        default_headers={"User-Agent": "JARVI/2.5.2"}
     )
 
 # =============================================================================
@@ -474,7 +517,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 5: GENERAR RESPUESTA COMERCIAL (CON SUPERVISIÓN)
+    # NODO 5: GENERAR RESPUESTA COMERCIAL (CON SUPERVISIÓN Y DETECCIÓN ACADÉMICA)
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Generación de Respuesta Comercial", criticidad="ALTA")
     @observe_node(node_name="generar_respuesta_comercial")
@@ -482,6 +525,19 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
+        # --- DETECCIÓN DE CONSULTA ACADÉMICA (NUEVO) ---
+        keywords_academic = [
+            "base académica", "referencias apa", "fuente de información", "base académica",
+            "metodología", "marco teórico", "fundamento científico", "bibliografía",
+            "qué método", "cómo funciona", "investigación", "tesis", "artículo",
+            "publicación", "estudio", "qué dice la teoría", "referencias bibliográficas"
+        ]
+        if any(k in ultimo_mensaje for k in keywords_academic):
+            academic_text = get_academic_framework()
+            return {"messages": [AIMessage(content=academic_text)], "contexto_tecnico": ctx}
+        # --- FIN DETECCIÓN ---
+
+        # --- Extracción de datos (existente) ---
         if ultimo_mensaje:
             num_match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', ultimo_mensaje)
             if num_match:
