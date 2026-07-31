@@ -1,6 +1,6 @@
 # prompt_manager.py - Gestión de prompts con fallback local y Langfuse
-# VERSIÓN 2.4.0 – Regla explícita de fuentes de información (solo AISA).
-# 30JUL2026
+# VERSIÓN 2.5.0 – Regla explícita de fuentes y prompts MICDP.
+# 31JUL2026
 
 import os
 import logging
@@ -15,9 +15,6 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# =============================================================================
-# PROMPTS DE FALLBACK (LOCAL) – CON REGLA DE FUENTES EXPLÍCITA
-# =============================================================================
 FALLBACK_PROMPTS = {
     "jarvi_system_prompt": (
         "Eres Jarvi, Ingeniero de Preventa de AISA Solar. "
@@ -50,6 +47,46 @@ FALLBACK_PROMPTS = {
     ),
     "jarvi_advertencia_precio": (
         "El precio indicado corresponde únicamente al equipo/producto. No incluye instalación, mano de obra, servicios adicionales ni costos de envío."
+    ),
+    "jarvi_micdp_welcome": (
+        "Bienvenido(a) al Proceso Conversacional para la Definición de Proyectos.\n\n"
+        "Este espacio forma parte de una investigación académica orientada al desarrollo de un modelo inteligente para identificar necesidades y apoyar la formulación conceptual de proyectos relacionados con:\n\n"
+        "- Energías renovables.\n- Sistemas fotovoltaicos.\n- Refrigeración industrial y doméstica.\n- Cadena de frío.\n- Bombeo de agua.\n- Eficiencia energética.\n- Procesos industriales.\n- Soluciones tecnológicas para hogares, comercios e industrias.\n\n"
+        "Su participación es voluntaria y tiene fines exclusivamente académicos, científicos y educativos.\n\n"
+        "Durante la conversación, le realizaré preguntas de forma natural para comprender su contexto, sus necesidades, sus objetivos y las condiciones técnicas de su proyecto. No existe un cuestionario fijo; la conversación se adapta a la información que usted proporciona.\n\n"
+        "Puede pausar y retomar la entrevista en cualquier momento. El sistema recordará el estado de su proyecto y continuará desde donde quedó.\n\n"
+        "¿Listo para comenzar? Solo responda 'Sí' o 'Adelante' cuando esté preparado."
+    ),
+    "jarvi_micdp_summary_early": (
+        "📋 BORRADOR DE PERFIL - PROYECTO {thread_id}\n"
+        "(Completitud: {completeness:.0f}%)\n\n"
+        "{summary_text}\n\n"
+        "📊 VARIABLES PENDIENTES:\n{pendientes}\n\n"
+        "🔄 ¿Desea corregir, complementar o confirmar la información presentada?\n"
+        "- Responda 'Corregir [dato]' para cambiar un valor.\n"
+        "- Responda 'Complementar' para añadir información faltante.\n"
+        "- Responda 'Confirmar' si todo es correcto.\n\n"
+        "📌 Puede continuar la entrevista respondiendo a las preguntas."
+    ),
+    "jarvi_micdp_summary_intermediate": (
+        "📋 BORRADOR DE PERFIL - PROYECTO {thread_id}\n"
+        "(Completitud: {completeness:.0f}%)\n\n"
+        "{summary_text}\n\n"
+        "📊 VARIABLES PENDIENTES:\n{pendientes}\n\n"
+        "🔄 ¿Desea corregir, complementar o confirmar la información presentada?"
+    ),
+    "jarvi_micdp_summary_advanced": (
+        "📋 BORRADOR DE PERFIL - PROYECTO {thread_id}\n"
+        "(Completitud: {completeness:.0f}%)\n\n"
+        "{summary_text}\n\n"
+        "📊 VARIABLES PENDIENTES:\n{pendientes}\n\n"
+        "🔄 ¿Desea corregir, complementar o confirmar la información presentada?"
+    ),
+    "jarvi_micdp_completed": (
+        "✅ ¡Proceso completado!\n\n"
+        "El perfil de su proyecto ha sido generado satisfactoriamente.\n\n"
+        "{profile_text}\n\n"
+        "Gracias por su participación en esta investigación académica."
     )
 }
 
@@ -91,10 +128,8 @@ class PromptManager:
         cache_key = f"{name}:{version or 'latest'}"
         if cache_key in self._cache:
             return self._cache[cache_key]
-
         content = None
         source = "fallback"
-
         if self._client and USE_LANGFUSE_PROMPTS:
             try:
                 prompt = self._client.get_prompt(name, version=version)
@@ -104,14 +139,12 @@ class PromptManager:
                     logger.debug(f"Prompt '{name}' obtenido de Langfuse")
             except Exception as e:
                 logger.warning(f"Langfuse falló para '{name}': {e}")
-
         if content is None:
             content = FALLBACK_PROMPTS.get(name)
             if content is None:
                 logger.error(f"Prompt '{name}' no encontrado en fallback. Usando cadena vacía.")
                 content = ""
             source = "fallback"
-
         result = {"content": content, "source": source}
         self._cache[cache_key] = result
         logger.info(f"PromptManager: '{name}' desde {source}")
