@@ -1,9 +1,21 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "version": "3.5",
+  "version": "3.6",
   "default_action": "allow",
-  "comentarios": "Reglas alineadas con catalog_ontology.json. Incluye reglas para MICDP, consulta académica (ACA-001) y oferta de MICDP (FMT-006).",
+  "comentarios": "Reglas alineadas con catalog_ontology.json. Incluye MICDP-001 para suspender reglas durante el MICDP.",
   "rules": [
+    {
+      "id": "MICDP-001",
+      "name": "Permitir todo durante MICDP",
+      "category": "operational",
+      "severity": "low",
+      "condition": { "micdp_active": true },
+      "requirement": {
+        "type": "allow",
+        "action": "allow",
+        "message": "MICDP activo, se suspenden las reglas de preventa."
+      }
+    },
     {
       "id": "ID-001",
       "name": "Prohibir auto-revelación como IA",
