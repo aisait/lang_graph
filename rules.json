@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "version": "3.2",
+  "version": "3.3",
   "default_action": "allow",
-  "comentarios": "Reglas alineadas con catalog_ontology.json. Permite productos del catálogo y keywords.",
+  "comentarios": "Reglas alineadas con catalog_ontology.json. Incluye reglas para MICDP.",
   "rules": [
     {
       "id": "ID-001",
@@ -463,6 +463,45 @@
         "pattern": "(gracias|buen día|excelente día|quedo atento)",
         "action": "inject",
         "message": "Despedida formal requerida."
+      }
+    },
+    {
+      "id": "CLS-007",
+      "name": "Detectar intención de iniciar MICDP",
+      "category": "closure",
+      "severity": "high",
+      "condition": { "input_type": "user_message", "derivation_offered": true },
+      "requirement": {
+        "type": "intent_detection",
+        "keywords": ["sí", "si", "claro", "adelante", "iniciar", "proyecto", "definición", "me interesa", "estoy de acuerdo"],
+        "action": "trigger_micdp",
+        "message": "Iniciando Proceso Conversacional para Definición de Proyectos."
+      }
+    },
+    {
+      "id": "CLS-008",
+      "name": "Gestión de pausa/continuación en MICDP",
+      "category": "closure",
+      "severity": "medium",
+      "condition": { "input_type": "user_message", "micdp_active": true },
+      "requirement": {
+        "type": "intent_detection",
+        "keywords": ["pausa", "detener", "después", "luego", "continuar", "seguir", "adelante"],
+        "action": "interrupt_micdp",
+        "message": "Procesando solicitud de pausa/continuación."
+      }
+    },
+    {
+      "id": "CLS-009",
+      "name": "Derivación a humano en MICDP",
+      "category": "closure",
+      "severity": "critical",
+      "condition": { "input_type": "user_message", "micdp_active": true },
+      "requirement": {
+        "type": "intent_detection",
+        "keywords": ["asesor", "vendedor", "llamada", "humano", "contactar", "hablar con", "atender"],
+        "action": "human_handoff",
+        "message": "Derivando a un asesor especializado."
       }
     },
     {
