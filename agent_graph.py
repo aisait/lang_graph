@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.5.0 – Integración del Supervisor Determinista y MICDP.
+VERSIÓN 2.5.1 – Corrección de orden de decoradores @tool/@auditar_fase.
 31JUL2026.
 """
 import os
@@ -68,7 +68,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.5.0"}
+        default_headers={"User-Agent": "JARVI/2.5.1"}
     )
 
 # =============================================================================
@@ -257,10 +257,10 @@ def observe_node(layer: str = "graph", node_name: str = ""):
     return decorator
 
 # =============================================================================
-# HERRAMIENTA DE ENVÍO A N8N
+# HERRAMIENTA DE ENVÍO A N8N (CORREGIDA: @auditar_fase ANTES DE @tool)
 # =============================================================================
-@tool
 @auditar_fase(nombre_fase="Herramienta Persistencia Oportunidades", criticidad="ALTA")
+@tool
 async def procesar_oportunidad_backend(
     nombre_apellidos: str,
     departamento_municipio: str,
@@ -271,6 +271,10 @@ async def procesar_oportunidad_backend(
     numero_whatsapp: str,
     resumen_18_palabras: str
 ) -> str:
+    """
+    Envía los datos del proyecto al backend de oportunidades (N8N) para su gestión comercial.
+    Esta herramienta es invocada por el agente cuando el usuario ha definido claramente su necesidad.
+    """
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
     endpoint = os.getenv("N8N_WEBHOOK_URL", "")
     if not endpoint:
