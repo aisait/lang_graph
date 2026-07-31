@@ -1,7 +1,7 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.4.0 – Integración del Supervisor Determinista.
-30JUL2026.
+VERSIÓN 2.5.0 – Integración del Supervisor Determinista y MICDP.
+31JUL2026.
 """
 import os
 import time
@@ -39,20 +39,24 @@ from ontology import (
 from telemetry import trace_id_var, span_id_var, schedule_telemetry_event
 from ubicacion import buscar_ubicacion
 from prompt_manager import get_prompt
+from supervisor_jarvi import SupervisorJarvi
 
 # =============================================================================
-# IMPORTACIÓN DEL SUPERVISOR
+# IMPORTACIÓN DE MÓDULOS MICDP
 # =============================================================================
-from supervisor_jarvi import SupervisorJarvi
+from project_repository import ProjectRepository
+from epistemology import EpistemologyOrchestrator
 
 logger = logging.getLogger(__name__)
 from config import settings
 
 # =============================================================================
-# INSTANCIA DEL SUPERVISOR (se crea una única vez)
+# INSTANCIAS GLOBALES
 # =============================================================================
 _supervisor = SupervisorJarvi(rules_path="rules.json")
 logger.info("SupervisorJarvi inicializado con 45 reglas")
+
+_epistemology = None  # Se inicializa en el lifespan con el pool de CTFOM
 
 # =============================================================================
 # CONFIGURACIÓN DE API KEY
@@ -64,7 +68,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.4.0"}
+        default_headers={"User-Agent": "JARVI/2.5.0"}
     )
 
 # =============================================================================
@@ -111,7 +115,6 @@ class ExtractorContacto(BaseModel):
     telefono: Optional[str] = Field(None, description="Número telefónico.")
 
 class ChecklistExtract(BaseModel):
-    """Esquema para extracción semántica de los 13 campos del scoring."""
     nombre: Optional[str] = Field(None, description="Nombre completo del cliente.")
     whatsapp: Optional[str] = Field(None, description="Número de teléfono en formato E.164.")
     departamento: Optional[str] = Field(None, description="Departamento de Guatemala.")
@@ -139,7 +142,7 @@ class InferenciaEnergetica(TypedDict):
     municipio: Optional[str]
     vendedor: Optional[str]
     tipo_producto: Optional[str]
-    productos_interes: Optional[list]  # ahora es lista de dicts con 'nombre' y 'tag'
+    productos_interes: Optional[list]
     product_tag: Optional[str]
     requisitos: Optional[List[Dict]]
     checklist_universal: Optional[Dict]
@@ -150,6 +153,8 @@ class InferenciaEnergetica(TypedDict):
     escalation_mode: Optional[bool]
     authorization_asked: Optional[bool]
     conversation_end: Optional[bool]
+    derivation_offered: Optional[bool]
+    micdp_accepted: Optional[bool]
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -196,18 +201,15 @@ def calcular_puntaje_completitud(ctx: dict) -> float:
     return round((completados / len(CAMPOS_SCORE_UNIVERSAL)) * 100, 2)
 
 def normalizar_productos_interes(productos_raw) -> List[Dict[str, str]]:
-    """Convierte cualquier entrada de productos_interes a una lista de dicts con 'nombre' y 'tag'."""
     if not productos_raw:
         return []
     if isinstance(productos_raw, list):
-        # Si es una lista de strings, convertir a dicts buscando en ontología
         if productos_raw and isinstance(productos_raw[0], str):
             ontologia = cargar_ontologia()
             resultado = []
             for nombre in productos_raw:
                 if not nombre:
                     continue
-                # Buscar el tag correspondiente
                 tag = None
                 for key, item in ontologia.items():
                     if isinstance(item, dict) and item.get("nombre", "").lower() == nombre.lower():
@@ -215,10 +217,8 @@ def normalizar_productos_interes(productos_raw) -> List[Dict[str, str]]:
                         break
                 resultado.append({"nombre": nombre, "tag": tag or "desconocido"})
             return resultado
-        # Si ya es lista de dicts, retornar tal cual
         elif productos_raw and isinstance(productos_raw[0], dict):
             return productos_raw
-    # Fallback: lista vacía
     return []
 
 # =============================================================================
@@ -271,9 +271,6 @@ async def procesar_oportunidad_backend(
     numero_whatsapp: str,
     resumen_18_palabras: str
 ) -> str:
-    """
-    Envía los datos de una oportunidad de negocio al backend de n8n para su procesamiento.
-    """
     nombre_norm, whatsapp_norm = normalizar_contacto(nombre_apellidos, numero_whatsapp, departamento_municipio)
     endpoint = os.getenv("N8N_WEBHOOK_URL", "")
     if not endpoint:
@@ -418,7 +415,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["topologia"] = "No aplica (Producto unitario)"
                 ctx["tipo_producto"] = "unitario"
 
-            # ===== APLICAR SUPERVISIÓN ONTOLÓGICA (regla ONT-001) =====
             eval_data = {
                 "contexto": ctx,
                 "tipo_producto": ctx.get("tipo_producto"),
@@ -482,7 +478,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo_mensaje = extraer_intencion_humana(state.get("messages", []))
 
-        # Extracción básica por regex
         if ultimo_mensaje:
             num_match = re.search(r'(\+?[0-9]{1,3}[-.\s]?)?[0-9]{4,10}', ultimo_mensaje)
             if num_match:
@@ -519,7 +514,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             if tipo:
                 ctx["tipo_producto"] = tipo
 
-        # Obtener productos relevantes (si no existen)
         if ctx.get("topologia") and ctx.get("tipo_producto") and not ctx.get("productos_interes"):
             productos = obtener_productos_relevantes(
                 topologia=ctx["topologia"],
@@ -528,12 +522,10 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             )
             ctx["productos_interes"] = normalizar_productos_interes(productos)
 
-        # Inicializar checklist
         if not ctx.get("checklist_universal"):
             ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
         checklist = ctx["checklist_universal"]
 
-        # Actualizar checklist
         for campo in CAMPOS_SCORE_UNIVERSAL:
             valor = ctx.get(campo)
             if campo == "productos_interes" and isinstance(valor, list) and valor:
@@ -623,11 +615,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         )
         prompt_sistema = SystemMessage(content=prompt_content)
 
-        # Limitar contexto a últimos 10 mensajes para evitar exceder tokens (regla OP-001)
         messages_limit = state["messages"][-10:] if len(state["messages"]) > 10 else state["messages"]
         respuesta = await llm.ainvoke([prompt_sistema] + messages_limit, config=config)
 
-        # ===== APLICAR SUPERVISIÓN A LA RESPUESTA GENERADA =====
         respuesta_final = respuesta.content
         eval_data = {
             "response": respuesta_final,
@@ -635,7 +625,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             "messages": state["messages"],
             "output_type": "response",
             "user_message": ultimo_mensaje,
-            "price_extractor_failed": False  # Se puede mejorar con detección real
+            "price_extractor_failed": False
         }
         evaluacion = _supervisor.evaluate(eval_data)
 
@@ -657,7 +647,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             else:
                 respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada?"
             logger.info(f"Supervisor activó modo escalación: {evaluacion['rule_id']}")
-        # Si se fuerza cierre, ya se inyectan preguntas en modified_response
         elif evaluacion["decision"] == "force_closure":
             if evaluacion.get("modified_response"):
                 respuesta_final = evaluacion["modified_response"]
@@ -676,10 +665,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     @auditar_fase(nombre_fase="Actualización Semántica de Checklist", criticidad="ALTA")
     @observe_node(node_name="actualizar_checklist")
     async def actualizar_checklist_node(state: AgentState):
-        """
-        Nodo que utiliza el LLM para extraer los 13 campos del scoring.
-        productos_interes se almacena como lista de dicts con 'nombre' y 'tag'.
-        """
         ctx = dict(state.get("contexto_tecnico") or {})
         messages = state.get("messages", [])
 
@@ -731,7 +716,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             logger.error(f"Error en extracción semántica: {e}")
             return {"contexto_tecnico": ctx}
 
-        # Actualizar ctx con los valores extraídos (si no están ya seteados)
         if extraccion.nombre and not ctx.get("nombre"):
             ctx["nombre"] = extraccion.nombre
         if extraccion.whatsapp and not ctx.get("whatsapp"):
@@ -864,6 +848,46 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": messages}
 
     # =========================================================================
+    # NUEVO NODO 9: EJECUTAR ENTREVISTA (MICDP)
+    # =========================================================================
+    @auditar_fase(nombre_fase="Ejecución de Entrevista MICDP", criticidad="ALTA")
+    @observe_node(node_name="ejecutar_entrevista")
+    async def ejecutar_entrevista_node(state: AgentState, config: RunnableConfig):
+        ctx = dict(state.get("contexto_tecnico") or {})
+        ultimo = extraer_intencion_humana(state.get("messages", []))
+        thread_id = config.get("configurable", {}).get("thread_id", "unknown")
+        if _epistemology is None:
+            return {"messages": [AIMessage(content="Error: orquestador no inicializado.")]}
+        definition = await _epistemology.repo.get_definition(thread_id)
+        if not definition:
+            nombre = ctx.get("nombre", "Usuario")
+            welcome = _epistemology._get_welcome()
+            await _epistemology.repo.create_definition(thread_id)
+            if nombre:
+                await _epistemology.repo.update_state(thread_id, "IDENTIDAD", {"variables": {"nombre": nombre}})
+            return {"messages": [AIMessage(content=welcome)], "contexto_tecnico": ctx}
+        result = await _epistemology.process_message(thread_id, ultimo)
+        action = result.get("action", "question")
+        response = result.get("response", "Continuemos.")
+        if action == "completed" or action == "handoff":
+            ctx["conversation_end"] = True
+        return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
+
+    # =========================================================================
+    # CONDICIÓN DE BORDE (con MICDP)
+    # =========================================================================
+    def my_tools_condition(state: AgentState):
+        messages = state.get("messages", [])
+        if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
+            return "tools"
+        ctx = state.get("contexto_tecnico", {})
+        ultimo = extraer_intencion_humana(messages)
+        if ctx.get("derivation_offered") and any(k in ultimo for k in ["sí", "si", "claro", "adelante", "iniciar", "proyecto"]):
+            ctx["micdp_accepted"] = True
+            return "ejecutar_entrevista"
+        return "actualizar_checklist"
+
+    # =========================================================================
     # ENSAMBLAJE DEL GRAFO
     # =========================================================================
     graph_builder.add_node("clasificar_intencion_comercial", clasificar_intencion_comercial_node)
@@ -874,13 +898,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder.add_node("actualizar_checklist", actualizar_checklist_node)
     graph_builder.add_node("verificar_cierre", verificar_cierre_node)
     graph_builder.add_node("anexar_caso_respuesta", anexar_caso_respuesta_node)
+    graph_builder.add_node("ejecutar_entrevista", ejecutar_entrevista_node)
     graph_builder.add_node("tools", ToolNode([procesar_oportunidad_backend]))
-
-    def my_tools_condition(state: AgentState):
-        messages = state.get("messages", [])
-        if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
-            return "tools"
-        return "actualizar_checklist"
 
     graph_builder.add_edge(START, "clasificar_intencion_comercial")
     graph_builder.add_edge("clasificar_intencion_comercial", "validar_ubicacion_cliente")
@@ -891,7 +910,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder.add_edge("tools", "actualizar_checklist")
     graph_builder.add_edge("actualizar_checklist", "verificar_cierre")
     graph_builder.add_edge("verificar_cierre", "anexar_caso_respuesta")
-    graph_builder.add_edge("anexar_caso_respuesta", END)
+    graph_builder.add_edge("ejecutar_entrevista", END)
 
     return graph_builder.compile(checkpointer=checkpointer)
 
