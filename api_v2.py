@@ -1,6 +1,6 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.1.2 – Corrección de pool_size en CTFOM y oferta de MICDP antes del caso.
+VERSIÓN 2.1.3 – Corrección de pool_size en CTFOM y oferta de MICDP antes del caso.
 31JUL2026.
 """
 import os
@@ -89,7 +89,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.1.2 (CON SUPERVISOR Y MICDP) =====")
+print("===== JARVI API v2.1.3 (CON SUPERVISOR Y MICDP) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -455,45 +455,47 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
             break
 
     # ===== APLICAR SUPERVISIÓN A LA RESPUESTA (api_v2) =====
-    eval_data = {
-        "response": respuesta_final,
-        "contexto": ctx,
-        "messages": messages,
-        "user_message": mensaje,
-        "output_type": "response",
-        "price_extractor_failed": False
-    }
-    evaluacion = _supervisor.evaluate(eval_data)
+    # Si MICDP está activo, saltar la supervisión para no interferir
+    if ctx.get("micdp_active", False):
+        logger.info("MICDP activo: supervisión adicional desactivada.")
+    else:
+        eval_data = {
+            "response": respuesta_final,
+            "contexto": ctx,
+            "messages": messages,
+            "user_message": mensaje,
+            "output_type": "response",
+            "price_extractor_failed": False
+        }
+        evaluacion = _supervisor.evaluate(eval_data)
 
-    # Nota: agent_graph ya ha manejado la oferta de MICDP en block/rewrite/force_fallback.
-    # Aquí solo aplicamos supervisión adicional si es necesario.
-    if evaluacion["decision"] == "rewrite":
-        if evaluacion.get("modified_response"):
-            respuesta_final = evaluacion["modified_response"]
-            # Si la reescritura es derivación a asesor, agent_graph ya la reemplazó.
-            logger.info(f"Supervisor (api) reescribió respuesta: {evaluacion['rule_id']}")
-    elif evaluacion["decision"] == "block":
-        # agent_graph ya debe haber manejado block con oferta, pero por si acaso:
-        if "asesor" not in respuesta_final.lower():
-            respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada? o desea iniciar el **Proceso Conversacional para la Definición de Proyectos** (responda 'Sí' para iniciar el proceso, o 'Asesor' para contacto humano)"
-            ctx["derivation_offered"] = True
-            ctx["micdp_offered"] = True
-        logger.warning(f"Supervisor (api) bloqueó respuesta: {evaluacion['rule_id']}")
-    elif evaluacion["decision"] == "force_fallback":
-        ctx["escalation_mode"] = True
-        if "asesor" not in respuesta_final.lower():
-            respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada? o desea iniciar el **Proceso Conversacional para la Definición de Proyectos** (responda 'Sí' para iniciar el proceso, o 'Asesor' para contacto humano)"
-            ctx["derivation_offered"] = True
-            ctx["micdp_offered"] = True
-        logger.info(f"Supervisor (api) activó escalación: {evaluacion['rule_id']}")
-    elif evaluacion["decision"] == "force_closure":
-        if evaluacion.get("modified_response"):
-            respuesta_final = evaluacion["modified_response"]
-            logger.info(f"Supervisor (api) forzó cierre: {evaluacion['rule_id']}")
-    elif evaluacion["decision"] == "end_conversation":
-        respuesta_final = evaluacion.get("modified_response", "Gracias por contactar a AISA Solar. ¡Que tenga un excelente día!")
-        ctx["conversation_end"] = True
-        logger.info(f"Supervisor (api) finalizó conversación: {evaluacion['rule_id']}")
+        if evaluacion["decision"] == "rewrite":
+            if evaluacion.get("modified_response"):
+                respuesta_final = evaluacion["modified_response"]
+                # Si la reescritura es derivación a asesor, agent_graph ya la reemplazó.
+                logger.info(f"Supervisor (api) reescribió respuesta: {evaluacion['rule_id']}")
+        elif evaluacion["decision"] == "block":
+            # agent_graph ya debe haber manejado block con oferta, pero por si acaso:
+            if "asesor" not in respuesta_final.lower():
+                respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada? o desea iniciar el **Proceso Conversacional para la Definición de Proyectos** (responda 'Sí' para iniciar el proceso, o 'Asesor' para contacto humano)"
+                ctx["derivation_offered"] = True
+                ctx["micdp_offered"] = True
+            logger.warning(f"Supervisor (api) bloqueó respuesta: {evaluacion['rule_id']}")
+        elif evaluacion["decision"] == "force_fallback":
+            ctx["escalation_mode"] = True
+            if "asesor" not in respuesta_final.lower():
+                respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada? o desea iniciar el **Proceso Conversacional para la Definición de Proyectos** (responda 'Sí' para iniciar el proceso, o 'Asesor' para contacto humano)"
+                ctx["derivation_offered"] = True
+                ctx["micdp_offered"] = True
+            logger.info(f"Supervisor (api) activó escalación: {evaluacion['rule_id']}")
+        elif evaluacion["decision"] == "force_closure":
+            if evaluacion.get("modified_response"):
+                respuesta_final = evaluacion["modified_response"]
+                logger.info(f"Supervisor (api) forzó cierre: {evaluacion['rule_id']}")
+        elif evaluacion["decision"] == "end_conversation":
+            respuesta_final = evaluacion.get("modified_response", "Gracias por contactar a AISA Solar. ¡Que tenga un excelente día!")
+            ctx["conversation_end"] = True
+            logger.info(f"Supervisor (api) finalizó conversación: {evaluacion['rule_id']}")
 
     # Limpiar formato Markdown (adicional)
     respuesta_final = limpiar_respuesta_final(respuesta_final)
@@ -681,7 +683,7 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.1.2",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.1.3",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -721,7 +723,7 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend-production",
-        "version": "2.1.2",
+        "version": "2.1.3",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
