@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.5.7 – Suspensión de reglas durante MICDP y detección de salida a asesor.
+VERSIÓN 2.5.8 – Inicialización lazy del orquestador por worker.
 31JUL2026.
 """
 import os
@@ -47,6 +47,9 @@ from supervisor_jarvi import SupervisorJarvi
 # =============================================================================
 from project_repository import ProjectRepository
 from epistemology import EpistemologyOrchestrator
+import openai
+import asyncpg
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 logger = logging.getLogger(__name__)
 from config import settings
@@ -57,7 +60,52 @@ from config import settings
 _supervisor = SupervisorJarvi(rules_path="rules.json")
 logger.info("SupervisorJarvi inicializado con 45 reglas")
 
-_epistemology = None  # Se inicializa en el lifespan con el pool de CTFOM
+_epistemology = None  # Se inicializa en el lifespan, pero también lazy por worker
+_epistemology_lock = asyncio.Lock()
+
+# =============================================================================
+# FUNCIÓN PARA INICIALIZAR ORQUESTADOR DE FORMA LAZY (POR WORKER)
+# =============================================================================
+async def get_epistemology():
+    """Obtiene o inicializa el orquestador de forma lazy (por worker)."""
+    global _epistemology
+    if _epistemology is not None:
+        return _epistemology
+    async with _epistemology_lock:
+        if _epistemology is not None:
+            return _epistemology
+        try:
+            # Intentar con CTFOM
+            ctfom_db_url = settings.ctfom_database_url
+            if ctfom_db_url:
+                # Sanear URL
+                parsed = urlparse(ctfom_db_url)
+                query = parse_qs(parsed.query)
+                for key in ["pool_size", "max_overflow", "pool_timeout"]:
+                    query.pop(key, None)
+                clean_query = urlencode(query, doseq=True)
+                clean_url = urlunparse(parsed._replace(query=clean_query))
+                pool = await asyncpg.create_pool(clean_url, min_size=1, max_size=5)
+                repo = ProjectRepository(pool)
+                openai_client = openai.OpenAI(api_key=settings.openai_api_key)
+                _epistemology = EpistemologyOrchestrator(repo, openai_client)
+                logger.info("Orquestador inicializado lazy con CTFOM")
+            else:
+                # Fallback a memoria
+                from api_v2 import MemoryRepo  # Importar desde el módulo que define MemoryRepo
+                repo = MemoryRepo()
+                openai_client = openai.OpenAI(api_key=settings.openai_api_key)
+                _epistemology = EpistemologyOrchestrator(repo, openai_client)
+                logger.info("Orquestador inicializado lazy en memoria")
+        except Exception as e:
+            logger.error(f"Error en inicialización lazy del orquestador: {e}")
+            # Fallback a memoria si falla
+            from api_v2 import MemoryRepo
+            repo = MemoryRepo()
+            openai_client = openai.OpenAI(api_key=settings.openai_api_key)
+            _epistemology = EpistemologyOrchestrator(repo, openai_client)
+            logger.warning("Orquestador inicializado lazy en memoria (fallback)")
+        return _epistemology
 
 # =============================================================================
 # CARGA DEL MARCO ACADÉMICO (REFERENCIAS APA)
@@ -111,7 +159,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.5.7"}
+        default_headers={"User-Agent": "JARVI/2.5.8"}
     )
 
 # =============================================================================
@@ -964,7 +1012,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": messages}
 
     # =========================================================================
-    # NUEVO NODO 9: EJECUTAR ENTREVISTA (MICDP) CON DETECCIÓN DE SALIDA A ASESOR
+    # NUEVO NODO 9: EJECUTAR ENTREVISTA (MICDP) CON INICIALIZACIÓN LAZY
     # =========================================================================
     @auditar_fase(nombre_fase="Ejecución de Entrevista MICDP", criticidad="ALTA")
     @observe_node(node_name="ejecutar_entrevista")
@@ -983,8 +1031,10 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 respuesta = "Entendido, derivaré su solicitud a un asesor especializado de AISA Solar. En breve se pondrá en contacto con usted. ¡Que tenga un excelente día!"
                 return {"messages": [AIMessage(content=respuesta)], "contexto_tecnico": ctx}
 
-        if _epistemology is None:
-            return {"messages": [AIMessage(content="Error: orquestador no inicializado.")]}
+        # ===== INICIALIZACIÓN LAZY DEL ORQUESTADOR =====
+        orquestador = await get_epistemology()
+        if orquestador is None:
+            return {"messages": [AIMessage(content="Error: orquestador no inicializado. Contacte a soporte.")]}
 
         # Si no está activo, iniciar
         if not ctx.get("micdp_active", False):
@@ -992,16 +1042,16 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             ctx["micdp_accepted"] = False
             ctx["micdp_offered"] = False
 
-        definition = await _epistemology.repo.get_definition(thread_id)
+        definition = await orquestador.repo.get_definition(thread_id)
         if not definition:
             nombre = ctx.get("nombre", "Usuario")
-            welcome = _epistemology._get_welcome()
-            await _epistemology.repo.create_definition(thread_id)
+            welcome = orquestador._get_welcome()
+            await orquestador.repo.create_definition(thread_id)
             if nombre:
-                await _epistemology.repo.update_state(thread_id, "IDENTIDAD", {"variables": {"nombre": nombre}})
+                await orquestador.repo.update_state(thread_id, "IDENTIDAD", {"variables": {"nombre": nombre}})
             return {"messages": [AIMessage(content=welcome)], "contexto_tecnico": ctx}
 
-        result = await _epistemology.process_message(thread_id, ultimo)
+        result = await orquestador.process_message(thread_id, ultimo)
         action = result.get("action", "question")
         response = result.get("response", "Continuemos.")
         if action == "completed" or action == "handoff":
