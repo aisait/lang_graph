@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.5.4 – Oferta explícita del MICDP ante violación de reglas.
+VERSIÓN 2.5.5 – Truncamiento de historial en actualizar_checklist para evitar overflow de contexto.
 31JUL2026.
 """
 import os
@@ -111,7 +111,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.5.4"}
+        default_headers={"User-Agent": "JARVI/2.5.5"}
     )
 
 # =============================================================================
@@ -198,7 +198,7 @@ class InferenciaEnergetica(TypedDict):
     conversation_end: Optional[bool]
     derivation_offered: Optional[bool]
     micdp_accepted: Optional[bool]
-    micdp_offered: Optional[bool]   # <-- NUEVO: indica que ya se ofreció el MICDP
+    micdp_offered: Optional[bool]
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -701,9 +701,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         }
         evaluacion = _supervisor.evaluate(eval_data)
 
-        # =========================================================================
-        # MODIFICACIÓN: OFRECER AMBAS OPCIONES ANTE BLOQUEO O FALLBACK
-        # =========================================================================
         mensaje_base = "Disculpe, esa información específica no está disponible en este momento."
         opciones = " ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada? o desea iniciar el **Proceso Conversacional para la Definición de Proyectos** (responda 'Sí' para iniciar el proceso, o 'Asesor' para contacto humano)"
 
@@ -734,13 +731,12 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             respuesta_final = evaluacion.get("modified_response", "Gracias por contactar a AISA Solar. ¡Que tenga un excelente día!")
             ctx["conversation_end"] = True
             logger.info(f"Supervisor finalizó conversación: {evaluacion['rule_id']}")
-        # =========================================================================
 
         respuesta.content = respuesta_final
         return {"messages": [respuesta], "contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 6: ACTUALIZAR CHECKLIST
+    # NODO 6: ACTUALIZAR CHECKLIST (CON TRUNCAMIENTO DE HISTORIAL)
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Actualización Semántica de Checklist", criticidad="ALTA")
     @observe_node(node_name="actualizar_checklist")
@@ -748,8 +744,21 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = dict(state.get("contexto_tecnico") or {})
         messages = state.get("messages", [])
 
+        # =========================================================================
+        # TRUNCAMIENTO DE HISTORIAL PARA EVITAR OVERFLOW DE CONTEXTO
+        # =========================================================================
+        MAX_MESSAGES_FOR_EXTRACTION = 20
+        if len(messages) > MAX_MESSAGES_FOR_EXTRACTION:
+            # Tomar primeros 5 mensajes (contexto inicial) + últimos 15 (contexto reciente)
+            first_msgs = messages[:5]
+            last_msgs = messages[-15:]
+            messages_for_extract = first_msgs + last_msgs
+            logger.info(f"Truncando historial: {len(messages)} → {len(messages_for_extract)} mensajes para extracción")
+        else:
+            messages_for_extract = messages
+
         historial_texto = ""
-        for msg in messages:
+        for msg in messages_for_extract:
             if isinstance(msg, HumanMessage):
                 historial_texto += f"Usuario: {msg.content}\n"
             elif isinstance(msg, AIMessage):
@@ -963,7 +972,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = state.get("contexto_tecnico", {})
         ultimo = extraer_intencion_humana(messages)
 
-        # <-- MODIFICADO: detectar intención explícita de MICDP
+        # Detectar intención explícita de MICDP
         micdp_keywords = [
             "proceso conversacional", "definición de proyectos", "iniciar proyecto",
             "quiero definir mi proyecto", "empezar definición", "MICDP",
@@ -974,16 +983,13 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             ctx["micdp_accepted"] = True
             return "ejecutar_entrevista"
 
-        # Si ya se ofreció la derivación y el usuario pide asesor, no activa MICDP
         if ctx.get("derivation_offered") and any(k in ultimo for k in ["asesor", "llamada", "contactar", "hablar con"]):
             return "actualizar_checklist"
 
-        # Si se ofreció MICDP y el usuario responde "sí", activar MICDP
         if ctx.get("micdp_offered") and any(k in ultimo for k in ["sí", "si", "claro", "adelante", "iniciar"]):
             ctx["micdp_accepted"] = True
             return "ejecutar_entrevista"
 
-        # Por defecto: continuar con la preventa
         return "actualizar_checklist"
 
     # =========================================================================
