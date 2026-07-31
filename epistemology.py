@@ -196,7 +196,10 @@ Sigue estas pautas:
         input_items = [{"role": "user", "content": user_message}]
 
         try:
-            response = self.client.responses.create(
+            # =========================================================================
+            # CORRECCIÓN: Usar openai.responses.create() en lugar de self.client.responses.create()
+            # =========================================================================
+            response = openai.responses.create(  # <-- CAMBIO AQUÍ
                 model="gpt-4o-mini",
                 instructions=self.system_prompt,
                 input=input_items,
@@ -316,7 +319,6 @@ Sigue estas pautas:
         return round(total * 100, 2)
 
     async def _generate_summary(self, thread_id: str, stage: str) -> str:
-        # Simulación básica
         completeness = await self._compute_overall_completeness(thread_id)
         return f"""
 📋 **BORRADOR DE PERFIL - PROYECTO {thread_id[:8]}**
@@ -370,7 +372,6 @@ Gracias por participar en esta investigación. Este perfil es orientativo.
 Bienvenido(a) al Proceso Conversacional para la Definición de Proyectos.
 
 Este espacio forma parte de una investigación académica orientada al desarrollo de un modelo inteligente para identificar necesidades y apoyar la formulación conceptual de proyectos relacionados con:
-
 
 ✅ Energías renovables.
 ✅ Sistemas fotovoltaicos.
