@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.5.5 – Truncamiento de historial en actualizar_checklist para evitar overflow de contexto.
+VERSIÓN 2.5.6 – Corrección en rama rewrite para ofrecer MICDP.
 31JUL2026.
 """
 import os
@@ -111,7 +111,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.5.5"}
+        default_headers={"User-Agent": "JARVI/2.5.6"}
     )
 
 # =============================================================================
@@ -707,7 +707,14 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if evaluacion["decision"] == "rewrite":
             if evaluacion.get("modified_response"):
                 respuesta_final = evaluacion["modified_response"]
-                logger.info(f"Supervisor reescribió respuesta: {evaluacion['rule_id']}")
+                # Si la reescritura es una derivación a asesor, ofrecer ambas opciones
+                if "asesor" in respuesta_final.lower() or "llamada" in respuesta_final.lower():
+                    respuesta_final = f"{mensaje_base} {opciones}"
+                    ctx["derivation_offered"] = True
+                    ctx["micdp_offered"] = True
+                    logger.info(f"Supervisor reescribió a derivación; se reemplaza por oferta de MICDP.")
+                else:
+                    logger.info(f"Supervisor reescribió respuesta: {evaluacion['rule_id']}")
         elif evaluacion["decision"] == "block":
             respuesta_final = f"{mensaje_base} {opciones}"
             ctx["derivation_offered"] = True
@@ -749,7 +756,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         # =========================================================================
         MAX_MESSAGES_FOR_EXTRACTION = 20
         if len(messages) > MAX_MESSAGES_FOR_EXTRACTION:
-            # Tomar primeros 5 mensajes (contexto inicial) + últimos 15 (contexto reciente)
             first_msgs = messages[:5]
             last_msgs = messages[-15:]
             messages_for_extract = first_msgs + last_msgs
