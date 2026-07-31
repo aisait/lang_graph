@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.5.3 – Eliminación de @auditar_fase en herramienta (corrige NameError).
+VERSIÓN 2.5.4 – Oferta explícita del MICDP ante violación de reglas.
 31JUL2026.
 """
 import os
@@ -111,7 +111,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.5.3"}
+        default_headers={"User-Agent": "JARVI/2.5.4"}
     )
 
 # =============================================================================
@@ -198,6 +198,7 @@ class InferenciaEnergetica(TypedDict):
     conversation_end: Optional[bool]
     derivation_offered: Optional[bool]
     micdp_accepted: Optional[bool]
+    micdp_offered: Optional[bool]   # <-- NUEVO: indica que ya se ofreció el MICDP
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -337,7 +338,6 @@ async def procesar_oportunidad_backend(
         }
         await asyncio.to_thread(requests.post, endpoint, json=payload, headers={"Content-Type": "application/json"}, timeout=15)
         logger.info(f"Lead enviado exitosamente a N8N para {whatsapp_norm}")
-        # Auditoría interna (reemplaza el decorador)
         schedule_telemetry_event(
             trace_id_var.get(), span_id_var.get(), "",
             layer="tool", node_name="procesar_oportunidad_backend",
@@ -701,24 +701,31 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         }
         evaluacion = _supervisor.evaluate(eval_data)
 
+        # =========================================================================
+        # MODIFICACIÓN: OFRECER AMBAS OPCIONES ANTE BLOQUEO O FALLBACK
+        # =========================================================================
+        mensaje_base = "Disculpe, esa información específica no está disponible en este momento."
+        opciones = " ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada? o desea iniciar el **Proceso Conversacional para la Definición de Proyectos** (responda 'Sí' para iniciar el proceso, o 'Asesor' para contacto humano)"
+
         if evaluacion["decision"] == "rewrite":
             if evaluacion.get("modified_response"):
                 respuesta_final = evaluacion["modified_response"]
                 logger.info(f"Supervisor reescribió respuesta: {evaluacion['rule_id']}")
         elif evaluacion["decision"] == "block":
-            respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada?"
-            logger.warning(f"Supervisor bloqueó respuesta: {evaluacion['rule_id']}")
+            respuesta_final = f"{mensaje_base} {opciones}"
+            ctx["derivation_offered"] = True
+            ctx["micdp_offered"] = True
+            logger.warning(f"Supervisor bloqueó respuesta: {evaluacion['rule_id']}. Se ofrecen ambas opciones.")
         elif evaluacion["decision"] == "rewrite_context":
             if evaluacion.get("modified_context"):
                 ctx.update(evaluacion["modified_context"])
                 logger.info(f"Supervisor modificó contexto: {evaluacion['rule_id']}")
         elif evaluacion["decision"] == "force_fallback":
             ctx["escalation_mode"] = True
-            if evaluacion.get("modified_response"):
-                respuesta_final = evaluacion["modified_response"]
-            else:
-                respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada?"
-            logger.info(f"Supervisor activó modo escalación: {evaluacion['rule_id']}")
+            respuesta_final = f"{mensaje_base} {opciones}"
+            ctx["derivation_offered"] = True
+            ctx["micdp_offered"] = True
+            logger.info(f"Supervisor activó modo escalación: {evaluacion['rule_id']}. Se ofrecen ambas opciones.")
         elif evaluacion["decision"] == "force_closure":
             if evaluacion.get("modified_response"):
                 respuesta_final = evaluacion["modified_response"]
@@ -727,6 +734,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             respuesta_final = evaluacion.get("modified_response", "Gracias por contactar a AISA Solar. ¡Que tenga un excelente día!")
             ctx["conversation_end"] = True
             logger.info(f"Supervisor finalizó conversación: {evaluacion['rule_id']}")
+        # =========================================================================
 
         respuesta.content = respuesta_final
         return {"messages": [respuesta], "contexto_tecnico": ctx}
@@ -946,7 +954,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
 
     # =========================================================================
-    # CONDICIÓN DE BORDE (con MICDP)
+    # CONDICIÓN DE BORDE (con MICDP) – MODIFICADA PARA DETECTAR INTENCIÓN EXPLÍCITA
     # =========================================================================
     def my_tools_condition(state: AgentState):
         messages = state.get("messages", [])
@@ -954,9 +962,28 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             return "tools"
         ctx = state.get("contexto_tecnico", {})
         ultimo = extraer_intencion_humana(messages)
-        if ctx.get("derivation_offered") and any(k in ultimo for k in ["sí", "si", "claro", "adelante", "iniciar", "proyecto"]):
+
+        # <-- MODIFICADO: detectar intención explícita de MICDP
+        micdp_keywords = [
+            "proceso conversacional", "definición de proyectos", "iniciar proyecto",
+            "quiero definir mi proyecto", "empezar definición", "MICDP",
+            "definir proyecto", "proceso de definición", "iniciar el proceso",
+            "necesito definir", "proyecto fotovoltaico", "definir mi necesidad"
+        ]
+        if any(k in ultimo for k in micdp_keywords):
             ctx["micdp_accepted"] = True
             return "ejecutar_entrevista"
+
+        # Si ya se ofreció la derivación y el usuario pide asesor, no activa MICDP
+        if ctx.get("derivation_offered") and any(k in ultimo for k in ["asesor", "llamada", "contactar", "hablar con"]):
+            return "actualizar_checklist"
+
+        # Si se ofreció MICDP y el usuario responde "sí", activar MICDP
+        if ctx.get("micdp_offered") and any(k in ultimo for k in ["sí", "si", "claro", "adelante", "iniciar"]):
+            ctx["micdp_accepted"] = True
+            return "ejecutar_entrevista"
+
+        # Por defecto: continuar con la preventa
         return "actualizar_checklist"
 
     # =========================================================================
