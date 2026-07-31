@@ -199,7 +199,7 @@ class InferenciaEnergetica(TypedDict):
     derivation_offered: Optional[bool]
     micdp_accepted: Optional[bool]
     micdp_offered: Optional[bool]
-    micdp_active: Optional[bool]   # <-- NUEVO: indica que el MICDP está en curso
+    micdp_active: Optional[bool]
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
