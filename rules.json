@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "version": "3.4",
+  "version": "3.5",
   "default_action": "allow",
   "comentarios": "Reglas alineadas con catalog_ontology.json. Incluye reglas para MICDP, consulta académica (ACA-001) y oferta de MICDP (FMT-006).",
   "rules": [
