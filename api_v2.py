@@ -1,7 +1,7 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.1.0 – Integración del Supervisor Determinista.
-30JUL2026.
+VERSIÓN 2.1.1 – Integración del Supervisor Determinista y MICDP.
+31JUL2026.
 """
 import os
 import asyncio
@@ -39,6 +39,13 @@ from config import settings
 import audio
 from supervisor_jarvi import SupervisorJarvi
 from text_normalizer import limpiar_respuesta_final
+
+# =============================================================================
+# IMPORTACIONES MICDP
+# =============================================================================
+from project_repository import ProjectRepository
+from epistemology import EpistemologyOrchestrator
+import openai
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -82,7 +89,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.1.0 (CON SUPERVISOR) =====")
+print("===== JARVI API v2.1.1 (CON SUPERVISOR Y MICDP) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -309,11 +316,17 @@ _supervisor = SupervisorJarvi(rules_path="rules.json")
 logger.info("SupervisorJarvi inicializado con 45 reglas")
 
 # =============================================================================
-# PROCESAMIENTO DE PAYLOAD DE N8N (CON SUPERVISIÓN)
+# INICIALIZACIÓN DEL ORQUESTADOR EPISTEMOLÓGICO (se hará en lifespan)
+# =============================================================================
+_epistemology = None
+
+# =============================================================================
+# PROCESAMIENTO DE PAYLOAD DE N8N (CON SUPERVISIÓN Y MICDP)
 # =============================================================================
 async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request) -> JSONResponse:
     """
     Procesa el payload de n8n y aplica el supervisor para validar y limpiar la respuesta.
+    Además, detecta la intención de iniciar el MICDP.
     """
     # 1. Extraer datos del payload
     chat_id = chat_request.thread_id
@@ -448,7 +461,7 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
         "messages": messages,
         "user_message": mensaje,
         "output_type": "response",
-        "price_extractor_failed": False  # Podría mejorarse con lógica real
+        "price_extractor_failed": False
     }
     evaluacion = _supervisor.evaluate(eval_data)
 
@@ -485,6 +498,17 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
     # ===== ACTUALIZAR SESIÓN EN REDIS =====
     sesion["contexto_tecnico"] = ctx
     await guardar_sesion_redis(redis_client, chat_id, sesion)
+
+    # ===== DETECTAR SI SE OFRECIÓ DERIVACIÓN Y RESPUESTA AFIRMATIVA =====
+    # Se marca en el contexto para que el grafo lo detecte en la siguiente iteración
+    if "¿Prefiere que un asesor" in respuesta_final or "asesor de AISA Solar" in respuesta_final:
+        ctx["derivation_offered"] = True
+    if ctx.get("derivation_offered") and mensaje.lower() in ["sí", "si", "claro", "adelante", "iniciar", "proyecto", "me interesa"]:
+        ctx["micdp_accepted"] = True
+        ctx["derivation_offered"] = False
+        # Guardar en Redis para que persista
+        sesion["contexto_tecnico"] = ctx
+        await guardar_sesion_redis(redis_client, chat_id, sesion)
 
     if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
         respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
@@ -596,10 +620,11 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
 # =============================================================================
 graph = None
 redis_client = None
+ctfom_pool = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global graph, redis_client
+    global graph, redis_client, _epistemology, ctfom_pool
     print("=== INICIO DEL LIFESPAN ===")
     print("Usando Ingestion API de Langfuse (compatible con OSS)")
 
@@ -620,14 +645,33 @@ async def lifespan(app: FastAPI):
         else:
             print("REDIS_URL no configurada – buffer de sesión deshabilitado")
 
+        # ===== INICIALIZAR ORQUESTADOR EPISTEMOLÓGICO =====
+        ctfom_db_url = settings.ctfom_database_url
+        if ctfom_db_url:
+            try:
+                # Crear pool de conexiones para CTFOM
+                ctfom_pool = await asyncpg.create_pool(ctfom_db_url, min_size=1, max_size=5)
+                repo = ProjectRepository(ctfom_pool)
+                openai_client = openai.OpenAI(api_key=settings.openai_api_key)
+                _epistemology = EpistemologyOrchestrator(repo, openai_client)
+                print("Orquestador Epistemológico inicializado correctamente")
+            except Exception as e:
+                print(f"Error al inicializar orquestador: {e}")
+                _epistemology = None
+        else:
+            print("CTFOM_DATABASE_URL no configurada – MICDP desactivado")
+            _epistemology = None
+
         start_batch_worker()
         yield
 
+    if ctfom_pool:
+        await ctfom_pool.close()
     if redis_client:
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.1.0",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.1.1",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -667,11 +711,12 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend-production",
-        "version": "2.1.0",
+        "version": "2.1.1",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
         "supervisor": "active",
+        "micdp": "active" if _epistemology else "inactive",
         "status": "ok"
     }
     return status
