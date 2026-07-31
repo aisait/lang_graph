@@ -173,7 +173,6 @@ class SupervisorJarvi:
             elif key == "micdp_offered":
                 if data.get("micdp_offered") != value:
                     return False
-            # Nueva condición para MICDP-001 (aunque ya se salta al inicio, se deja por si acaso)
             elif key == "micdp_active":
                 if data.get("micdp_active") != value:
                     return False
@@ -379,7 +378,6 @@ class SupervisorJarvi:
             user_msg = data.get("user_message", "")
             keywords = req.get("keywords", [])
             if any(k in user_msg.lower() for k in keywords):
-                # Si se detecta intención de iniciar MICDP, devolvemos trigger_micdp
                 if "trigger_micdp" in req.get("action", ""):
                     return {
                         "passed": False,
