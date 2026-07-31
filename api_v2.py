@@ -1,6 +1,6 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.1.1 – Integración del Supervisor Determinista y MICDP.
+VERSIÓN 2.1.2 – Corrección de pool_size en CTFOM y oferta de MICDP antes del caso.
 31JUL2026.
 """
 import os
@@ -89,7 +89,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.1.1 (CON SUPERVISOR Y MICDP) =====")
+print("===== JARVI API v2.1.2 (CON SUPERVISOR Y MICDP) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -465,23 +465,26 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
     }
     evaluacion = _supervisor.evaluate(eval_data)
 
+    # Nota: agent_graph ya ha manejado la oferta de MICDP en block/rewrite/force_fallback.
+    # Aquí solo aplicamos supervisión adicional si es necesario.
     if evaluacion["decision"] == "rewrite":
         if evaluacion.get("modified_response"):
             respuesta_final = evaluacion["modified_response"]
+            # Si la reescritura es derivación a asesor, agent_graph ya la reemplazó.
             logger.info(f"Supervisor (api) reescribió respuesta: {evaluacion['rule_id']}")
     elif evaluacion["decision"] == "block":
-        respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada?"
+        # agent_graph ya debe haber manejado block con oferta, pero por si acaso:
+        if "asesor" not in respuesta_final.lower():
+            respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada? o desea iniciar el **Proceso Conversacional para la Definición de Proyectos** (responda 'Sí' para iniciar el proceso, o 'Asesor' para contacto humano)"
+            ctx["derivation_offered"] = True
+            ctx["micdp_offered"] = True
         logger.warning(f"Supervisor (api) bloqueó respuesta: {evaluacion['rule_id']}")
-    elif evaluacion["decision"] == "rewrite_context":
-        if evaluacion.get("modified_context"):
-            ctx.update(evaluacion["modified_context"])
-            logger.info(f"Supervisor (api) modificó contexto: {evaluacion['rule_id']}")
     elif evaluacion["decision"] == "force_fallback":
         ctx["escalation_mode"] = True
-        if evaluacion.get("modified_response"):
-            respuesta_final = evaluacion["modified_response"]
-        else:
-            respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada?"
+        if "asesor" not in respuesta_final.lower():
+            respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada? o desea iniciar el **Proceso Conversacional para la Definición de Proyectos** (responda 'Sí' para iniciar el proceso, o 'Asesor' para contacto humano)"
+            ctx["derivation_offered"] = True
+            ctx["micdp_offered"] = True
         logger.info(f"Supervisor (api) activó escalación: {evaluacion['rule_id']}")
     elif evaluacion["decision"] == "force_closure":
         if evaluacion.get("modified_response"):
@@ -500,16 +503,16 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
     await guardar_sesion_redis(redis_client, chat_id, sesion)
 
     # ===== DETECTAR SI SE OFRECIÓ DERIVACIÓN Y RESPUESTA AFIRMATIVA =====
-    # Se marca en el contexto para que el grafo lo detecte en la siguiente iteración
-    if "¿Prefiere que un asesor" in respuesta_final or "asesor de AISA Solar" in respuesta_final:
+    if "asesor" in respuesta_final.lower() or "proceso conversacional" in respuesta_final.lower():
         ctx["derivation_offered"] = True
+        ctx["micdp_offered"] = True
     if ctx.get("derivation_offered") and mensaje.lower() in ["sí", "si", "claro", "adelante", "iniciar", "proyecto", "me interesa"]:
         ctx["micdp_accepted"] = True
         ctx["derivation_offered"] = False
-        # Guardar en Redis para que persista
         sesion["contexto_tecnico"] = ctx
         await guardar_sesion_redis(redis_client, chat_id, sesion)
 
+    # ===== AÑADIR CASO AL FINAL DE LA RESPUESTA =====
     if respuesta_final and not respuesta_final.endswith(f"[Caso No. {caso}]"):
         respuesta_final = f"{respuesta_final} [Caso No. {caso}]"
 
@@ -645,12 +648,19 @@ async def lifespan(app: FastAPI):
         else:
             print("REDIS_URL no configurada – buffer de sesión deshabilitado")
 
-        # ===== INICIALIZAR ORQUESTADOR EPISTEMOLÓGICO =====
+        # ===== INICIALIZAR ORQUESTADOR EPISTEMOLÓGICO (con saneamiento de URL) =====
         ctfom_db_url = settings.ctfom_database_url
         if ctfom_db_url:
             try:
-                # Crear pool de conexiones para CTFOM
-                ctfom_pool = await asyncpg.create_pool(ctfom_db_url, min_size=1, max_size=5)
+                # Eliminar parámetros no soportados por asyncpg (pool_size, etc.)
+                parsed = urlparse(ctfom_db_url)
+                query = parse_qs(parsed.query)
+                for key in ["pool_size", "max_overflow", "pool_timeout"]:
+                    query.pop(key, None)
+                clean_query = urlencode(query, doseq=True)
+                clean_url = urlunparse(parsed._replace(query=clean_query))
+
+                ctfom_pool = await asyncpg.create_pool(clean_url, min_size=1, max_size=5)
                 repo = ProjectRepository(ctfom_pool)
                 openai_client = openai.OpenAI(api_key=settings.openai_api_key)
                 _epistemology = EpistemologyOrchestrator(repo, openai_client)
@@ -671,7 +681,7 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.1.1",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.1.2",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -711,7 +721,7 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend-production",
-        "version": "2.1.1",
+        "version": "2.1.2",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
