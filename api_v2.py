@@ -1,6 +1,6 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.1.5 – Fallback de orquestador en memoria y salto de supervisión.
+VERSIÓN 2.1.6 – Corrección de inicialización del orquestador.
 31JUL2026.
 """
 import os
@@ -89,7 +89,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.1.5 (CON SUPERVISOR Y MICDP) =====")
+print("===== JARVI API v2.1.6 (CON SUPERVISOR Y MICDP) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -319,6 +319,75 @@ logger.info("SupervisorJarvi inicializado con 45 reglas")
 # INICIALIZACIÓN DEL ORQUESTADOR EPISTEMOLÓGICO (se hará en lifespan)
 # =============================================================================
 _epistemology = None
+
+# =============================================================================
+# DEFINICIÓN DE REPOSITORIO EN MEMORIA (FALLBACK)
+# =============================================================================
+class MemoryRepo:
+    """Repositorio en memoria para el MICDP (fallback cuando CTFOM no está disponible)."""
+    def __init__(self):
+        self._data = {}
+        self._states = {}
+        self._answers = []
+        self._incidents = []
+        self._jobs = []
+        self._outcomes = []
+        self._vpc = {}
+        self._kano = []
+        self._specs = []
+        self._profile = {}
+        self._sessions = {}
+
+    async def create_definition(self, thread_id, consent_hash=""):
+        self._data[thread_id] = {"thread_id": thread_id, "consent_hash": consent_hash, "consent_given": True, "is_active": True}
+        return True
+
+    async def get_definition(self, thread_id):
+        return self._data.get(thread_id)
+
+    async def update_definition(self, thread_id, data):
+        if thread_id in self._data:
+            self._data[thread_id].update(data)
+
+    async def get_state(self, thread_id, dimension):
+        return self._states.get(f"{thread_id}_{dimension}")
+
+    async def update_state(self, thread_id, dimension, data):
+        self._states[f"{thread_id}_{dimension}"] = data
+
+    async def add_answer(self, thread_id, question_id, answer_text, **kwargs):
+        self._answers.append({"thread_id": thread_id, "question_id": question_id, "answer_text": answer_text})
+
+    async def add_incident(self, thread_id, narrative, **kwargs):
+        self._incidents.append({"thread_id": thread_id, "narrative": narrative})
+
+    async def add_job(self, thread_id, functional_job=None, emotional_job=None, social_job=None, priority=1):
+        self._jobs.append({"thread_id": thread_id, "functional_job": functional_job, "emotional_job": emotional_job, "social_job": social_job})
+
+    async def add_outcome(self, thread_id, metric_name, current_state, desired_state, importance=1.0):
+        self._outcomes.append({"thread_id": thread_id, "metric_name": metric_name})
+
+    async def update_vpc(self, thread_id, pains=None, gains=None, jobs=None, **kwargs):
+        self._vpc[thread_id] = {"pains": pains, "gains": gains, "jobs": jobs}
+
+    async def add_kano_feature(self, thread_id, feature_name, category):
+        self._kano.append({"thread_id": thread_id, "feature_name": feature_name, "category": category})
+
+    async def add_spec(self, thread_id, spec_name, category, priority_score=0.0):
+        self._specs.append({"thread_id": thread_id, "spec_name": spec_name})
+
+    async def update_profile(self, thread_id, draft_text=None, final_text=None, **kwargs):
+        self._profile[thread_id] = {"draft_text": draft_text, "final_text": final_text}
+
+    async def get_profile(self, thread_id):
+        return self._profile.get(thread_id)
+
+    async def start_session(self, thread_id, completeness_at_start=0.0):
+        self._sessions[thread_id] = {"start": time.time()}
+        return 1
+
+    async def end_session(self, session_id, **kwargs):
+        pass
 
 # =============================================================================
 # PROCESAMIENTO DE PAYLOAD DE N8N (CON SUPERVISIÓN Y MICDP)
@@ -670,115 +739,13 @@ async def lifespan(app: FastAPI):
                     print("✅ Orquestador Epistemológico inicializado correctamente con CTFOM")
                 except Exception as e:
                     print(f"❌ Error al inicializar orquestador con CTFOM: {e}")
-                    # Fallback a memoria
                     print("⚠️ Usando repositorio en memoria para MICDP (sin persistencia)")
-                    from project_repository import ProjectRepository
-                    # Crear un repositorio en memoria simple
-                    class MemoryRepo(ProjectRepository):
-                        def __init__(self):
-                            self._data = {}
-                            self._states = {}
-                            self._answers = []
-                            self._incidents = []
-                            self._jobs = []
-                            self._outcomes = []
-                            self._vpc = {}
-                            self._kano = []
-                            self._specs = []
-                            self._profile = {}
-                            self._sessions = {}
-                        # Implementación mínima para que funcione
-                        async def create_definition(self, thread_id, consent_hash=""):
-                            self._data[thread_id] = {"thread_id": thread_id, "consent_hash": consent_hash, "consent_given": True, "is_active": True}
-                            return True
-                        async def get_definition(self, thread_id):
-                            return self._data.get(thread_id)
-                        async def update_definition(self, thread_id, data):
-                            if thread_id in self._data:
-                                self._data[thread_id].update(data)
-                        async def get_state(self, thread_id, dimension):
-                            return self._states.get(f"{thread_id}_{dimension}")
-                        async def update_state(self, thread_id, dimension, data):
-                            self._states[f"{thread_id}_{dimension}"] = data
-                        async def add_answer(self, thread_id, question_id, answer_text, **kwargs):
-                            self._answers.append({"thread_id": thread_id, "question_id": question_id, "answer_text": answer_text})
-                        async def add_incident(self, thread_id, narrative, **kwargs):
-                            self._incidents.append({"thread_id": thread_id, "narrative": narrative})
-                        async def add_job(self, thread_id, functional_job=None, emotional_job=None, social_job=None, priority=1):
-                            self._jobs.append({"thread_id": thread_id, "functional_job": functional_job, "emotional_job": emotional_job, "social_job": social_job})
-                        async def add_outcome(self, thread_id, metric_name, current_state, desired_state, importance=1.0):
-                            self._outcomes.append({"thread_id": thread_id, "metric_name": metric_name})
-                        async def update_vpc(self, thread_id, pains=None, gains=None, jobs=None, **kwargs):
-                            self._vpc[thread_id] = {"pains": pains, "gains": gains, "jobs": jobs}
-                        async def add_kano_feature(self, thread_id, feature_name, category):
-                            self._kano.append({"thread_id": thread_id, "feature_name": feature_name, "category": category})
-                        async def add_spec(self, thread_id, spec_name, category, priority_score=0.0):
-                            self._specs.append({"thread_id": thread_id, "spec_name": spec_name})
-                        async def update_profile(self, thread_id, draft_text=None, final_text=None, **kwargs):
-                            self._profile[thread_id] = {"draft_text": draft_text, "final_text": final_text}
-                        async def get_profile(self, thread_id):
-                            return self._profile.get(thread_id)
-                        async def start_session(self, thread_id, completeness_at_start=0.0):
-                            self._sessions[thread_id] = {"start": time.time()}
-                            return 1
-                        async def end_session(self, session_id, **kwargs):
-                            pass
                     repo = MemoryRepo()
                     openai_client = openai.OpenAI(api_key=settings.openai_api_key)
                     _epistemology = EpistemologyOrchestrator(repo, openai_client)
                     print("✅ Orquestador Epistemológico inicializado correctamente en modo memoria")
             else:
                 print("⚠️ CTFOM_DATABASE_URL no configurada. Usando repositorio en memoria para MICDP.")
-                # Fallback a memoria
-                class MemoryRepo(ProjectRepository):
-                    # (misma implementación que arriba)
-                    def __init__(self):
-                        self._data = {}
-                        self._states = {}
-                        self._answers = []
-                        self._incidents = []
-                        self._jobs = []
-                        self._outcomes = []
-                        self._vpc = {}
-                        self._kano = []
-                        self._specs = []
-                        self._profile = {}
-                        self._sessions = {}
-                    async def create_definition(self, thread_id, consent_hash=""):
-                        self._data[thread_id] = {"thread_id": thread_id, "consent_hash": consent_hash, "consent_given": True, "is_active": True}
-                        return True
-                    async def get_definition(self, thread_id):
-                        return self._data.get(thread_id)
-                    async def update_definition(self, thread_id, data):
-                        if thread_id in self._data:
-                            self._data[thread_id].update(data)
-                    async def get_state(self, thread_id, dimension):
-                        return self._states.get(f"{thread_id}_{dimension}")
-                    async def update_state(self, thread_id, dimension, data):
-                        self._states[f"{thread_id}_{dimension}"] = data
-                    async def add_answer(self, thread_id, question_id, answer_text, **kwargs):
-                        self._answers.append({"thread_id": thread_id, "question_id": question_id, "answer_text": answer_text})
-                    async def add_incident(self, thread_id, narrative, **kwargs):
-                        self._incidents.append({"thread_id": thread_id, "narrative": narrative})
-                    async def add_job(self, thread_id, functional_job=None, emotional_job=None, social_job=None, priority=1):
-                        self._jobs.append({"thread_id": thread_id, "functional_job": functional_job, "emotional_job": emotional_job, "social_job": social_job})
-                    async def add_outcome(self, thread_id, metric_name, current_state, desired_state, importance=1.0):
-                        self._outcomes.append({"thread_id": thread_id, "metric_name": metric_name})
-                    async def update_vpc(self, thread_id, pains=None, gains=None, jobs=None, **kwargs):
-                        self._vpc[thread_id] = {"pains": pains, "gains": gains, "jobs": jobs}
-                    async def add_kano_feature(self, thread_id, feature_name, category):
-                        self._kano.append({"thread_id": thread_id, "feature_name": feature_name, "category": category})
-                    async def add_spec(self, thread_id, spec_name, category, priority_score=0.0):
-                        self._specs.append({"thread_id": thread_id, "spec_name": spec_name})
-                    async def update_profile(self, thread_id, draft_text=None, final_text=None, **kwargs):
-                        self._profile[thread_id] = {"draft_text": draft_text, "final_text": final_text}
-                    async def get_profile(self, thread_id):
-                        return self._profile.get(thread_id)
-                    async def start_session(self, thread_id, completeness_at_start=0.0):
-                        self._sessions[thread_id] = {"start": time.time()}
-                        return 1
-                    async def end_session(self, session_id, **kwargs):
-                        pass
                 repo = MemoryRepo()
                 openai_client = openai.OpenAI(api_key=settings.openai_api_key)
                 _epistemology = EpistemologyOrchestrator(repo, openai_client)
@@ -796,7 +763,7 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.1.5",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.1.6",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -836,7 +803,7 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend-production",
-        "version": "2.1.5",
+        "version": "2.1.6",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
@@ -878,4 +845,3 @@ def get_db_url() -> str:
         print("DATABASE_URL no definida. Usando CTFOM_DATABASE_URL para checkpoints de LangGraph.")
         return sanear_db_url(ctfom_url)
     raise RuntimeError("No se encontró DATABASE_URL ni CTFOM_DATABASE_URL.")
-        
