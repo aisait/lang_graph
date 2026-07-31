@@ -1,6 +1,6 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.1.3 – Corrección de pool_size en CTFOM y oferta de MICDP antes del caso.
+VERSIÓN 2.1.4 – Corrección: saltar supervisión cuando se ofrece MICDP.
 31JUL2026.
 """
 import os
@@ -89,7 +89,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.1.3 (CON SUPERVISOR Y MICDP) =====")
+print("===== JARVI API v2.1.4 (CON SUPERVISOR Y MICDP) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -455,9 +455,9 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
             break
 
     # ===== APLICAR SUPERVISIÓN A LA RESPUESTA (api_v2) =====
-    # Si MICDP está activo, saltar la supervisión para no interferir
-    if ctx.get("micdp_active", False):
-        logger.info("MICDP activo: supervisión adicional desactivada.")
+    # Si MICDP está activo o se está ofreciendo, saltar la supervisión para no interferir
+    if ctx.get("micdp_active", False) or ctx.get("micdp_offered", False):
+        logger.info("MICDP activo o ofrecido: supervisión adicional desactivada.")
     else:
         eval_data = {
             "response": respuesta_final,
@@ -472,7 +472,6 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
         if evaluacion["decision"] == "rewrite":
             if evaluacion.get("modified_response"):
                 respuesta_final = evaluacion["modified_response"]
-                # Si la reescritura es derivación a asesor, agent_graph ya la reemplazó.
                 logger.info(f"Supervisor (api) reescribió respuesta: {evaluacion['rule_id']}")
         elif evaluacion["decision"] == "block":
             # agent_graph ya debe haber manejado block con oferta, pero por si acaso:
@@ -654,7 +653,6 @@ async def lifespan(app: FastAPI):
         ctfom_db_url = settings.ctfom_database_url
         if ctfom_db_url:
             try:
-                # Eliminar parámetros no soportados por asyncpg (pool_size, etc.)
                 parsed = urlparse(ctfom_db_url)
                 query = parse_qs(parsed.query)
                 for key in ["pool_size", "max_overflow", "pool_timeout"]:
@@ -683,7 +681,7 @@ async def lifespan(app: FastAPI):
         await redis_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.1.3",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.1.4",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -723,7 +721,7 @@ async def telemetry_middleware(request: Request, call_next):
 async def health_check():
     status = {
         "service": "jarvi-backend-production",
-        "version": "2.1.3",
+        "version": "2.1.4",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
