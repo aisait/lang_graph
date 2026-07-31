@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "version": "3.3",
+  "version": "3.4",
   "default_action": "allow",
-  "comentarios": "Reglas alineadas con catalog_ontology.json. Incluye reglas para MICDP y consulta académica (ACA-001).",
+  "comentarios": "Reglas alineadas con catalog_ontology.json. Incluye reglas para MICDP, consulta académica (ACA-001) y oferta de MICDP (FMT-006).",
   "rules": [
     {
       "id": "ID-001",
@@ -109,6 +109,18 @@
         "pattern": "\\b(tú|te|ti|vos|tu)\\b",
         "action": "block",
         "message": "Debe tratar al cliente de 'usted' de manera formal."
+      }
+    },
+    {
+      "id": "FMT-006",
+      "name": "Permitir oferta del MICDP",
+      "category": "format",
+      "severity": "low",
+      "condition": { "output_type": "response" },
+      "requirement": {
+        "type": "allow",
+        "action": "allow",
+        "message": "La respuesta contiene la oferta del Proceso Conversacional para Definición de Proyectos, está permitida."
       }
     },
     {
@@ -470,10 +482,16 @@
       "name": "Detectar intención de iniciar MICDP",
       "category": "closure",
       "severity": "high",
-      "condition": { "input_type": "user_message", "derivation_offered": true },
+      "condition": { "input_type": "user_message" },
       "requirement": {
         "type": "intent_detection",
-        "keywords": ["sí", "si", "claro", "adelante", "iniciar", "proyecto", "definición", "me interesa", "estoy de acuerdo"],
+        "keywords": [
+          "sí", "si", "claro", "adelante", "iniciar", "proyecto",
+          "definición", "me interesa", "estoy de acuerdo",
+          "proceso conversacional", "definir proyecto",
+          "quiero definir", "empezar definición", "MICDP",
+          "definir mi necesidad", "proyecto fotovoltaico"
+        ],
         "action": "trigger_micdp",
         "message": "Iniciando Proceso Conversacional para Definición de Proyectos."
       }
