@@ -1,7 +1,7 @@
 """
 supervisor_jarvi.py - Módulo de supervisión determinista para JARVI 2.0.
-VERSIÓN 2.0 – Implementación completa de reglas ontológicas.
-30JUL2026
+VERSIÓN 2.1 – Implementación de reglas ontológicas y MICDP.
+31JUL2026
 """
 
 import json
@@ -23,18 +23,12 @@ class SupervisorJarvi:
         self._cache = {}
 
     def evaluate(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Evalúa la entrada/salida contra todas las reglas activas.
-        Retorna un dict con la decisión: 'allow', 'block', 'rewrite', 'force_closure', 'force_fallback', 'end_conversation'.
-        """
-        # Preparar datos para evaluación
         ctx = data.get("contexto", {})
         response = data.get("response", "")
         user_message = data.get("user_message", "")
         messages = data.get("messages", [])
         score = ctx.get("score_actual", 0.0)
         
-        # Enriquecer data para condiciones
         data["score"] = score
         data["product_tag"] = ctx.get("product_tag")
         data["tipo_producto"] = ctx.get("tipo_producto")
@@ -61,15 +55,10 @@ class SupervisorJarvi:
         data["price_extractor_failed"] = data.get("price_extractor_failed", False)
 
         for rule in self.rules:
-            # Verificar si la regla aplica según las condiciones
             if not self._condition_applies(rule, data):
                 continue
-
-            # Aplicar la regla
             result = self._apply_rule(rule, data)
-
             if not result.get("passed", True):
-                # Decisión basada en la acción de la regla
                 action = result.get("action", rule.get("requirement", {}).get("action", "block"))
                 return {
                     "decision": action,
@@ -79,12 +68,9 @@ class SupervisorJarvi:
                     "modified_response": result.get("modified_response"),
                     "modified_context": result.get("modified_context")
                 }
-
-        # Si todas las reglas pasan
         return {"decision": "allow"}
 
     def _condition_applies(self, rule: Dict, data: Dict) -> bool:
-        """Evalúa si la condición de la regla se cumple con los datos actuales."""
         cond = rule.get("condition", {})
         for key, value in cond.items():
             if key == "output_type":
@@ -150,7 +136,6 @@ class SupervisorJarvi:
                 if bool(data.get("product_tag")) != value:
                     return False
             elif key == "user_technical":
-                # Detectar si el usuario usó jerga técnica
                 user_msg = data.get("user_message", "")
                 technical_pattern = r'\b(W/m²|STC|NOCT|MPPT|PWM|VOC|ISC)\b'
                 has_technical = bool(re.search(technical_pattern, user_msg, re.IGNORECASE))
@@ -177,7 +162,6 @@ class SupervisorJarvi:
         return True
 
     def _apply_rule(self, rule: Dict, data: Dict) -> Dict:
-        """Aplica la lógica específica de la regla."""
         req = rule.get("requirement", {})
         rule_type = req.get("type")
         action = req.get("action", "block")
@@ -218,13 +202,11 @@ class SupervisorJarvi:
                     return {"passed": True}
                 return {"passed": True, "action": "rewrite", "message": req.get("message"), "modified_response": truncated}
 
-        # ================== NUEVOS TIPOS DE REGLA ==================
         elif rule_type == "ontology_validation":
             response = data.get("response", "")
             try:
                 from ontology import cargar_ontologia
                 ontologia = cargar_ontologia()
-                # Construir conjunto de términos permitidos (nombres + keywords)
                 permitidos = set()
                 for item in ontologia.values():
                     if isinstance(item, dict):
@@ -234,18 +216,14 @@ class SupervisorJarvi:
                         for kw in item.get("keywords", []):
                             if kw:
                                 permitidos.add(kw.lower())
-                # Extraer posibles entidades de la respuesta (nombres propios, marcas)
-                # Mejor: buscar palabras que parezcan nombres de marca (mayúscula inicial)
                 entidades = re.findall(r'\b[A-Z][a-z]+(?:[\s-][A-Z][a-z]+)*\b', response)
                 entidades_no_validas = []
                 for entidad in entidades:
                     if entidad.lower() not in permitidos and len(entidad) > 3:
                         entidades_no_validas.append(entidad)
                 if entidades_no_validas:
-                    # Reescribir la respuesta eliminando o reemplazando las entidades no válidas
                     mensaje = req.get("message", "Para conocer los detalles específicos, lo mejor es que un asesor de AISA Solar le brinde una cotización personalizada.")
-                    return {"passed": False, "message": mensaje, "action": "rewrite", 
-                            "modified_response": mensaje}
+                    return {"passed": False, "message": mensaje, "action": "rewrite", "modified_response": mensaje}
             except Exception as e:
                 logger.warning(f"Ontología no disponible para validación: {e}")
             return {"passed": True}
@@ -255,7 +233,6 @@ class SupervisorJarvi:
             try:
                 from ontology import cargar_ontologia
                 ontologia = cargar_ontologia()
-                # Construir conjunto de términos permitidos (nombres + keywords)
                 permitidos = set()
                 for item in ontologia.values():
                     if isinstance(item, dict):
@@ -265,12 +242,9 @@ class SupervisorJarvi:
                         for kw in item.get("keywords", []):
                             if kw:
                                 permitidos.add(kw.lower())
-                # Verificar si la respuesta contiene SOLO términos permitidos
-                # Si contiene términos no permitidos, se activa la regla
                 palabras = re.findall(r'\b[A-Za-zÁÉÍÓÚáéíóúñÑ\-]+\b', response)
                 for palabra in palabras:
                     if len(palabra) > 3 and palabra.lower() not in permitidos:
-                        # Se encontró un término no permitido
                         return {"passed": False, "message": req.get("message"), "action": "rewrite"}
             except Exception as e:
                 logger.warning(f"Ontología no disponible para allowlist: {e}")
@@ -281,13 +255,9 @@ class SupervisorJarvi:
             text = data.get("response", "")
             exception_source = req.get("exception_source")
             exception_fields = req.get("exception_fields", [])
-            
-            # Verificar si hay coincidencia con el patrón
             matches = re.findall(pattern, text, re.IGNORECASE)
             if not matches:
                 return {"passed": True}
-            
-            # Si hay coincidencia, verificar si el término está en la excepción
             try:
                 from ontology import cargar_ontologia
                 ontologia = cargar_ontologia()
@@ -302,7 +272,6 @@ class SupervisorJarvi:
                                 for v in value:
                                     if v:
                                         excepciones.add(v.lower())
-                # Verificar si el término coincidente está en la excepción
                 for match in matches:
                     if match.lower() not in excepciones:
                         return {"passed": False, "message": req.get("message"), "action": req.get("action", "rewrite")}
@@ -311,11 +280,9 @@ class SupervisorJarvi:
             return {"passed": True}
 
         elif rule_type == "ontology_anchor":
-            # Validar que la respuesta esté anclada a la ontología del tag
             return {"passed": True}
 
         elif rule_type == "product_category_match":
-            # Validar que la recomendación no mezcle categorías
             return {"passed": True}
 
         elif rule_type == "trigger_escalation":
@@ -324,6 +291,30 @@ class SupervisorJarvi:
                 "message": req.get("message"),
                 "action": "force_fallback",
                 "modified_context": {"escalation_mode": True}
+            }
+
+        elif rule_type == "trigger_micdp":
+            return {
+                "passed": False,
+                "message": req.get("message"),
+                "action": "trigger_micdp",
+                "modified_context": {"micdp_accepted": True}
+            }
+
+        elif rule_type == "interrupt_micdp":
+            return {
+                "passed": False,
+                "message": req.get("message"),
+                "action": "interrupt_micdp",
+                "modified_context": {"micdp_interrupted": True}
+            }
+
+        elif rule_type == "human_handoff":
+            return {
+                "passed": False,
+                "message": req.get("message"),
+                "action": "human_handoff",
+                "modified_context": {"conversation_end": True}
             }
 
         elif rule_type == "ask_field":
