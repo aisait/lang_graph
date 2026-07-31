@@ -1,5 +1,5 @@
 # =============================================================================
-# requirements.txt - JARVI 2.0.18 - Versión estabilizada con SDK 30JUL2026
+# requirements.txt - JARVI 2.0.19 - Con soporte MICDP
 # =============================================================================
 fastapi==0.115.0
 uvicorn[standard]==0.30.1
@@ -28,8 +28,4 @@ psutil==5.9.8
 symspellpy==6.7.0
 rapidfuzz==3.0.0
 redis==5.0.0
-
-# =============================================================================
-# Supervisor Determinista - Conteo de tokens para regla OP-001
-# =============================================================================
 tiktoken==0.7.0
