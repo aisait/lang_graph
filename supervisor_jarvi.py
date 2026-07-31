@@ -1,6 +1,6 @@
 """
 supervisor_jarvi.py - Módulo de supervisión determinista para JARVI 2.0.
-VERSIÓN 2.2 – Mejora en detección de MICDP y oferta de ambas opciones.
+VERSIÓN 2.3 – Si micdp_active es True, retorna allow sin evaluar reglas.
 31JUL2026
 """
 
@@ -23,6 +23,16 @@ class SupervisorJarvi:
         self._cache = {}
 
     def evaluate(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        # ================================================================
+        # NUEVO: Si MICDP está activo, permitir todo sin evaluar reglas
+        # ================================================================
+        if data.get("contexto", {}).get("micdp_active", False):
+            logger.info("MICDP activo: supervisor retorna allow sin evaluar reglas.")
+            return {"decision": "allow", "rule_id": "MICDP-001", "message": "MICDP activo, reglas suspendidas"}
+
+        # ================================================================
+        # Preparar datos para evaluación de reglas (flujo normal)
+        # ================================================================
         ctx = data.get("contexto", {})
         response = data.get("response", "")
         user_message = data.get("user_message", "")
@@ -53,7 +63,6 @@ class SupervisorJarvi:
         data["price_mentioned"] = bool(re.search(r'\d+\.?\d*\s*(GTQ|Q|USD|US\$|dólares|quetzales)', response))
         data["user_query_exists"] = bool(user_message)
         data["price_extractor_failed"] = data.get("price_extractor_failed", False)
-        # <-- Nuevo: indicar si se está ofreciendo MICDP
         data["micdp_offered"] = ctx.get("micdp_offered", False)
 
         for rule in self.rules:
@@ -163,6 +172,10 @@ class SupervisorJarvi:
                     return False
             elif key == "micdp_offered":
                 if data.get("micdp_offered") != value:
+                    return False
+            # Nueva condición para MICDP-001 (aunque ya se salta al inicio, se deja por si acaso)
+            elif key == "micdp_active":
+                if data.get("micdp_active") != value:
                     return False
         return True
 
@@ -502,7 +515,6 @@ class SupervisorJarvi:
             return {"passed": True}
 
         elif rule_type == "allow":
-            # Caso para FMT-006 y ACA-001: permitir explícitamente
             return {"passed": True}
 
         return {"passed": True}
