@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "version": "3.3",
   "default_action": "allow",
-  "comentarios": "Reglas alineadas con catalog_ontology.json. Incluye reglas para MICDP.",
+  "comentarios": "Reglas alineadas con catalog_ontology.json. Incluye reglas para MICDP y consulta académica (ACA-001).",
   "rules": [
     {
       "id": "ID-001",
@@ -640,6 +640,18 @@
         "type": "log_alert",
         "action": "allow",
         "message_log": "ALERTA: Latencia del LLM > 10 segundos."
+      }
+    },
+    {
+      "id": "ACA-001",
+      "name": "Permitir respuestas sobre base académica",
+      "category": "sources",
+      "severity": "low",
+      "condition": { "input_type": "user_message" },
+      "requirement": {
+        "type": "allow",
+        "action": "allow",
+        "message": "Consulta académica autorizada. La respuesta se genera directamente desde academic_framework.json."
       }
     }
   ]
