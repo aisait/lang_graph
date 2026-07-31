@@ -1,6 +1,6 @@
 """
 supervisor_jarvi.py - Módulo de supervisión determinista para JARVI 2.0.
-VERSIÓN 2.1 – Implementación de reglas ontológicas y MICDP.
+VERSIÓN 2.2 – Mejora en detección de MICDP y oferta de ambas opciones.
 31JUL2026
 """
 
@@ -53,6 +53,8 @@ class SupervisorJarvi:
         data["price_mentioned"] = bool(re.search(r'\d+\.?\d*\s*(GTQ|Q|USD|US\$|dólares|quetzales)', response))
         data["user_query_exists"] = bool(user_message)
         data["price_extractor_failed"] = data.get("price_extractor_failed", False)
+        # <-- Nuevo: indicar si se está ofreciendo MICDP
+        data["micdp_offered"] = ctx.get("micdp_offered", False)
 
         for rule in self.rules:
             if not self._condition_applies(rule, data):
@@ -158,6 +160,9 @@ class SupervisorJarvi:
                     return False
             elif key == "price_extractor_failed":
                 if data.get("price_extractor_failed") != value:
+                    return False
+            elif key == "micdp_offered":
+                if data.get("micdp_offered") != value:
                     return False
         return True
 
@@ -298,7 +303,7 @@ class SupervisorJarvi:
                 "passed": False,
                 "message": req.get("message"),
                 "action": "trigger_micdp",
-                "modified_context": {"micdp_accepted": True}
+                "modified_context": {"micdp_accepted": True, "micdp_offered": False}
             }
 
         elif rule_type == "interrupt_micdp":
@@ -361,6 +366,14 @@ class SupervisorJarvi:
             user_msg = data.get("user_message", "")
             keywords = req.get("keywords", [])
             if any(k in user_msg.lower() for k in keywords):
+                # Si se detecta intención de iniciar MICDP, devolvemos trigger_micdp
+                if "trigger_micdp" in req.get("action", ""):
+                    return {
+                        "passed": False,
+                        "message": req.get("message"),
+                        "action": "trigger_micdp",
+                        "modified_context": {"micdp_accepted": True}
+                    }
                 return {
                     "passed": False,
                     "message": req.get("message"),
@@ -486,6 +499,10 @@ class SupervisorJarvi:
 
         elif rule_type == "log_alert":
             logger.warning("ALERTA: Latencia del LLM > 10 segundos.")
+            return {"passed": True}
+
+        elif rule_type == "allow":
+            # Caso para FMT-006 y ACA-001: permitir explícitamente
             return {"passed": True}
 
         return {"passed": True}
