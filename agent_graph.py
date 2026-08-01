@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.5.9 – Manejo de resultado None en ejecutar_entrevista_node.
+VERSIÓN 2.6.0 – Restauración de output y costos en Langfuse.
 31JUL2026.
 """
 import os
@@ -60,7 +60,7 @@ from config import settings
 _supervisor = SupervisorJarvi(rules_path="rules.json")
 logger.info("SupervisorJarvi inicializado con 45 reglas")
 
-_epistemology = None  # Se inicializa en el lifespan, pero también lazy por worker
+_epistemology = None
 _epistemology_lock = asyncio.Lock()
 
 # =============================================================================
@@ -75,10 +75,8 @@ async def get_epistemology():
         if _epistemology is not None:
             return _epistemology
         try:
-            # Intentar con CTFOM
             ctfom_db_url = settings.ctfom_database_url
             if ctfom_db_url:
-                # Sanear URL
                 parsed = urlparse(ctfom_db_url)
                 query = parse_qs(parsed.query)
                 for key in ["pool_size", "max_overflow", "pool_timeout"]:
@@ -91,15 +89,13 @@ async def get_epistemology():
                 _epistemology = EpistemologyOrchestrator(repo, openai_client)
                 logger.info("Orquestador inicializado lazy con CTFOM")
             else:
-                # Fallback a memoria
-                from api_v2 import MemoryRepo  # Importar desde el módulo que define MemoryRepo
+                from api_v2 import MemoryRepo
                 repo = MemoryRepo()
                 openai_client = openai.OpenAI(api_key=settings.openai_api_key)
                 _epistemology = EpistemologyOrchestrator(repo, openai_client)
                 logger.info("Orquestador inicializado lazy en memoria")
         except Exception as e:
             logger.error(f"Error en inicialización lazy del orquestador: {e}")
-            # Fallback a memoria si falla
             from api_v2 import MemoryRepo
             repo = MemoryRepo()
             openai_client = openai.OpenAI(api_key=settings.openai_api_key)
@@ -159,7 +155,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.5.9"}
+        default_headers={"User-Agent": "JARVI/2.6.0"}
     )
 
 # =============================================================================
@@ -768,7 +764,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if evaluacion["decision"] == "rewrite":
             if evaluacion.get("modified_response"):
                 respuesta_final = evaluacion["modified_response"]
-                # Si la reescritura es una derivación a asesor, ofrecer ambas opciones
                 if "asesor" in respuesta_final.lower() or "llamada" in respuesta_final.lower():
                     respuesta_final = f"{mensaje_base} {opciones}"
                     ctx["derivation_offered"] = True
@@ -812,13 +807,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = dict(state.get("contexto_tecnico") or {})
         messages = state.get("messages", [])
 
-        # Si MICDP está activo, no actualizar checklist (para no interferir)
         if ctx.get("micdp_active", False):
             return {"contexto_tecnico": ctx}
 
-        # =========================================================================
-        # TRUNCAMIENTO DE HISTORIAL PARA EVITAR OVERFLOW DE CONTEXTO
-        # =========================================================================
         MAX_MESSAGES_FOR_EXTRACTION = 20
         if len(messages) > MAX_MESSAGES_FOR_EXTRACTION:
             first_msgs = messages[:5]
@@ -941,7 +932,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     @observe_node(node_name="verificar_cierre")
     async def verificar_cierre_node(state: AgentState, config: RunnableConfig):
         ctx = dict(state.get("contexto_tecnico") or {})
-        # Si MICDP está activo, no hacer cierre comercial
         if ctx.get("micdp_active", False):
             return {"contexto_tecnico": ctx}
 
@@ -1012,7 +1002,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": messages}
 
     # =========================================================================
-    # NUEVO NODO 9: EJECUTAR ENTREVISTA (MICDP) CON INICIALIZACIÓN LAZY Y MANEJO DE NONE
+    # NUEVO NODO 9: EJECUTAR ENTREVISTA (MICDP) CON INICIALIZACIÓN LAZY Y RESTAURACIÓN DE COSTOS
     # =========================================================================
     @auditar_fase(nombre_fase="Ejecución de Entrevista MICDP", criticidad="ALTA")
     @observe_node(node_name="ejecutar_entrevista")
@@ -1051,7 +1041,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 await orquestador.repo.update_state(thread_id, "IDENTIDAD", {"variables": {"nombre": nombre}})
             return {"messages": [AIMessage(content=welcome)], "contexto_tecnico": ctx}
 
-        # ===== LLAMADA AL ORQUESTADOR CON MANEJO DE NONE =====
+        # ===== LLAMADA AL ORQUESTADOR CON MANEJO DE NONE Y CAPTURA DE USAGE =====
         try:
             result = await orquestador.process_message(thread_id, ultimo)
         except Exception as e:
@@ -1066,10 +1056,24 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         action = result.get("action", "question")
         response = result.get("response", "Continuemos.")
+        usage = result.get("usage", {})
+
+        # ===== CREAR AIMessage CON METADATA DE USAGE PARA LANGFUSE =====
+        ai_message = AIMessage(content=response)
+        if usage:
+            ai_message.response_metadata = {
+                "token_usage": {
+                    "prompt_tokens": usage.get("input", 0),
+                    "completion_tokens": usage.get("output", 0),
+                    "total_tokens": usage.get("total", 0)
+                }
+            }
+
         if action == "completed" or action == "handoff":
             ctx["conversation_end"] = True
             ctx["micdp_active"] = False
-        return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
+
+        return {"messages": [ai_message], "contexto_tecnico": ctx}
 
     # =========================================================================
     # CONDICIÓN DE BORDE (con MICDP)
@@ -1081,11 +1085,9 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = state.get("contexto_tecnico", {})
         ultimo = extraer_intencion_humana(messages)
 
-        # Si MICDP está activo, siempre ir a ejecutar_entrevista
         if ctx.get("micdp_active", False):
             return "ejecutar_entrevista"
 
-        # Detectar intención explícita de MICDP
         micdp_keywords = [
             "proceso conversacional", "definición de proyectos", "iniciar proyecto",
             "quiero definir mi proyecto", "empezar definición", "MICDP",
