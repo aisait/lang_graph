@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.5.8 – Inicialización lazy del orquestador por worker.
+VERSIÓN 2.5.9 – Manejo de resultado None en ejecutar_entrevista_node.
 31JUL2026.
 """
 import os
@@ -159,7 +159,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.5.8"}
+        default_headers={"User-Agent": "JARVI/2.5.9"}
     )
 
 # =============================================================================
@@ -1012,7 +1012,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": messages}
 
     # =========================================================================
-    # NUEVO NODO 9: EJECUTAR ENTREVISTA (MICDP) CON INICIALIZACIÓN LAZY
+    # NUEVO NODO 9: EJECUTAR ENTREVISTA (MICDP) CON INICIALIZACIÓN LAZY Y MANEJO DE NONE
     # =========================================================================
     @auditar_fase(nombre_fase="Ejecución de Entrevista MICDP", criticidad="ALTA")
     @observe_node(node_name="ejecutar_entrevista")
@@ -1051,7 +1051,19 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 await orquestador.repo.update_state(thread_id, "IDENTIDAD", {"variables": {"nombre": nombre}})
             return {"messages": [AIMessage(content=welcome)], "contexto_tecnico": ctx}
 
-        result = await orquestador.process_message(thread_id, ultimo)
+        # ===== LLAMADA AL ORQUESTADOR CON MANEJO DE NONE =====
+        try:
+            result = await orquestador.process_message(thread_id, ultimo)
+        except Exception as e:
+            logger.error(f"Excepción en process_message: {e}")
+            result = None
+
+        if result is None:
+            result = {
+                "action": "error",
+                "response": "Lo siento, hubo un problema procesando su mensaje. Por favor, intente de nuevo."
+            }
+
         action = result.get("action", "question")
         response = result.get("response", "Continuemos.")
         if action == "completed" or action == "handoff":
