@@ -1,6 +1,6 @@
 """
 epistemology.py - Orquestador del ciclo epistémico para el MICDP.
-VERSIÓN 2.1.2 – Garantiza retorno de diccionario, preserva herramientas.
+VERSIÓN 2.2.0 – Devuelve usage para registro de costos en Langfuse.
 31JUL2026
 """
 import json
@@ -189,14 +189,14 @@ Sigue estas pautas:
 
     async def process_message(self, thread_id: str, user_message: str) -> Dict[str, Any]:
         """
-        Procesa un mensaje del usuario. SIEMPRE retorna un diccionario con 'response' y 'action'.
+        Procesa un mensaje del usuario. Retorna un dict con 'response', 'action', 'usage' (opcional).
         """
         try:
             definition = await self.repo.get_definition(thread_id)
             if not definition:
                 await self.repo.create_definition(thread_id)
                 await self.repo.start_session(thread_id)
-                return {"response": self._get_welcome(), "action": "question"}
+                return {"response": self._get_welcome(), "action": "question", "usage": {}}
 
             previous_id = definition.get('last_response_id')
             input_items = [{"role": "user", "content": user_message}]
@@ -221,7 +221,18 @@ Sigue estas pautas:
                     assistant_message = next((o for o in output if o.type == "message"), None)
                     content = assistant_message.content[0].text if assistant_message else ""
                     completeness = await self._compute_overall_completeness(thread_id)
-                    return self._build_response(content, completeness, thread_id)
+
+                    # Extraer usage de la respuesta (si está disponible)
+                    usage = {}
+                    if hasattr(response, 'usage'):
+                        usage = {
+                            "input": response.usage.input_tokens or 0,
+                            "output": response.usage.output_tokens or 0,
+                            "total": response.usage.total_tokens or 0
+                        }
+
+                    return self._build_response(content, completeness, thread_id, usage)
+
                 except AttributeError as ae:
                     logger.warning(f"Responses API no disponible, cambiando a Chat Completions: {ae}")
                     self._use_chat_completions = True
@@ -236,15 +247,15 @@ Sigue estas pautas:
             logger.error(f"Error crítico en process_message: {e}")
             return {
                 "response": "Lo siento, hubo un problema procesando su mensaje. Por favor, intente de nuevo.",
-                "action": "error"
+                "action": "error",
+                "usage": {}
             }
 
     async def _process_with_chat_completions(self, thread_id: str, user_message: str, previous_id: str) -> Dict[str, Any]:
         """
-        Fallback usando Chat Completions estándar (sin tools nativas).
+        Fallback usando Chat Completions estándar. Retorna usage.
         """
         try:
-            # Construir historial desde la BD
             answers = await self.repo.get_answers(thread_id)
             messages = [{"role": "system", "content": self.system_prompt}]
             for ans in answers[-10:]:
@@ -260,21 +271,31 @@ Sigue estas pautas:
             content = response.choices[0].message.content
             await self.repo.add_answer(thread_id, "general", content)
 
-            # Simular ejecución de herramientas
+            # Simular herramientas
             await self._simulate_tools(content, thread_id)
 
             completeness = await self._compute_overall_completeness(thread_id)
-            return self._build_response(content, completeness, thread_id)
+
+            # Extraer usage de la respuesta de Chat Completions
+            usage = {}
+            if hasattr(response, 'usage'):
+                usage = {
+                    "input": response.usage.prompt_tokens or 0,
+                    "output": response.usage.completion_tokens or 0,
+                    "total": response.usage.total_tokens or 0
+                }
+
+            return self._build_response(content, completeness, thread_id, usage)
 
         except Exception as e:
             logger.error(f"Error en Chat Completions fallback: {e}")
             return {
                 "response": "Lo siento, hubo un problema técnico. Intente de nuevo más tarde.",
-                "action": "error"
+                "action": "error",
+                "usage": {}
             }
 
     async def _simulate_tools(self, content: str, thread_id: str):
-        """Simula herramientas si el contenido sugiere acciones."""
         if "validar" in content.lower():
             mention = re.search(r'validar\s+([A-Za-z\s]+)', content)
             if mention:
@@ -363,10 +384,10 @@ Sigue estas pautas:
             total += self.weights[dim] * min(comp / self.thresholds[dim], 1.0)
         return round(total * 100, 2)
 
-    def _build_response(self, content: str, completeness: float, thread_id: str) -> Dict[str, Any]:
+    def _build_response(self, content: str, completeness: float, thread_id: str, usage: Dict) -> Dict[str, Any]:
         if completeness >= 90.0:
             profile_text = self._generate_final_profile(thread_id)
-            return {"response": profile_text, "action": "completed", "completeness": completeness}
+            return {"response": profile_text, "action": "completed", "completeness": completeness, "usage": usage}
         if completeness >= 25.0 and completeness < 30.0:
             summary = self._generate_summary(thread_id, "early")
             content = f"{content}\n\n{summary}"
@@ -376,7 +397,7 @@ Sigue estas pautas:
         elif completeness >= 75.0 and completeness < 80.0:
             summary = self._generate_summary(thread_id, "advanced")
             content = f"{content}\n\n{summary}"
-        return {"response": content, "action": "question", "completeness": completeness}
+        return {"response": content, "action": "question", "completeness": completeness, "usage": usage}
 
     def _generate_summary(self, thread_id: str, stage: str) -> str:
         return f"""
