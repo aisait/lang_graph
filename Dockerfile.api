@@ -1,12 +1,16 @@
 # =============================================================================
-# Dockerfile - JARVI 2.0 API (con MICDP)
+# Dockerfile - JARVI 2.0 API (con MICDP) - Corregido con dependencias de compilación
 # =============================================================================
 FROM python:3.11-slim
 
 # Actualizar e instalar dependencias del sistema necesarias
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    libstdc++6 \
+    libpq-dev \
+    gcc \
+    python3-dev \
+    libffi-dev \
+    libssl-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -20,7 +24,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copiar el resto del código
 COPY . .
 
-# Puerto de escucha (Railway asigna el puerto automáticamente, pero se expone)
+# Puerto de escucha
 ENV PORT=8080
 EXPOSE 8080
 
