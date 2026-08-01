@@ -3,23 +3,24 @@
 # =============================================================================
 FROM python:3.11-slim
 
-# Actualizar e instalar dependencias del sistema (si es necesario)
+# Actualizar e instalar dependencias del sistema necesarias
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libstdc++6 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copiar requirements primero para aprovechar caché
+# Copiar requirements primero para aprovechar caché de Docker
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copiar todo el código
+# Copiar el resto del código
 COPY . .
 
-# Puerto de escucha
+# Puerto de escucha (Railway asigna el puerto automáticamente, pero se expone)
 ENV PORT=8080
 EXPOSE 8080
 
