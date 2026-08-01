@@ -1,6 +1,6 @@
 """
 epistemology.py - Orquestador del ciclo epistémico para el MICDP.
-VERSIÓN 2.1.1 – Preserva herramientas y corrige llamada a Responses API.
+VERSIÓN 2.1.2 – Garantiza retorno de diccionario, preserva herramientas.
 31JUL2026
 """
 import json
@@ -38,7 +38,7 @@ class EpistemologyOrchestrator:
         self.thresholds = UMBRALES
         self.system_prompt = self._build_system_prompt()
         self.tools = self._build_tools()
-        self._use_chat_completions = False  # Flag para fallback
+        self._use_chat_completions = False
 
     def _build_system_prompt(self) -> str:
         return """
@@ -188,19 +188,20 @@ Sigue estas pautas:
         ]
 
     async def process_message(self, thread_id: str, user_message: str) -> Dict[str, Any]:
-        definition = await self.repo.get_definition(thread_id)
-        if not definition:
-            await self.repo.create_definition(thread_id)
-            await self.repo.start_session(thread_id)
-            return {"response": self._get_welcome(), "action": "question"}
-
-        previous_id = definition.get('last_response_id')
-        input_items = [{"role": "user", "content": user_message}]
-
+        """
+        Procesa un mensaje del usuario. SIEMPRE retorna un diccionario con 'response' y 'action'.
+        """
         try:
-            # =========================================================================
-            # INTENTAR PRIMERO CON RESPONSES API (self.client.responses)
-            # =========================================================================
+            definition = await self.repo.get_definition(thread_id)
+            if not definition:
+                await self.repo.create_definition(thread_id)
+                await self.repo.start_session(thread_id)
+                return {"response": self._get_welcome(), "action": "question"}
+
+            previous_id = definition.get('last_response_id')
+            input_items = [{"role": "user", "content": user_message}]
+
+            # Intentar primero con Responses API
             if not self._use_chat_completions:
                 try:
                     response = self.client.responses.create(
@@ -212,46 +213,44 @@ Sigue estas pautas:
                         previous_response_id=previous_id,
                         reasoning={"effort": "medium"}
                     )
+                    await self.repo.update_definition(thread_id, {"last_response_id": response.id})
+                    output = response.output
+                    for item in output:
+                        if item.type == "function_call":
+                            await self._handle_tool_call(item, thread_id)
+                    assistant_message = next((o for o in output if o.type == "message"), None)
+                    content = assistant_message.content[0].text if assistant_message else ""
+                    completeness = await self._compute_overall_completeness(thread_id)
+                    return self._build_response(content, completeness, thread_id)
                 except AttributeError as ae:
-                    # Si falla, marcar para fallback en futuras llamadas
                     logger.warning(f"Responses API no disponible, cambiando a Chat Completions: {ae}")
                     self._use_chat_completions = True
-                    # Reintentar con Chat Completions
-                    return await self._process_with_chat_completions(thread_id, user_message, previous_id)
+                except Exception as e:
+                    logger.error(f"Error en Responses API: {e}")
+                    self._use_chat_completions = True
 
-                # Procesar respuesta de Responses API (igual que antes)
-                await self.repo.update_definition(thread_id, {"last_response_id": response.id})
-
-                output = response.output
-                for item in output:
-                    if item.type == "function_call":
-                        await self._handle_tool_call(item, thread_id)
-
-                assistant_message = next((o for o in output if o.type == "message"), None)
-                content = assistant_message.content[0].text if assistant_message else ""
-
-                completeness = await self._compute_overall_completeness(thread_id)
-                return self._build_response(content, completeness, thread_id)
+            # Fallback a Chat Completions
+            return await self._process_with_chat_completions(thread_id, user_message, previous_id)
 
         except Exception as e:
-            logger.error(f"Error en Responses API: {e}")
-            # Fallback a Chat Completions si hay error
-            self._use_chat_completions = True
-            return await self._process_with_chat_completions(thread_id, user_message, previous_id)
+            logger.error(f"Error crítico en process_message: {e}")
+            return {
+                "response": "Lo siento, hubo un problema procesando su mensaje. Por favor, intente de nuevo.",
+                "action": "error"
+            }
 
     async def _process_with_chat_completions(self, thread_id: str, user_message: str, previous_id: str) -> Dict[str, Any]:
         """
         Fallback usando Chat Completions estándar (sin tools nativas).
-        Las herramientas se simulan con lógica propia.
         """
-        # Construir historial desde la BD (simplificado)
-        answers = await self.repo.get_answers(thread_id)
-        messages = [{"role": "system", "content": self.system_prompt}]
-        for ans in answers[-10:]:  # Últimas 10 respuestas
-            messages.append({"role": "user", "content": ans.get('answer_text', '')})
-        messages.append({"role": "user", "content": user_message})
-
         try:
+            # Construir historial desde la BD
+            answers = await self.repo.get_answers(thread_id)
+            messages = [{"role": "system", "content": self.system_prompt}]
+            for ans in answers[-10:]:
+                messages.append({"role": "user", "content": ans.get('answer_text', '')})
+            messages.append({"role": "user", "content": user_message})
+
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
@@ -259,46 +258,32 @@ Sigue estas pautas:
                 max_tokens=800
             )
             content = response.choices[0].message.content
-
-            # Detectar y ejecutar herramientas manualmente (simplificado)
-            # En producción se puede usar un parser de llamadas a funciones
-            await self._execute_tools_from_response(content, thread_id)
-
             await self.repo.add_answer(thread_id, "general", content)
+
+            # Simular ejecución de herramientas
+            await self._simulate_tools(content, thread_id)
 
             completeness = await self._compute_overall_completeness(thread_id)
             return self._build_response(content, completeness, thread_id)
 
         except Exception as e:
             logger.error(f"Error en Chat Completions fallback: {e}")
-            return {"response": "Lo siento, hubo un problema técnico. Intente de nuevo más tarde.", "action": "error"}
+            return {
+                "response": "Lo siento, hubo un problema técnico. Intente de nuevo más tarde.",
+                "action": "error"
+            }
 
-    async def _execute_tools_from_response(self, content: str, thread_id: str):
-        """Detecta menciones de herramientas en el texto y las ejecuta (simplificado)."""
-        # Ejemplo: si el texto contiene "validar" llamar a ontology_validator
-        # En producción, se puede usar un parser más robusto
+    async def _simulate_tools(self, content: str, thread_id: str):
+        """Simula herramientas si el contenido sugiere acciones."""
         if "validar" in content.lower():
-            # Simular llamada a ontology_validator
-            pass
-
-    def _build_response(self, content: str, completeness: float, thread_id: str) -> Dict[str, Any]:
-        """Construye la respuesta final según nivel de completitud."""
-        if completeness >= 90.0:
-            profile_text = self._generate_final_profile(thread_id)  # Sincronizar o async
-            return {"response": profile_text, "action": "completed", "completeness": completeness}
-        elif completeness >= 25.0 and completeness < 30.0:
-            summary = self._generate_summary(thread_id, "early")
-            content = f"{content}\n\n{summary}"
-        elif completeness >= 50.0 and completeness < 55.0:
-            summary = self._generate_summary(thread_id, "intermediate")
-            content = f"{content}\n\n{summary}"
-        elif completeness >= 75.0 and completeness < 80.0:
-            summary = self._generate_summary(thread_id, "advanced")
-            content = f"{content}\n\n{summary}"
-        return {"response": content, "action": "question", "completeness": completeness}
+            mention = re.search(r'validar\s+([A-Za-z\s]+)', content)
+            if mention:
+                result = self._ontology_validator(mention.group(1).strip())
+                if result.get("valid"):
+                    await self.repo.add_answer(thread_id, "validation", f"Válido: {result['nombre']}")
 
     # =========================================================================
-    # MÉTODOS AUXILIARES (TODOS PRESERVADOS)
+    # MÉTODOS PRESERVADOS (TODOS LOS ORIGINALES)
     # =========================================================================
     async def _handle_tool_call(self, tool_call, thread_id):
         name = tool_call.name
@@ -378,12 +363,25 @@ Sigue estas pautas:
             total += self.weights[dim] * min(comp / self.thresholds[dim], 1.0)
         return round(total * 100, 2)
 
+    def _build_response(self, content: str, completeness: float, thread_id: str) -> Dict[str, Any]:
+        if completeness >= 90.0:
+            profile_text = self._generate_final_profile(thread_id)
+            return {"response": profile_text, "action": "completed", "completeness": completeness}
+        if completeness >= 25.0 and completeness < 30.0:
+            summary = self._generate_summary(thread_id, "early")
+            content = f"{content}\n\n{summary}"
+        elif completeness >= 50.0 and completeness < 55.0:
+            summary = self._generate_summary(thread_id, "intermediate")
+            content = f"{content}\n\n{summary}"
+        elif completeness >= 75.0 and completeness < 80.0:
+            summary = self._generate_summary(thread_id, "advanced")
+            content = f"{content}\n\n{summary}"
+        return {"response": content, "action": "question", "completeness": completeness}
+
     def _generate_summary(self, thread_id: str, stage: str) -> str:
-        # Nota: Esta función debería ser async para obtener completeness, pero se mantiene síncrona
-        # para compatibilidad. En producción, hacer async.
         return f"""
 📋 **BORRADOR DE PERFIL - PROYECTO {thread_id[:8]}**
-(Completitud: pendiente de cálculo)
+(Completitud: pendiente)
 
 📊 **VARIABLES PENDIENTES:**
 - Revise las preguntas que aún no ha respondido.
