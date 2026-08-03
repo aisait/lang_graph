@@ -175,21 +175,38 @@ Almacena las trazas LLM (observaciones) en formato OLAP para consultas analític
 
 ## Arquitectura Lógica y Flujos de Información
 
-flowchart TD  
-    subgraph Core\[JARVI Core\]  
-        User -->|HTTP/WebSocket| cli-debug\[cliente-debug\]  
-        cli-debug --> API\[api.py: FastAPI\]  
-        User --> API  
-        n8n -->|Webhook| API  
-        API --> CTFOM\[CTFOM Middleware\]  
-        CTFOM --> LangGraph\[agent\_graph.py\]  
-        LangGraph --> Ontology\[ontology.py\]  
-        LangGraph --> Checkpoints\[(PostgreSQL Checkpoints)\]  
-        LangGraph --> Odoo\[odoo\_client.py\]  
-        API --> TelemetryWorker\[telemetry.py\]  
-        TelemetryWorker --> CTFOMDB\[(ctfom-postgres)\]  
-        API --> BI\[(bi-ia-postgres)\]  
-    end  
+```mermaid
+
+flowchart TD
+    subgraph Core[JARVI Core]
+        User -->|HTTP/WebSocket| cli-debug[cliente-debug]
+        cli-debug --> API[api.py: FastAPI]
+        User --> API
+        n8n -->|Webhook| API
+        API --> CTFOM[CTFOM Middleware]
+        CTFOM --> LangGraph[agent_graph.py]
+        LangGraph --> Ontology[ontology.py]
+        LangGraph --> Checkpoints[(PostgreSQL Checkpoints)]
+        LangGraph --> Odoo[odoo_client.py]
+        API --> TelemetryWorker[telemetry.py]
+        TelemetryWorker --> CTFOMDB[(ctfom-postgres)]
+        API --> BI[(bi-ia-postgres)]
+    end
+
+    subgraph Obs[Observabilidad]
+        LangGraph -->|Adaptador REST| LangfuseAdapter[LangfuseIngestionAdapter]
+        LangfuseAdapter -->|HTTP API| LangfuseWeb[langfuse-web]
+        LangfuseAdapter -->|HTTP API| LangfuseWorker[langfuse-worker]
+        LangfuseWorker --> ClickHouse[(langfuse-clickhouse)]
+        LangfuseWorker --> RedisLangfuse[(redis-langfuse)]
+        LangfuseWeb --> RedisLangfuse
+    end
+
+    subgraph BI[Inteligencia de Negocio]
+        BI --> Metabase[bi-la-metabase]
+        BI --> n8n
+    end
+```
   
     subgraph Obs\[Observabilidad\]  
         LangGraph -->|Adaptador REST| LangfuseAdapter\[LangfuseIngestionAdapter\]  
