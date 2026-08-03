@@ -122,41 +122,6 @@ El módulo CTFOM proporciona observabilidad profunda sin alterar el comportamien
 
 > *"The Ingestion API accepts batches of events (`trace-create`, `observation-create`, `generation-create`, `score-create`) and processes them asynchronously. Traces and observations are stored in ClickHouse; metadata is stored in PostgreSQL."*
 
-**Implementación en JARVI 2.0.19**:
-
-```python
-# observability.py - LangfuseIngestionAdapter
-adapter = LangfuseIngestionAdapter(
-    public_key=settings.langfuse_public_key,
-    secret_key=settings.langfuse_secret_key,
-    host=settings.langfuse_host
-)
-
-trace_id = adapter.create_trace(
-    name=f"chat_{caso}",
-    user_id=user_id,
-    session_id=thread_id,
-    metadata={
-        "chat_id": chat_id,
-        "origen": origen,
-        "fingerprint": fingerprint or "",
-        "caso": caso,
-        "whatsapp": user_id
-    },
-    input_data={"message": mensaje}
-)
-
-adapter.create_generation(
-    trace_id=trace_id,
-    name="openai_response",
-    model="gpt-4o-mini",
-    input_data={"prompt": prompt},
-    output_data={"response": respuesta},
-    usage={"input": input_tokens, "output": output_tokens, "total": total_tokens},
-    start_time=start_time,
-    end_time=end_time,
-    metadata={"thread_id": thread_id}
-)
 ### Coexistencia de CTFOM y Langfuse
 
 -   ****CTFOM**** se enfoca en la salud del sistema y auditoría de negocio.
@@ -571,6 +536,4 @@ __Versión Auditada: 2.0.19__
 -   El sistema cumple con los estándares ISO/IEC 25010, 27001, 29119 y DORA, siempre que se sigan los procedimientos documentados (incluyendo limpieza periódica de checkpoints y backups de ClickHouse).
 -   El código fuente está disponible en el repositorio GitHub para auditoría.
 
-
-adapter.flush()  # Envía el batch de eventos a Langfuse
 
