@@ -208,19 +208,6 @@ flowchart TD
     end
 ```
   
-    subgraph Obs\[Observabilidad\]  
-        LangGraph -->|Adaptador REST| LangfuseAdapter\[LangfuseIngestionAdapter\]  
-        LangfuseAdapter -->|HTTP API| LangfuseWeb\[langfuse-web\]  
-        LangfuseAdapter -->|HTTP API| LangfuseWorker\[langfuse-worker\]  
-        LangfuseWorker --> ClickHouse\[(langfuse-clickhouse)\]  
-        LangfuseWorker --> RedisLangfuse\[(redis-langfuse)\]  
-        LangfuseWeb --> RedisLangfuse  
-    end  
-  
-    subgraph BI\[Inteligencia de Negocio\]  
-        BI --> Metabase\[bi-la-metabase\]  
-        BI --> n8n  
-    end
 
 ### Flujo de información detallado
 
