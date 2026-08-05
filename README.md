@@ -265,12 +265,6 @@ flowchart TD
 -   Las DNS internas (`*.railway.internal`) garantizan que las comunicaciones entre servicios sean privadas y no expuestas a Internet.
 -   Los puertos de las bases de datos no están expuestos públicamente, solo accesibles desde la red interna de Railway.
 
-****Parte 1 de 3**** – Esta primera parte incluye desde el título hasta las variables de entorno. Ahora continuemos con la ****Parte 2****.
-
-Entendido. Aquí está ****el bloque completo desde "Coexistencia de CTFOM y Langfuse" hasta el final del documento****, formateado correctamente en Markdown. Es ****la segunda parte**** del archivo completo. Cópiela y péguela a continuación de la ****Parte 1**** que ya le entregué.
-
-markdown
-
 ## ****Canales de Implementación y Consumo****  
   
 ### ****1. Frontend Web (Streamlit)****  
