@@ -62,13 +62,36 @@ def schedule_telemetry_event(*args: Any, **kwargs: Any):
 async def _get_pool():
     """Obtiene o crea un pool de conexiones a PostgreSQL (CTFOM)."""
     global _pool
+
     if _pool is None:
         db_url = os.getenv("CTFOM_DATABASE_URL")
+
         if not db_url:
             raise ValueError("CTFOM_DATABASE_URL no configurada")
+
         params = conninfo_to_dict(db_url)
-        params.pop('pool_size', None)
-        _pool = AsyncConnectionPool(conninfo=params, min_size=1, max_size=10, open=True)
+
+        # Eliminar parámetros que pertenecen al pool y no a PostgreSQL
+        for key in ("pool_size", "max_overflow", "pool_timeout"):
+            params.pop(key, None)
+
+        pool = AsyncConnectionPool(
+            conninfo="",
+            kwargs=params,
+            min_size=1,
+            max_size=10,
+            open=False,
+        )
+
+        try:
+            await pool.open()
+            await pool.wait()
+        except Exception:
+            await pool.close()
+            raise
+
+        _pool = pool
+
     return _pool
 
 async def _batch_worker():
