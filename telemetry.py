@@ -138,9 +138,21 @@ async def log_telemetry_event(trace_id: str, span_id: str, parent_span_id: str,
         log_telemetry_event._started = True
 
     event = (
-        trace_id, span_id, parent_span_id, thread_id, run_id,
-        layer, node_name, event_type, latency_ms, severity, error_code,
-        cpu_percent, memory_mb, dispatch_success, json.dumps(metadata or {})
+        trace_id or str(uuid.uuid4()),
+        span_id or str(uuid.uuid4()),
+        parent_span_id or None,
+        thread_id,
+        run_id,
+        layer,
+        node_name,
+        event_type,
+        latency_ms,
+        severity,
+        error_code,
+        cpu_percent,
+        memory_mb,
+        dispatch_success,
+        json.dumps(metadata or {}),
     )
     await _event_queue.put(event)
 
