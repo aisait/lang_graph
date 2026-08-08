@@ -707,7 +707,7 @@ async def lifespan(app: FastAPI):
     get_observability_adapter()
 
     db_url = get_db_url()
-    print(f"DB URL (sanitizada): {db_url[:50]}...")
+    print("DB URL de checkpoints configurada")
     async with AsyncExitStack() as stack:
         checkpoint_pool = AsyncConnectionPool(
             conninfo=db_url,

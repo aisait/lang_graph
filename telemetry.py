@@ -78,8 +78,10 @@ async def _get_pool():
         pool = AsyncConnectionPool(
             conninfo="",
             kwargs=params,
-            min_size=1,
+            min_size=0,
             max_size=10,
+            max_idle=300,
+            check=AsyncConnectionPool.check_connection,
             open=False,
         )
 
