@@ -15,6 +15,9 @@ from typing import AsyncGenerator, Optional
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from datetime import datetime, timezone
 
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
+
 import psutil
 import asyncpg
 import redis.asyncio as redis
@@ -706,7 +709,23 @@ async def lifespan(app: FastAPI):
     db_url = get_db_url()
     print(f"DB URL (sanitizada): {db_url[:50]}...")
     async with AsyncExitStack() as stack:
-        checkpointer = await stack.enter_async_context(AsyncPostgresSaver.from_conn_string(db_url))
+        checkpoint_pool = AsyncConnectionPool(
+            conninfo=db_url,
+            min_size=0,
+            max_size=10,
+            max_idle=300,
+            kwargs={
+                "autocommit": True,
+                "prepare_threshold": 0,
+                "row_factory": dict_row,
+            },
+            check=AsyncConnectionPool.check_connection,
+            open=False,
+        )
+
+        checkpoint_pool = await stack.enter_async_context(checkpoint_pool)
+
+        checkpointer = AsyncPostgresSaver(checkpoint_pool)
         await checkpointer.setup()
         graph = create_graph(checkpointer)
         print("JARVI 2.0 API inicializada – Grafo listo")
