@@ -13,7 +13,7 @@
 10. Condiciones generales de la venta[cite: 3]
 
 ---
-<img width="299" height="211" alt="calentadores_soalres_1" src="https://github.com/user-attachments/assets/d54cdfe0-904e-4893-95a9-6ce799c1f842" /><img width="289" height="257" alt="calentadores_soalres_2" src="https://github.com/user-attachments/assets/a591c4db-391a-4f07-9977-286747420a61" />
+<img width="299" height="211" alt="calentadores_soalres_1" src="https://github.com/user-attachments/assets/d54cdfe0-904e-4893-95a9-6ce799c1f842" />
 
 
 ## 1. Base del Funcionamiento
