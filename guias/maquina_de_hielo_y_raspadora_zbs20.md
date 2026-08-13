@@ -121,4 +121,3 @@ Este manual proporciona las instrucciones de uso, especificaciones y pautas de s
 * **Condiciones adecuadas pero no se fabrica hielo:** Posible fuga de refrigerante o bloqueo en el sistema de sellado. Requiere servicio de mantenimiento o reparación.
 * **Luces de hielo lleno y agregar agua encendidas al mismo tiempo:** La bandeja de agua está bloqueada por un cubo de hielo. Retire el hielo debajo de la pala, saque y vuelva a insertar el tapón, presione el botón durante 3 minutos y el equipo se reiniciará automáticamente.
 * **El agua sale más caliente de lo normal:** La válvula magnética está averiada y debe ser reemplazada.
-```
