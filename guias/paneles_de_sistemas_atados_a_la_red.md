@@ -4,9 +4,9 @@
 * La función de este sistema es producir energía eléctrica que es devuelta al proveedor de servicios a través del contador de electricidad.
 * El sistema produce electricidad únicamente durante el día y, al no almacenarse la carga en un dispositivo adicional, la casa siempre dependerá del suministro eléctrico de la red.
 * Por seguridad, el sistema no produce electricidad cuando se va la luz
-*
+
 * <img width="1492" height="671" alt="sistemas-atados-red" src="https://github.com/user-attachments/assets/ce99577e-c63a-47be-999c-046d77ece7c5" />
-.
+
 * Posterior a la instalación y antes de la puesta en funcionamiento, se debe realizar un trámite con el distribuidor de servicio (EEGSA, DEORSA, DEOCSA, etc.) para cambiar de régimen de consumidor a Autoproductor.
 * El contador de Autoproductor contabiliza la carga consumida y la devuelta; la factura mensual será por la diferencia más cargos (transporte de energía, cargo fijo, tasas municipales, alumbrado, etc.).
 * Si se produce más electricidad de la consumida durante el mes, se genera un saldo a favor o excedentes de energía acumulables hasta agotar el consumo, cuya gestión depende de las normas de la CNEE.
