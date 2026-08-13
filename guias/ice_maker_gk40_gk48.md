@@ -23,7 +23,7 @@ Para su seguridad y el uso adecuado de este producto, lea atentamente el manual 
 
 ---
 
-<img width="1066" height="1066" alt="ice_maker_gk40_gk48_3" src="https://github.com/user-attachments/assets/e87f87ab-9aec-4885-9cbf-4f22d8f07d0f" />
+<img width="235" height="319" alt="ice_maker_gk40_gk48" src="https://github.com/user-attachments/assets/5fe4f77f-064f-4fad-a42a-23a5aa946b7e" />
 
 ## Consejos importantes de seguridad
 
