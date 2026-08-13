@@ -1,10 +1,16 @@
-# Manual de instrucciones: Máquina de hielo y raspadora ZB-S 20
+# Manual de Usuario - Máquina de hielo y raspadora ZB-S20
 
-Gracias por elegir nuestra máquina para fabricar hielo. Lea atentamente este manual de instrucciones antes de utilizar este producto para garantizar un uso adecuado. Después de leer este manual, guárdelo en un lugar seguro y consúltelo cuando sea necesario.
+<img width="445" height="442" alt="maquina_de_hielo_y_raspadora_zbs20_1" src="https://github.com/user-attachments/assets/69b97c8e-d9a2-4695-9abe-9423b05f21fc" />
+
+
+Este manual proporciona las instrucciones de uso, especificaciones y pautas de seguridad para la máquina de hielo y raspadora **ZB-S20**.
 
 ---
 
-## Descripción
+<img width="2029" height="1368" alt="maquina_de_hielo_y_raspadora_zbs20_2" src="https://github.com/user-attachments/assets/25277b5f-8143-414f-9cce-a1c11d6fc8c7" />
+
+
+## 1. Descripción de Partes
 
 1. Tapa superior delantera
 2. Ventana de visualización
@@ -32,110 +38,87 @@ Gracias por elegir nuestra máquina para fabricar hielo. Lea atentamente este ma
 24. Tapa del raspador
 25. Cable de alimentación eléctrica
 
-<img width="2029" height="1368" alt="maquina_de_hielo_y_raspadora" src="https://github.com/user-attachments/assets/58a9e4af-8955-4375-98f4-ca8a15c6572e" />
+---
+
+## 2. Especificaciones Técnicas
+
+* **Producción diaria de hielo:** Aproximadamente 30 libras / 24h
+* **Capacidad de almacenamiento de hielo:** 1.8 kgs
+* **Capacidad de depósito de agua:** 3 L
+* **Refrigerante:** R290
+* **Forma de hielo:** Cúbico
+* **Dimensiones:** 378 * 398 * 420 mm
 
 ---
 
-## Especificaciones
+## 3. Antes / Primer Uso
 
-* **Producción diaria de hielo**: Aproximadamente 30 libras / 24h
-* **Capacidad de almacenamiento de hielo**: 1.8 kgs
-* **Capacidad de depósito de agua**: 3L
-* **Refrigerante**: R290
-* **Forma de hielo**: Cúbico
-* **Dimensiones**: 378*398*420mm
-
----
-
-## Antes / Primer uso de su máquina de hielo
-
-1. Durante el transporte, el ángulo de inclinación del gabinete no debe ser superior a 45°. No gire la máquina de hielo boca abajo, ya que esto podría dañar el compresor y el sistema de sellado.
-2. Retire todo el material de embalaje y revise cuidadosamente su máquina de hielo para asegurarse de que esté en buenas condiciones y de que no haya daños en la máquina, el cable de alimentación o el enchufe.
-3. La máquina de hielo debe colocarse horizontalmente sobre una superficie nivelada. Para garantizar una ventilación adecuada, deje 150mm de espacio en la parte superior, trasera y lateral. No la instale cerca de un horno, radiador ni ninguna otra fuente de calor.
-4. Antes de utilizar la máquina de hielo por primera vez, espere 2 horas después de colocarla y mantenga la compuerta de la parte frontal abierta.
-5. Asegúrese de que el voltaje indicado en la máquina de hielo corresponda con el voltaje de su hogar.
-6. Se debe asegurar que el agua utilizada esté correctamente filtrada.
-7. Mantenga siempre la ventana de visualización superior cerrada durante la fabricación del hielo.
+1. **Transporte:** El ángulo de inclinación del gabinete no debe ser superior a 45°. No gire la máquina de hielo boca abajo para evitar daños en el compresor y el sistema de sellado.
+2. **Inspección:** Retire todo el material de embalaje y revise que la máquina, el cable de alimentación y el enchufe se encuentren en buenas condiciones.
+3. **Ubicación:** Colóquela horizontalmente sobre una superficie nivelada. Deje 150 mm de espacio libre en la parte superior, trasera y lateral para garantizar una ventilación adecuada. No la instale cerca de fuentes de calor.
+4. **Tiempo de espera:** Espere 2 horas después de colocarla antes de usarla por primera vez y mantenga la compuerta frontal abierta.
+5. **Voltaje:** Verifique que el voltaje indicado en el equipo corresponda con el de su hogar.
+6. **Calidad del agua:** Utilice únicamente agua correctamente filtrada.
+7. Mantenga siempre la ventana de visualización superior cerrada durante la fabricación de hielo.
 
 ---
 
-## Operación del panel de control
+## 4. Operación del Panel de Control
 
 | Botón / Indicador | Explicación |
 | :--- | :--- |
-| **SHAVED ICE** (Botón) | Presione este botón para activar el raspador de hielo. Antes de presionarlo, coloque suficiente hielo en el recipiente y asegure la tapadera. |
-| **Ice Making** (Indicador encendido sin flash) | Unidad en proceso de fabricación de hielo. |
+| **SHAVED ICE** | Presione este botón para activar el raspador de hielo. (Asegúrese de colocar suficiente hielo en el recipiente y asegurar la tapadera antes de presionarlo). |
+| **Ice Making** (Indicador) | Unidad en proceso de fabricación de hielo si se enciende sin flash. |
 | **Ice Full** (Indicador) | Indica que la bandeja de hielo está llena a su capacidad máxima de almacenamiento. |
-| **Add Water** (Indicador) | Indica que el agua en el tanque no es suficiente. |
-| **ICE** (Botón) | Presionar para iniciar la fabricación de hielo. |
+| **Add Water** (Indicador) | Indica que el nivel de agua en el tanque es insuficiente. |
+| **ICE** | Presionar para iniciar la fabricación de hielo. |
 
 ---
 
-## Instrucciones de operación
+## 5. Instrucciones de Operación
 
-* **Paso 1:** El hielo raspado suele derretirse, por lo que se recomienda enfáticamente conectar una manguera de drenaje en la parte inferior de la unidad.
-* **Paso 2:** Abra la tapa, saque la canasta de hielo y llene el depósito con suficiente agua. *Nota:* Asegúrese de que el agua no sobrepase el fondo de la bandeja recolectora de hielo. 
-
-Si prefiere llenar el agua automáticamente, inserte el tubo de agua en el enchufe ubicado en la parte posterior de la unidad siguiendo estos pasos:
-* **Paso 2.1:** Inserte los soportes en la parte trasera de la máquina.
-* **Paso 2.2:** Retire las tapas de ambos lados del filtro.
-* **Paso 2.3:** Instale los conectores del filtro en ambos lados, los cuales deben estar unidos con cinta teflón para evitar fugas.
-* **Paso 2.4:** Coloque el filtro dentro de las pestañas del soporte (el extremo del filtro con una flecha debe ser colocado hacia la izquierda).
-* **Paso 2.5:** Inserte las tuberías de agua a ambos lados del filtro, sin conectarlas directamente a la máquina desde la fuente de agua todavía.
-* **Paso 2.6:** Desatornille el grifo de agua y en su lugar atornille primero la interfaz del grifo (metálica) y luego el grifo de agua a esta.
-* **Paso 2.7:** Conecte el grifo de color azul con la interfaz a la tubería derecha del filtro (aún sin conectar la tubería izquierda). Abra el grifo durante al menos 10 segundos para drenar el agua, luego ciérrelo. Conecte la tubería izquierda a la entrada de agua y vuelva a abrir el grifo.
-* **Paso 2.8:** Si desea quitar la tubería conectada al orificio de entrada de agua, retire primero el anillo azul (si lo hay), presione el anillo blanco exterior (denominado B) y extraiga el tubo simultáneamente.
-* **Paso 3:** Conexión a la corriente.
-* **Paso 4:** Presione para encender la unidad; la máquina comenzará a funcionar. *Nota:* Durante los primeros tres ciclos, el hielo puede ser pequeño, de tamaño irregular o incluso no haber hielo.
-* **Paso 5:** Si el indicador de agua se ilumina, saque la canasta, agregue agua según el paso 1 y presione para reiniciar la máquina.
-* **Paso 6:** Si el indicador de llenado se ilumina, saque el hielo con la pala incluida. *Nota:* Cuando la canasta esté llena, retire el hielo inmediatamente; no permita que la bandeja se llene demasiado.
-* **Paso 7:** Presione para activar el raspador de hielo. *Nota:* Coloque suficiente hielo en el recipiente y asegure la tapa antes de presionarlo.
+* **Paso 1:** Se recomienda conectar una manguera de drenaje en la parte inferior de la unidad, ya que el hielo raspado suele derretirse.
+* **Paso 2 (Llenado manual):** Abra la tapa, saque la canasta de hielo y llene el depósito con agua sin sobrepasar el fondo de la bandeja recolectora.
+* **Paso 2 (Llenado automático):** Inserte el tubo de agua en el enchufe de la parte posterior siguiendo los pasos de instalación del filtro con cinta teflón para evitar fugas.
+* **Paso 3:** Conecte la unidad a la corriente.
+* **Paso 4:** Presione el botón **ICE** para encender la unidad. *Nota: Durante los primeros tres ciclos, el hielo puede ser pequeño, irregular o ausente*.
+* **Paso 5:** Si el indicador de falta de agua se ilumina, agregue agua y reinicie.
+* **Paso 6:** Si el indicador de hielo lleno se ilumina, retire el hielo inmediatamente con la pala incluida.
+* **Paso 7:** Presione **SHAVED ICE** para activar el raspador (coloque hielo previamente en el recipiente y asegure la tapa).
 * **Paso 8:** Presione para detener la máquina.
-* **Paso 9:** Coloque un tanque debajo de la unidad, tire de la unidad un poco hacia adelante y retire el tapón de drenaje en el medio del tanque para drenar el agua.
-* **Paso 10:** Para quitar la tubería, retire el anillo azul de seguridad (si lo hay), presione el anillo blanco de bloqueo en el lado exterior y extraiga la tubería.
+* **Paso 9:** Para vaciar el equipo, coloque un tanque debajo, tire de la unidad hacia adelante y retire el tapón de drenaje central.
+* **Paso 10:** Para desconectar tuberías, retire el anillo de seguridad azul (si lo hay), presione el anillo blanco exterior y extraiga el tubo.
 
 ---
 
-## Cuidado
+## 6. Cuidado y Mantenimiento
 
-1. Limpie con frecuencia el revestimiento interior, la bandeja recolectora de hielo, el depósito de agua, la pala para hielo y el evaporador. Para limpiar, desenchufe la unidad y retire los cubitos. Use una solución diluida de agua y vinagre para limpiar el interior y el exterior. No rocíe productos químicos ni agentes diluidos como ácidos, gasolina o aceite. Enjuáguela bien antes de encenderla.
-2. Mantenga las aberturas de ventilación del gabinete o de la estructura incorporada libres de obstrucciones. No utilice dispositivos mecánicos u otros medios para acelerar la descongelación.
-3. Para garantizar la limpieza de los cubos, se sugiere reemplazar el agua del depósito cada 24 horas.
-4. Si el compresor se detiene por cualquier motivo (falta de agua, exceso de hielo, corte de energía, etc.), no lo inicie de inmediato; espere como mínimo 3 minutos antes de reiniciar.
-5. Utilice siempre agua fresca antes de iniciar la producción, ya sea en la instalación inicial o después de un periodo prolongado de inactividad.
-6. Esta unidad es únicamente para uso doméstico, no para exteriores. Si es necesario usarla en exteriores, asegúrese de que la ventana de visualización esté cerrada.
-
----
-
-## Aviso de seguridad
-
-1. Desconecte la energía antes de realizar el mantenimiento.
-2. No retire directamente el cable de energía para apagar el equipo.
-3. Si el hielo presenta anomalías, consulte a su vendedor.
-4. Es normal que la superficie del compresor y del condensador alcance temperaturas de entre 70°C y 90°C durante el funcionamiento, y las zonas circundantes pueden estar calientes. No las toque.
-5. Debido a la congelación rápida, los cubitos de hielo pueden tener una apariencia turbia debido al aire atrapado, lo cual no afecta la calidad ni el sabor.
-6. Cuando no esté en uso, abra el compartimento superior para permitir la circulación de aire y evitar daños por humedad.
-7. Si el cable de alimentación está dañado, debe ser reemplazado por el fabricante, su agente de servicio o personal capacitado para evitar riesgos eléctricos.
-8. Este aparato puede ser utilizado por niños mayores de 8 años y personas con capacidades físicas, sensoriales o mentales reducidas, o falta de experiencia y conocimientos, si cuentan con supervisión o instrucción adecuada sobre su uso seguro y comprenden los peligros.
-9. Los niños no deben jugar con el equipo. La limpieza y el mantenimiento no deben ser realizados por niños sin supervisión.
-10. **ADVERTENCIA:** Llene el depósito únicamente con agua embotellada o agua del grifo de buena calidad (no usar jugos u otras bebidas).
-11. **ADVERTENCIA:** Mantenga las rejillas de ventilación a los lados de la máquina desbloqueadas y con libre flujo de aire.
-12. **ADVERTENCIA:** No utilice dispositivos mecánicos u otros medios para acelerar la descongelación distintos a los recomendados por el fabricante.
-13. **ADVERTENCIA:** No dañar el circuito refrigerante.
-14. **ADVERTENCIA:** No utilice aparatos eléctricos dentro de los compartimentos de almacenamiento del aparato.
+1. Limpie con frecuencia el revestimiento interior, la bandeja recolectora, el depósito, la pala y el evaporador. Desenchufe la unidad y use una solución diluida de agua y vinagre. No use químicos agresivos, ácidos, gasolina o aceite.
+2. Mantenga las aberturas de ventilación libres de obstrucciones. No use dispositivos mecánicos para acelerar la descongelación.
+3. Reemplace el agua del depósito cada 24 horas para garantizar la limpieza.
+4. Si el compresor se detiene por falta de agua, exceso de hielo o corte de energía, espere al menos 3 minutos antes de reiniciar.
+5. Use siempre agua fresca al iniciar o tras periodos largos de inactividad.
+6. Uso exclusivo doméstico y en interiores (si se usa en exteriores, mantenga la ventana de visualización cerrada).
 
 ---
 
-## Solución de problemas
+## 7. Avisos de Seguridad
 
-* **Atascos por corte de energía:** Si ocurre un corte de energía o se presiona el botón de apagado durante el ciclo, podrían formarse pequeños trozos de hielo que se atasquen en la pala automática. Apague el equipo, empuje suavemente la pala hacia la parte trasera, retire los trozos y reinicie.
-* **Fallo en la expulsión de hielo:** Si la pala no empuja el hielo hacia el colector a pesar de estar encendida la luz M, verifique si la bandeja de agua está horizontal. Si no lo está, ajústela presionando ligeramente la pala con el dedo y reinicie.
+* Desconecte la energía antes de realizar cualquier mantenimiento****.
+* No tire directamente del cable de energía para apagar el equipo.
+* Es normal que la superficie del compresor y condensador alcancen entre 70°C y 90°C durante el funcionamiento; no los toque.
+* Los cubitos de hielo pueden verse turbios debido al aire atrapado por la congelación rápida; esto no afecta la calidad ni el sabor.
+* Cuando no esté en uso, mantenga el compartimento superior abierto para permitir la circulación de aire y evitar humedad.
+* **ADVERTENCIA:** Llene el depósito únicamente con agua embotellada o agua de grifo de buena calidad (prohibido jugos u otras bebidas).
+* **ADVERTENCIA:** No dañe el circuito refrigerante ni utilice aparatos eléctricos dentro de los compartimentos de almacenamiento.
 
-### Problemas comunes y soluciones
+---
 
-| Problema | Razones | Solución |
-| :--- | :--- | :--- |
-| El compresor funciona de forma anormal con un zumbido. | El voltaje es inferior al recomendado. | Detenga la fabricación de hielo y no reinicie hasta que el voltaje sea normal. |
-| Las condiciones son adecuadas, pero no se fabrica hielo. | Fugas de refrigerante / El sistema de sellado está bloqueado. | Servicio de mantenimiento o reparación. |
-| Las luces de hielo lleno y agregar agua se encienden al mismo tiempo. | Bandeja de agua bloqueada por un cubo de hielo. | Limpiar el cubo debajo de la pala, sacar el tapón, insertarlo nuevamente y presionar el botón durante 3 minutos para que se reinicie automáticamente. |
-| La máquina sigue funcionando, pero el agua está más caliente de lo normal. | La válvula magnética está averiada. | Reemplazar la válvula magnética. |
+## 8. Solución de Problemas
+
+* **Atasco por interrupción eléctrica:** Si ocurre un corte de energía o apagado durante el ciclo, pueden formarse trozos de hielo que traben la pala automática. Apague el equipo, empuje suavemente la pala hacia la parte trasera, retire los trozos y reinicie.
+* **Compresor con zumbido anormal:** El voltaje es inferior al recomendado. Detenga la fabricación de hielo hasta que el voltaje se normalice.
+* **Condiciones adecuadas pero no se fabrica hielo:** Posible fuga de refrigerante o bloqueo en el sistema de sellado. Requiere servicio de mantenimiento o reparación.
+* **Luces de hielo lleno y agregar agua encendidas al mismo tiempo:** La bandeja de agua está bloqueada por un cubo de hielo. Retire el hielo debajo de la pala, saque y vuelva a insertar el tapón, presione el botón durante 3 minutos y el equipo se reiniciará automáticamente.
+* **El agua sale más caliente de lo normal:** La válvula magnética está averiada y debe ser reemplazada.
+```
