@@ -1,4 +1,4 @@
-# Guía de Usuario: Calentador Solar AISA 2026
+# Guía de Usuario: Calentador Solar AISA
 
 ## Contenido
 1. Base del funcionamiento[cite: 3]
