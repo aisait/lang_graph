@@ -15,6 +15,7 @@ Para seleccionar la bomba adecuada, se debe localizar el punto de operación en 
 2.  **Caudal Requerido (Eje X):** Cantidad de agua necesaria según la aplicación.
 
 > **Nota:** El punto de intersección de ambas variables no debe situarse en los límites máximos operativos para garantizar la eficiencia.
+>
 > 
 <img width="1702" height="1229" alt="bomba_solar_1" src="https://github.com/user-attachments/assets/91e86c03-f1ab-4951-a7c0-7d283acb5779" />
 
