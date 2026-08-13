@@ -34,9 +34,4 @@ $$	ext{Carga Dinámica (m)} = 	ext{Profundidad del pozo} + 	ext{Altura al tanque
 ---
 
 ## 4. Aplicaciones Especiales
-Si el sistema será utilizado para **riego**, es necesario especificar:
-*   Tipo de aspersores.
-*   Cantidad de aspersores.
-*   **E-mail:** [ventas@aisa.com.gt](mailto:ventas@aisa.com.gt)
-*   **Teléfonos:** 3349-0950 / 2367-0227
-*   **Sitio Web:** [aisa.com.gt](https://aisa.com.gt)
+Si el sistema será utilizado para **riego**, es necesario especificar.
