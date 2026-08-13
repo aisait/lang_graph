@@ -13,6 +13,8 @@
 10. Condiciones generales de la venta[cite: 3]
 
 ---
+<img width="299" height="211" alt="calentadores_soalres_1" src="https://github.com/user-attachments/assets/d54cdfe0-904e-4893-95a9-6ce799c1f842" /><img width="289" height="257" alt="calentadores_soalres_2" src="https://github.com/user-attachments/assets/a591c4db-391a-4f07-9977-286747420a61" />
+
 
 ## 1. Base del Funcionamiento
 
@@ -89,6 +91,8 @@ Los sistemas SOLAR están desarrollados para residencias con una presión de agu
 * **Visitas en garantía:** Son gratuitas dentro de la ciudad capital; fuera de ella, el cliente asume gastos de viaje o envío de repuestos por m   ensajería[cite: 3]. Las visitas por fallas externas (cables desconectados) tienen un costo de **Q250.00** en el área metropolitana[cite: 3].
 
 ---
+
+<img width="289" height="257" alt="calentadores_soalres_2" src="https://github.com/user-attachments/assets/11e88334-231a-4ceb-b846-bf9f620b0592" />
 
 ## 9. Exclusiones de la Garantía
 
