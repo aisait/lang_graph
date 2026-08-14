@@ -1,6 +1,6 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.1.9 – Eliminada asignación innecesaria a agent_graph.
+VERSIÓN 2.1.10 – Asignación del cliente Odoo al grafo y logs de depuración.
 15AGO2026.
 """
 import os
@@ -35,7 +35,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 # =============================================================================
 from observability import ObservabilityPort, LangfuseIngestionAdapter
 from schemas import ChatRequest
-from agent_graph import create_graph, normalizar_contacto
+from agent_graph import create_graph, normalizar_contacto, set_odoo_client
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 from db_client import get_bi_db_url, actualizar_thread
 from config import settings
@@ -51,7 +51,7 @@ from epistemology import EpistemologyOrchestrator
 import openai
 
 # =============================================================================
-# IMPORTACIÓN DEL CLIENTE ODOO DB (solo para conectar/cerrar en lifespan)
+# IMPORTACIÓN DEL CLIENTE ODOO DB
 # =============================================================================
 from odoo_db_client import odoo_db_client
 
@@ -79,7 +79,7 @@ def get_observability_adapter() -> ObservabilityPort:
                 secret_key=LANGFUSE_SECRET_KEY,
                 host=LANGFUSE_HOST
             )
-            logger.info("Langfuse Ingestion adapter inicializado")
+            logger.info(f"Langfuse Ingestion adapter inicializado con host: {LANGFUSE_HOST}")
         except Exception as e:
             logger.critical(f"Error al inicializar adaptador Ingestion: {e}")
             _observability_adapter = NullObservabilityAdapter()
@@ -97,7 +97,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.1.9 (CON SUPERVISOR, MICDP Y ODOO DB) =====")
+print("===== JARVI API v2.1.10 (CON SUPERVISOR, MICDP Y ODOO DB) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -778,10 +778,13 @@ async def lifespan(app: FastAPI):
             print(f"❌ Error crítico al inicializar orquestador: {e}")
             _epistemology = None
 
-        # ===== INICIALIZAR CLIENTE ODOO DB (conexión) =====
+        # ===== INICIALIZAR CLIENTE ODOO DB Y ASIGNARLO AL GRAFO =====
         try:
+            # Conectar
             await odoo_db_client.connect()
-            print("✅ Cliente Odoo DB inicializado correctamente.")
+            # Asignar al grafo
+            set_odoo_client(odoo_db_client)
+            print("✅ Cliente Odoo DB inicializado correctamente y asignado al grafo.")
         except Exception as e:
             print(f"❌ Error al inicializar cliente Odoo DB: {e}")
 
@@ -795,7 +798,7 @@ async def lifespan(app: FastAPI):
     await odoo_db_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.1.9",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.1.10",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -836,7 +839,7 @@ async def health_check():
     odoo_status = "connected" if odoo_db_client and odoo_db_client._initialized else "disconnected"
     status = {
         "service": "jarvi-backend-production",
-        "version": "2.1.9",
+        "version": "2.1.10",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
