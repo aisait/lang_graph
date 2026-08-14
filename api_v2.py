@@ -1,7 +1,7 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.1.6 – Corrección de inicialización del orquestador.
-31JUL2026.
+VERSIÓN 2.1.7 – Integración con cliente Odoo DB (conexión directa PostgreSQL).
+14AGO2026.
 """
 import os
 import asyncio
@@ -50,6 +50,12 @@ from project_repository import ProjectRepository
 from epistemology import EpistemologyOrchestrator
 import openai
 
+# =============================================================================
+# NUEVO: Importación del cliente Odoo DB y módulo agent_graph para asignación
+# =============================================================================
+from odoo_db_client import odoo_db_client
+import agent_graph  # Necesario para asignar el cliente global
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -92,7 +98,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.1.6 (CON SUPERVISOR Y MICDP) =====")
+print("===== JARVI API v2.1.7 (CON SUPERVISOR, MICDP Y ODOO DB) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -773,6 +779,15 @@ async def lifespan(app: FastAPI):
             print(f"❌ Error crítico al inicializar orquestador: {e}")
             _epistemology = None
 
+        # ===== NUEVO: INICIALIZAR CLIENTE ODOO DB =====
+        try:
+            await odoo_db_client.connect()
+            agent_graph.odoo_client = odoo_db_client  # Asignar al módulo agent_graph
+            print("✅ Cliente Odoo DB inicializado correctamente.")
+        except Exception as e:
+            print(f"❌ Error al inicializar cliente Odoo DB: {e}")
+            # El sistema seguirá funcionando sin Odoo DB, usando ontología local
+
         start_batch_worker()
         yield
 
@@ -780,9 +795,11 @@ async def lifespan(app: FastAPI):
         await ctfom_pool.close()
     if redis_client:
         await redis_client.close()
+    # Cerrar conexión Odoo DB
+    await odoo_db_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.1.6",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.1.7",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -816,18 +833,20 @@ async def telemetry_middleware(request: Request, call_next):
         raise
 
 # =============================================================================
-# HEALTH CHECK
+# HEALTH CHECK (actualizado para mostrar estado de Odoo DB)
 # =============================================================================
 @app.get("/health")
 async def health_check():
+    odoo_status = "connected" if odoo_db_client and odoo_db_client._initialized else "disconnected"
     status = {
         "service": "jarvi-backend-production",
-        "version": "2.1.6",
+        "version": "2.1.7",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
         "supervisor": "active",
         "micdp": "active" if _epistemology else "inactive",
+        "odoo_db": odoo_status,
         "status": "ok"
     }
     return status
