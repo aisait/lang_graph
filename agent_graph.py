@@ -1,7 +1,7 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.7.2 – Corrección de condición para habilitar búsqueda en catálogo Odoo.
-14AGO2026.
+VERSIÓN 2.7.3 – Reseteo de flags de búsqueda en cada nuevo mensaje humano.
+15AGO2026.
 """
 import os
 import time
@@ -160,7 +160,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.7.2"}
+        default_headers={"User-Agent": "JARVI/2.7.3"}
     )
 
 # =============================================================================
@@ -449,13 +449,24 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     checklist_llm = llm.with_structured_output(ChecklistExtract)
 
     # -------------------------------------------------------------------------
-    # NODO 1: CLASIFICADOR DE INTENCIÓN
+    # NODO 1: CLASIFICADOR DE INTENCIÓN (con reseteo de flags de búsqueda)
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Clasificador de Intención Comercial", criticidad="MEDIA")
     @observe_node(node_name="clasificar_intencion_comercial")
     async def clasificar_intencion_comercial_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
+
+        # ===== NUEVO: Resetear flags de búsqueda al inicio de cada nuevo mensaje humano =====
+        # Esto evita que el flag catalog_search_attempted persista entre ejecuciones
+        # y permita nuevas búsquedas en el catálogo de Odoo.
+        messages = state.get("messages", [])
+        if messages and isinstance(messages[-1], HumanMessage):
+            ctx["catalog_search_attempted"] = False
+            ctx["catalog_search_mode"] = False
+            ctx["awaiting_expansion"] = False
+            logger.debug("Flags de búsqueda reseteados por nuevo mensaje humano.")
+
         if not ultimo:
             return {"contexto_tecnico": ctx}
         if ctx.get("topologia"):
@@ -1231,7 +1242,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": [ai_message], "contexto_tecnico": ctx}
 
     # =========================================================================
-    # CONDICIÓN DE BORDE (con corrección para habilitar búsqueda en catálogo)
+    # CONDICIÓN DE BORDE (con reseteo de flags ya hecho en clasificar_intencion)
     # =========================================================================
     def my_tools_condition(state: AgentState):
         messages = state.get("messages", [])
@@ -1265,8 +1276,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["catalog_search_attempted"] = True
                 return "generar_respuesta_comercial"
 
-        # 3. Si se ofreció derivación, no se ha intentado la búsqueda y no estamos en modo catálogo,
-        #    entonces redirigir a búsqueda en catálogo.
+        # 3. Si se ofreció derivación y no se ha intentado la búsqueda, redirigir a búsqueda.
         if (ctx.get("derivation_offered") and 
             not ctx.get("catalog_search_mode") and 
             not ctx.get("catalog_search_attempted")):
