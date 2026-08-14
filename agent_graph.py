@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.7.1 – Corrección de bucle de recursión en modo catálogo.
+VERSIÓN 2.7.2 – Corrección de condición para habilitar búsqueda en catálogo Odoo.
 14AGO2026.
 """
 import os
@@ -160,7 +160,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.7.1"}
+        default_headers={"User-Agent": "JARVI/2.7.2"}
     )
 
 # =============================================================================
@@ -254,7 +254,7 @@ class InferenciaEnergetica(TypedDict):
     micdp_accepted: Optional[bool]
     micdp_offered: Optional[bool]
     micdp_active: Optional[bool]
-    catalog_search_attempted: Optional[bool]   # NUEVO
+    catalog_search_attempted: Optional[bool]
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -611,7 +611,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NUEVO NODO 4b: BÚSQUEDA EN CATÁLOGO ODOO (con flag de intento)
+    # NODO 4b: BÚSQUEDA EN CATÁLOGO ODOO (con flag de intento)
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Búsqueda en Catálogo Odoo", criticidad="MEDIA")
     @observe_node(node_name="buscar_en_catalogo_odoo")
@@ -664,7 +664,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NUEVO NODO 4c: AMPLIAR INFORMACIÓN DE PRODUCTO ODOO
+    # NODO 4c: AMPLIAR INFORMACIÓN DE PRODUCTO ODOO
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Ampliar Información Producto Odoo", criticidad="MEDIA")
     @observe_node(node_name="ampliar_informacion_producto")
@@ -1231,13 +1231,12 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": [ai_message], "contexto_tecnico": ctx}
 
     # =========================================================================
-    # CONDICIÓN DE BORDE (con corrección de bucle)
+    # CONDICIÓN DE BORDE (con corrección para habilitar búsqueda en catálogo)
     # =========================================================================
     def my_tools_condition(state: AgentState):
         messages = state.get("messages", [])
         ctx = state.get("contexto_tecnico", {})
         ultimo = extraer_intencion_humana(messages)
-        is_user_message = messages and isinstance(messages[-1], HumanMessage)
 
         # 1. Prioridad MICDP / Asesor
         if ctx.get("micdp_active", False):
@@ -1249,8 +1248,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
         # 2. Si ya estamos en modo catálogo y esperamos expansión
         if ctx.get("catalog_search_mode") and ctx.get("awaiting_expansion"):
-            if not is_user_message:
-                return "actualizar_checklist"
             if any(k in ultimo for k in ["amplíe", "más info", "dime más", "especificaciones", "detalles"]):
                 return "ampliar_informacion_producto"
             elif len(ultimo.split()) > 2 and (
@@ -1268,11 +1265,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 ctx["catalog_search_attempted"] = True
                 return "generar_respuesta_comercial"
 
-        # 3. Si se ofreció derivación, el usuario ha enviado un nuevo mensaje y no se ha intentado la búsqueda
+        # 3. Si se ofreció derivación, no se ha intentado la búsqueda y no estamos en modo catálogo,
+        #    entonces redirigir a búsqueda en catálogo.
         if (ctx.get("derivation_offered") and 
             not ctx.get("catalog_search_mode") and 
-            not ctx.get("catalog_search_attempted") and 
-            is_user_message):
+            not ctx.get("catalog_search_attempted")):
             return "buscar_en_catalogo_odoo"
 
         # 4. Flujo normal
