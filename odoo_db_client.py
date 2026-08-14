@@ -37,10 +37,11 @@ class OdooDBClient:
                 max_size=5
             )
             self._initialized = True
-            logger.info("Conexión a BD de Odoo establecida correctamente.")
+            logger.info("✅ Conexión a BD de Odoo establecida correctamente.")
             return True
         except Exception as e:
-            logger.error(f"Error al conectar a BD de Odoo: {e}")
+            logger.error(f"❌ Error al conectar a BD de Odoo: {e}")
+            self._initialized = False
             return False
 
     async def close(self):
