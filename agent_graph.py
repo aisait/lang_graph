@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.7.3 – Reseteo de flags de búsqueda en cada nuevo mensaje humano.
+VERSIÓN 2.7.4 – Importación directa del cliente Odoo y corrección de búsqueda.
 15AGO2026.
 """
 import os
@@ -55,6 +55,11 @@ logger = logging.getLogger(__name__)
 from config import settings
 
 # =============================================================================
+# IMPORTACIÓN DIRECTA DEL CLIENTE ODOO DB (NO DEPENDE DE ASIGNACIÓN EXTERNA)
+# =============================================================================
+from odoo_db_client import odoo_db_client
+
+# =============================================================================
 # INSTANCIAS GLOBALES
 # =============================================================================
 _supervisor = SupervisorJarvi(rules_path="rules.json")
@@ -62,11 +67,6 @@ logger.info("SupervisorJarvi inicializado con 45 reglas")
 
 _epistemology = None
 _epistemology_lock = asyncio.Lock()
-
-# =============================================================================
-# NUEVO: Cliente Odoo DB (se inicializa desde api_v2)
-# =============================================================================
-odoo_client = None  # Se asignará desde api_v2
 
 # =============================================================================
 # FUNCIÓN PARA INICIALIZAR ORQUESTADOR DE FORMA LAZY (POR WORKER)
@@ -160,7 +160,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.7.3"}
+        default_headers={"User-Agent": "JARVI/2.7.4"}
     )
 
 # =============================================================================
@@ -457,9 +457,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx = dict(state.get("contexto_tecnico") or {})
         ultimo = extraer_intencion_humana(state.get("messages", []))
 
-        # ===== NUEVO: Resetear flags de búsqueda al inicio de cada nuevo mensaje humano =====
-        # Esto evita que el flag catalog_search_attempted persista entre ejecuciones
-        # y permita nuevas búsquedas en el catálogo de Odoo.
+        # Resetear flags de búsqueda si el último mensaje es humano
         messages = state.get("messages", [])
         if messages and isinstance(messages[-1], HumanMessage):
             ctx["catalog_search_attempted"] = False
@@ -568,10 +566,10 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             ctx["checklist_universal"] = checklist
             return {"contexto_tecnico": ctx}
 
-        # Si no se encuentra en ontología, intentar con Odoo DB (si está disponible)
-        if odoo_client and odoo_client._initialized:
+        # Si no se encuentra en ontología, intentar con Odoo DB (usando el cliente importado)
+        if odoo_db_client and odoo_db_client._initialized:
             try:
-                odoo_results = await odoo_client.search_products_by_keyword(ultimo, limit=3)
+                odoo_results = await odoo_db_client.search_products_by_keyword(ultimo, limit=3)
                 if odoo_results:
                     best = odoo_results[0]
                     ctx["product_tag"] = f"odoo_{best['id']}"
@@ -622,26 +620,25 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 4b: BÚSQUEDA EN CATÁLOGO ODOO (con flag de intento)
+    # NODO 4b: BÚSQUEDA EN CATÁLOGO ODOO (usando odoo_db_client importado)
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Búsqueda en Catálogo Odoo", criticidad="MEDIA")
     @observe_node(node_name="buscar_en_catalogo_odoo")
     async def buscar_en_catalogo_odoo_node(state: AgentState):
         ctx = dict(state.get("contexto_tecnico") or {})
-        # Marcar que ya se intentó la búsqueda en esta ejecución
         ctx["catalog_search_attempted"] = True
         ultimo = extraer_intencion_humana(state.get("messages", []))
 
-        # Si no hay cliente Odoo o no está inicializado, responder y finalizar
-        if not odoo_client or not odoo_client._initialized:
-            logger.warning("Cliente Odoo no disponible, no se puede buscar en catálogo.")
+        # Verificar disponibilidad del cliente Odoo
+        if not odoo_db_client or not odoo_db_client._initialized:
+            logger.warning("Cliente Odoo no disponible (no conectado o no inicializado).")
             response = "Lo siento, el catálogo de productos no está disponible en este momento. ¿Prefiere que un asesor le contacte o iniciar el Proceso Conversacional para la Definición de Proyectos?"
             ctx["derivation_offered"] = True
             ctx["micdp_offered"] = True
             return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
 
         try:
-            results = await odoo_client.search_products_by_keyword(ultimo, limit=5)
+            results = await odoo_db_client.search_products_by_keyword(ultimo, limit=5)
             if results:
                 ctx["odoo_search_results"] = results
                 ctx["catalog_search_mode"] = True
@@ -650,7 +647,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
                 lines = ["Hemos encontrado los siguientes productos en nuestro catálogo real:\n"]
                 for idx, prod in enumerate(results, 1):
-                    precio = odoo_client.format_price(prod.get("list_price"))
+                    precio = odoo_db_client.format_price(prod.get("list_price"))
                     desc = prod.get("description_website", "")
                     if desc and len(desc) > 100:
                         desc = desc[:100] + "..."
@@ -662,7 +659,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                 response_text = "\n".join(lines)
                 return {"messages": [AIMessage(content=response_text)], "contexto_tecnico": ctx}
             else:
-                # No se encontraron productos, ofrecer derivación nuevamente
                 response = "No encontramos productos que coincidan con su consulta. ¿Prefiere que un asesor le contacte para ayudarle personalmente o desea iniciar el Proceso Conversacional para la Definición de Proyectos?"
                 ctx["derivation_offered"] = True
                 ctx["micdp_offered"] = True
@@ -712,11 +708,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             return {"messages": [AIMessage(content=msg)], "contexto_tecnico": ctx}
 
         try:
-            full_product = await odoo_client.get_product_by_id(selected_product['id'])
+            full_product = await odoo_db_client.get_product_by_id(selected_product['id'])
             if not full_product:
                 full_product = selected_product
 
-            precio = odoo_client.format_price(full_product.get("list_price"))
+            precio = odoo_db_client.format_price(full_product.get("list_price"))
             nombre = full_product.get("name", "Producto")
             desc = full_product.get("description_website", "")
             ficha = full_product.get("data_sheet_auto", "")
@@ -734,7 +730,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             response_text = "\n".join(lines)
             ctx["awaiting_expansion"] = False
             ctx["current_product_id"] = full_product.get("id")
-            # Resetear flag de intento para permitir futuras búsquedas
             ctx["catalog_search_attempted"] = False
 
             return {"messages": [AIMessage(content=response_text)], "contexto_tecnico": ctx}
@@ -1242,7 +1237,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": [ai_message], "contexto_tecnico": ctx}
 
     # =========================================================================
-    # CONDICIÓN DE BORDE (con reseteo de flags ya hecho en clasificar_intencion)
+    # CONDICIÓN DE BORDE
     # =========================================================================
     def my_tools_condition(state: AgentState):
         messages = state.get("messages", [])
