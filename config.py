@@ -42,14 +42,6 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="", env="REDIS_URL")
     redis_ttl: int = Field(default=604800, env="REDIS_TTL")
 
-    # Odoo (XML-RPC)
-    odoo_host: str = Field(default="34.75.123.223", env="ODOO_HOST")
-    odoo_db: str = Field(default="aisa_prod", env="ODOO_DB")
-    odoo_user: str = Field(default="agente_n8n", env="ODOO_USER")
-    odoo_password: str = Field(default="Agente*2025", env="ODOO_PASSWORD")
-    odoo_product_model: str = Field(default="product.template", env="ODOO_PRODUCT_MODEL")
-    odoo_ongrid_domain: str = Field(default='[["sale_ok","=",True],["type","=","product"]]', env="ODOO_ONGRID_DOMAIN")
-
     # NUEVAS: Variables para conexión directa a BD de Odoo (PostgreSQL)
     odoo_db_host: str = Field(default="", env="DATABASE_HOST")          # servidor
     odoo_db_port: int = Field(default=5432, env="DATABASE_PORT")        # puerto
