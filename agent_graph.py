@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.7.4 – Importación directa del cliente Odoo y corrección de búsqueda.
+VERSIÓN 2.7.5 – Asignación global del cliente Odoo y logs de depuración.
 15AGO2026.
 """
 import os
@@ -55,9 +55,20 @@ logger = logging.getLogger(__name__)
 from config import settings
 
 # =============================================================================
-# IMPORTACIÓN DIRECTA DEL CLIENTE ODOO DB (NO DEPENDE DE ASIGNACIÓN EXTERNA)
+# IMPORTACIÓN DEL CLIENTE ODOO DB (se asignará globalmente desde api_v2)
 # =============================================================================
-from odoo_db_client import odoo_db_client
+# Inicialmente None; se asigna en la función set_odoo_client
+_odoo_client = None
+
+def set_odoo_client(client):
+    """Asigna el cliente Odoo para que sea usado por el grafo."""
+    global _odoo_client
+    _odoo_client = client
+    logger.info(f"Cliente Odoo asignado al grafo: {client is not None}")
+
+def get_odoo_client():
+    """Retorna el cliente Odoo asignado."""
+    return _odoo_client
 
 # =============================================================================
 # INSTANCIAS GLOBALES
@@ -160,7 +171,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.7.4"}
+        default_headers={"User-Agent": "JARVI/2.7.5"}
     )
 
 # =============================================================================
@@ -566,10 +577,11 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             ctx["checklist_universal"] = checklist
             return {"contexto_tecnico": ctx}
 
-        # Si no se encuentra en ontología, intentar con Odoo DB (usando el cliente importado)
-        if odoo_db_client and odoo_db_client._initialized:
+        # Si no se encuentra en ontología, intentar con Odoo DB usando el cliente global
+        odoo = get_odoo_client()
+        if odoo and odoo._initialized:
             try:
-                odoo_results = await odoo_db_client.search_products_by_keyword(ultimo, limit=3)
+                odoo_results = await odoo.search_products_by_keyword(ultimo, limit=3)
                 if odoo_results:
                     best = odoo_results[0]
                     ctx["product_tag"] = f"odoo_{best['id']}"
@@ -590,6 +602,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
                     return {"contexto_tecnico": ctx}
             except Exception as e:
                 logger.error(f"Error consultando Odoo DB en seleccionar_productos: {e}")
+        else:
+            logger.warning("Cliente Odoo no disponible en seleccionar_productos")
 
         pregunta = "¿Sobre qué tipo de equipo le gustaría recibir asesoría? (ej. paneles solares, calentadores, bombas de agua, iluminación...)"
         new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
@@ -620,7 +634,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 4b: BÚSQUEDA EN CATÁLOGO ODOO (usando odoo_db_client importado)
+    # NODO 4b: BÚSQUEDA EN CATÁLOGO ODOO (usando el cliente global)
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Búsqueda en Catálogo Odoo", criticidad="MEDIA")
     @observe_node(node_name="buscar_en_catalogo_odoo")
@@ -629,8 +643,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         ctx["catalog_search_attempted"] = True
         ultimo = extraer_intencion_humana(state.get("messages", []))
 
-        # Verificar disponibilidad del cliente Odoo
-        if not odoo_db_client or not odoo_db_client._initialized:
+        odoo = get_odoo_client()
+        if not odoo or not odoo._initialized:
             logger.warning("Cliente Odoo no disponible (no conectado o no inicializado).")
             response = "Lo siento, el catálogo de productos no está disponible en este momento. ¿Prefiere que un asesor le contacte o iniciar el Proceso Conversacional para la Definición de Proyectos?"
             ctx["derivation_offered"] = True
@@ -638,7 +652,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
 
         try:
-            results = await odoo_db_client.search_products_by_keyword(ultimo, limit=5)
+            logger.info(f"Buscando en Odoo con keyword: '{ultimo}'")
+            results = await odoo.search_products_by_keyword(ultimo, limit=5)
             if results:
                 ctx["odoo_search_results"] = results
                 ctx["catalog_search_mode"] = True
@@ -647,7 +662,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
 
                 lines = ["Hemos encontrado los siguientes productos en nuestro catálogo real:\n"]
                 for idx, prod in enumerate(results, 1):
-                    precio = odoo_db_client.format_price(prod.get("list_price"))
+                    precio = odoo.format_price(prod.get("list_price"))
                     desc = prod.get("description_website", "")
                     if desc and len(desc) > 100:
                         desc = desc[:100] + "..."
@@ -707,12 +722,17 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             msg = "No he identificado a qué producto se refiere. Por favor, indique el número de la lista o el nombre exacto."
             return {"messages": [AIMessage(content=msg)], "contexto_tecnico": ctx}
 
+        odoo = get_odoo_client()
+        if not odoo or not odoo._initialized:
+            msg = "El catálogo no está disponible en este momento. Intente más tarde."
+            return {"messages": [AIMessage(content=msg)], "contexto_tecnico": ctx}
+
         try:
-            full_product = await odoo_db_client.get_product_by_id(selected_product['id'])
+            full_product = await odoo.get_product_by_id(selected_product['id'])
             if not full_product:
                 full_product = selected_product
 
-            precio = odoo_db_client.format_price(full_product.get("list_price"))
+            precio = odoo.format_price(full_product.get("list_price"))
             nombre = full_product.get("name", "Producto")
             desc = full_product.get("description_website", "")
             ficha = full_product.get("data_sheet_auto", "")
