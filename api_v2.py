@@ -1,6 +1,6 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.1.7 – Integración con cliente Odoo DB (conexión directa PostgreSQL).
+VERSIÓN 2.1.8 – Corrección de bucle de recursión (limpieza de catalog_search_attempted).
 14AGO2026.
 """
 import os
@@ -98,7 +98,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.1.7 (CON SUPERVISOR, MICDP Y ODOO DB) =====")
+print("===== JARVI API v2.1.8 (CON SUPERVISOR, MICDP Y ODOO DB) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -472,6 +472,10 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
     contexto = sesion.get("contexto_tecnico", {})
     contexto["nombre"] = nombre
     contexto["whatsapp"] = whatsapp
+
+    # NUEVO: Eliminar flag temporal de intento de búsqueda para permitir nueva búsqueda en este mensaje
+    contexto.pop("catalog_search_attempted", None)
+
     sesion["contexto_tecnico"] = contexto
 
     # 8. Guardar sesión en Redis
@@ -552,7 +556,6 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
                 respuesta_final = evaluacion["modified_response"]
                 logger.info(f"Supervisor (api) reescribió respuesta: {evaluacion['rule_id']}")
         elif evaluacion["decision"] == "block":
-            # agent_graph ya debe haber manejado block con oferta, pero por si acaso:
             if "asesor" not in respuesta_final.lower():
                 respuesta_final = "Disculpe, esa información específica no está disponible en este momento. ¿Prefiere que un asesor de AISA Solar le contacte para brindarle una atención personalizada? o desea iniciar el **Proceso Conversacional para la Definición de Proyectos** (responda 'Sí' para iniciar el proceso, o 'Asesor' para contacto humano)"
                 ctx["derivation_offered"] = True
@@ -749,7 +752,6 @@ async def lifespan(app: FastAPI):
             ctfom_db_url = settings.ctfom_database_url
             if ctfom_db_url:
                 try:
-                    # Eliminar parámetros no soportados por asyncpg (pool_size, etc.)
                     parsed = urlparse(ctfom_db_url)
                     query = parse_qs(parsed.query)
                     for key in ["pool_size", "max_overflow", "pool_timeout"]:
@@ -782,11 +784,11 @@ async def lifespan(app: FastAPI):
         # ===== NUEVO: INICIALIZAR CLIENTE ODOO DB =====
         try:
             await odoo_db_client.connect()
-            agent_graph.odoo_client = odoo_db_client  # Asignar al módulo agent_graph
+            agent_graph.odoo_client = odoo_db_client
             print("✅ Cliente Odoo DB inicializado correctamente.")
         except Exception as e:
             print(f"❌ Error al inicializar cliente Odoo DB: {e}")
-            # El sistema seguirá funcionando sin Odoo DB, usando ontología local
+            # El sistema seguirá funcionando sin Odoo DB
 
         start_batch_worker()
         yield
@@ -795,11 +797,10 @@ async def lifespan(app: FastAPI):
         await ctfom_pool.close()
     if redis_client:
         await redis_client.close()
-    # Cerrar conexión Odoo DB
     await odoo_db_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.1.7",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.1.8",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -833,14 +834,14 @@ async def telemetry_middleware(request: Request, call_next):
         raise
 
 # =============================================================================
-# HEALTH CHECK (actualizado para mostrar estado de Odoo DB)
+# HEALTH CHECK
 # =============================================================================
 @app.get("/health")
 async def health_check():
     odoo_status = "connected" if odoo_db_client and odoo_db_client._initialized else "disconnected"
     status = {
         "service": "jarvi-backend-production",
-        "version": "2.1.7",
+        "version": "2.1.8",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
