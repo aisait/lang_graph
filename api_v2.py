@@ -1,7 +1,7 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.1.8 – Corrección de bucle de recursión (limpieza de catalog_search_attempted).
-14AGO2026.
+VERSIÓN 2.1.9 – Eliminada asignación innecesaria a agent_graph.
+15AGO2026.
 """
 import os
 import asyncio
@@ -51,10 +51,9 @@ from epistemology import EpistemologyOrchestrator
 import openai
 
 # =============================================================================
-# NUEVO: Importación del cliente Odoo DB y módulo agent_graph para asignación
+# IMPORTACIÓN DEL CLIENTE ODOO DB (solo para conectar/cerrar en lifespan)
 # =============================================================================
 from odoo_db_client import odoo_db_client
-import agent_graph  # Necesario para asignar el cliente global
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -98,7 +97,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.1.8 (CON SUPERVISOR, MICDP Y ODOO DB) =====")
+print("===== JARVI API v2.1.9 (CON SUPERVISOR, MICDP Y ODOO DB) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -472,10 +471,8 @@ async def procesar_payload_n8n(chat_request: ChatRequest, http_request: Request)
     contexto = sesion.get("contexto_tecnico", {})
     contexto["nombre"] = nombre
     contexto["whatsapp"] = whatsapp
-
-    # NUEVO: Eliminar flag temporal de intento de búsqueda para permitir nueva búsqueda en este mensaje
+    # Eliminar flag de intento de búsqueda para permitir nueva búsqueda
     contexto.pop("catalog_search_attempted", None)
-
     sesion["contexto_tecnico"] = contexto
 
     # 8. Guardar sesión en Redis
@@ -781,14 +778,12 @@ async def lifespan(app: FastAPI):
             print(f"❌ Error crítico al inicializar orquestador: {e}")
             _epistemology = None
 
-        # ===== NUEVO: INICIALIZAR CLIENTE ODOO DB =====
+        # ===== INICIALIZAR CLIENTE ODOO DB (conexión) =====
         try:
             await odoo_db_client.connect()
-            agent_graph.odoo_client = odoo_db_client
             print("✅ Cliente Odoo DB inicializado correctamente.")
         except Exception as e:
             print(f"❌ Error al inicializar cliente Odoo DB: {e}")
-            # El sistema seguirá funcionando sin Odoo DB
 
         start_batch_worker()
         yield
@@ -800,7 +795,7 @@ async def lifespan(app: FastAPI):
     await odoo_db_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.1.8",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.1.9",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -841,7 +836,7 @@ async def health_check():
     odoo_status = "connected" if odoo_db_client and odoo_db_client._initialized else "disconnected"
     status = {
         "service": "jarvi-backend-production",
-        "version": "2.1.8",
+        "version": "2.1.9",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
