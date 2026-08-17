@@ -1,7 +1,7 @@
 """
 api_v2.py - Servidor FastAPI con trazabilidad Langfuse vía Ingestion API.
-VERSIÓN 2.1.10 – Asignación del cliente Odoo al grafo y logs de depuración.
-15AGO2026.
+VERSIÓN 2.1.11 – Inicialización de Odoo y reseteo de flags de búsqueda.
+17AGO2026.
 """
 import os
 import asyncio
@@ -35,7 +35,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 # =============================================================================
 from observability import ObservabilityPort, LangfuseIngestionAdapter
 from schemas import ChatRequest
-from agent_graph import create_graph, normalizar_contacto, set_odoo_client
+from agent_graph import create_graph, normalizar_contacto
 from telemetry import trace_id_var, span_id_var, generate_trace_span, log_telemetry_event, start_batch_worker
 from db_client import get_bi_db_url, actualizar_thread
 from config import settings
@@ -97,7 +97,7 @@ class NullObservabilityAdapter(ObservabilityPort):
     def flush(self):
         pass
 
-print("===== JARVI API v2.1.10 (CON SUPERVISOR, MICDP Y ODOO DB) =====")
+print("===== JARVI API v2.1.11 (CON SUPERVISOR, MICDP Y ODOO DB) =====")
 
 # =============================================================================
 # SEGURIDAD (ISO/IEC 27001)
@@ -778,13 +778,10 @@ async def lifespan(app: FastAPI):
             print(f"❌ Error crítico al inicializar orquestador: {e}")
             _epistemology = None
 
-        # ===== INICIALIZAR CLIENTE ODOO DB Y ASIGNARLO AL GRAFO =====
+        # ===== INICIALIZAR CLIENTE ODOO DB =====
         try:
-            # Conectar
             await odoo_db_client.connect()
-            # Asignar al grafo
-            set_odoo_client(odoo_db_client)
-            print("✅ Cliente Odoo DB inicializado correctamente y asignado al grafo.")
+            print("✅ Cliente Odoo DB inicializado correctamente.")
         except Exception as e:
             print(f"❌ Error al inicializar cliente Odoo DB: {e}")
 
@@ -798,7 +795,7 @@ async def lifespan(app: FastAPI):
     await odoo_db_client.close()
     print("Apagando API JARVI")
 
-app = FastAPI(title="JARVI 2.0 API Central", version="2.1.10",
+app = FastAPI(title="JARVI 2.0 API Central", version="2.1.11",
               lifespan=lifespan, dependencies=[Depends(validar_api_key)])
 
 # =============================================================================
@@ -839,7 +836,7 @@ async def health_check():
     odoo_status = "connected" if odoo_db_client and odoo_db_client._initialized else "disconnected"
     status = {
         "service": "jarvi-backend-production",
-        "version": "2.1.10",
+        "version": "2.1.11",
         "redis": "connected" if redis_client else "disconnected",
         "graph": "ready" if graph else "unavailable",
         "langfuse": "Ingestion API adapter",
