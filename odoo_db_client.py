@@ -1,6 +1,6 @@
 """
 odoo_db_client.py - Cliente asíncrono para consultar la base de datos PostgreSQL de Odoo.
-VERSIÓN 1.5 – Búsqueda flexible en name, description, description_sale, default_code.
+VERSIÓN 1.6 – Búsqueda flexible en name y description_sale.
 17AGO2026.
 """
 import os
@@ -13,7 +13,7 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 class OdooDBClient:
-    """Cliente para consultar product_template y mrp_bom directamente desde PostgreSQL."""
+    """Cliente para consultar product_template directamente desde PostgreSQL."""
 
     def __init__(self):
         # Lectura directa de variables de entorno (con fallback a settings)
@@ -112,8 +112,8 @@ class OdooDBClient:
 
     async def search_products_flexible(self, keyword: str, limit: int = 20) -> List[Dict[str, Any]]:
         """
-        Busca productos cuyo nombre, descripción, descripción de venta o código
-        contengan la keyword (ILIKE). Retorna hasta 'limit' resultados con campos clave.
+        Busca productos cuyo nombre o descripción de venta contengan la keyword (ILIKE).
+        Retorna hasta 'limit' resultados con campos clave.
         """
         if not await self.ensure_connected():
             logger.warning("[ODOO-DB] ⚠️ No se pudo establecer conexión, retornando lista vacía")
@@ -122,13 +122,10 @@ class OdooDBClient:
         try:
             async with self.pool.acquire() as conn:
                 rows = await conn.fetch("""
-                    SELECT id, name, list_price, default_code, description,
-                           description_sale
+                    SELECT id, name, list_price, description_sale
                     FROM product_template
                     WHERE name ILIKE '%' || $1 || '%'
-                       OR description ILIKE '%' || $1 || '%'
                        OR description_sale ILIKE '%' || $1 || '%'
-                       OR default_code ILIKE '%' || $1 || '%'
                     ORDER BY 
                         CASE WHEN name ILIKE '%' || $1 || '%' THEN 1 ELSE 2 END,
                         LENGTH(name)
@@ -138,7 +135,7 @@ class OdooDBClient:
                 if results:
                     logger.info(f"[ODOO-DB] ✅ Búsqueda flexible por '{keyword}': {len(results)} resultados")
                     for r in results:
-                        logger.info(f"[ODOO-DB]    - {r.get('name')} (Código: {r.get('default_code')}) - Q {r.get('list_price')}")
+                        logger.info(f"[ODOO-DB]    - {r.get('name')} - Q {r.get('list_price')}")
                 else:
                     logger.info(f"[ODOO-DB] ℹ️ Búsqueda flexible por '{keyword}': 0 resultados")
                 return results
@@ -154,8 +151,7 @@ class OdooDBClient:
         try:
             async with self.pool.acquire() as conn:
                 row = await conn.fetchrow("""
-                    SELECT id, name, list_price, default_code, description,
-                           description_sale
+                    SELECT id, name, list_price, description_sale
                     FROM product_template
                     WHERE id = $1
                 """, product_id)
@@ -163,6 +159,40 @@ class OdooDBClient:
         except Exception as e:
             logger.error(f"[ODOO-DB] Error al obtener producto por ID: {e}")
             return None
+
+    async def get_products_by_category(self, categ_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+        """Obtiene productos de una categoría específica."""
+        if not await self.ensure_connected():
+            return []
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT id, name, list_price, description_sale
+                    FROM product_template
+                    WHERE categ_id = $1
+                    LIMIT $2
+                """, categ_id, limit)
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"[ODOO-DB] Error en búsqueda por categoría: {e}")
+            return []
+
+    async def get_bom_components(self, product_tmpl_id: int) -> List[Dict[str, Any]]:
+        """Retorna los componentes de la lista de materiales (mrp_bom)."""
+        if not await self.ensure_connected():
+            return []
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT bom.product_id, bom.product_qty, pt.name, pt.list_price
+                    FROM mrp_bom bom
+                    JOIN product_template pt ON bom.product_id = pt.id
+                    WHERE bom.product_tmpl_id = $1
+                """, product_tmpl_id)
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"[ODOO-DB] Error al obtener BOM: {e}")
+            return []
 
     def format_price(self, price: Optional[float]) -> str:
         """Formatea el precio en Quetzales (Q) con dos decimales."""
