@@ -1,6 +1,6 @@
 """
 odoo_db_client.py - Cliente asíncrono para consultar la base de datos PostgreSQL de Odoo.
-VERSIÓN 1.2 – 3 intentos de conexión y logs detallados.
+VERSIÓN 1.3 – Lectura directa de variables de entorno con logs de depuración.
 17AGO2026.
 """
 import os
@@ -16,17 +16,21 @@ class OdooDBClient:
     """Cliente para consultar product_template y mrp_bom directamente desde PostgreSQL."""
 
     def __init__(self):
-        self.host = settings.odoo_db_host
-        self.port = settings.odoo_db_port
-        self.database = settings.odoo_db_name
-        self.user = settings.odoo_db_user
-        self.password = settings.odoo_db_password
+        # Lectura directa de variables de entorno (con fallback a settings)
+        self.host = os.getenv("DATABASE_HOST") or settings.odoo_db_host
+        self.port = int(os.getenv("DATABASE_PORT") or settings.odoo_db_port or 5432)
+        self.database = os.getenv("DATABASE_PROD") or settings.odoo_db_name
+        self.user = os.getenv("DATABASE_USER") or settings.odoo_db_user
+        self.password = os.getenv("DATABASE_PASSWORD") or settings.odoo_db_password
         self.pool: Optional[asyncpg.Pool] = None
         self._initialized = False
         self._connection_attempts = 0
         self._max_retries = 3
         self._last_error: Optional[str] = None
         self._connection_history: List[Dict] = []
+
+        # Log de depuración para verificar valores
+        logger.info(f"[ODOO-DB] Configuración: host={self.host}, port={self.port}, database={self.database}, user={self.user}")
 
     async def connect(self) -> bool:
         """Inicializa el pool de conexiones a la BD de Odoo con 3 reintentos."""
