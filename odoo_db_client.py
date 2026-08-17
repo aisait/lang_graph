@@ -1,6 +1,6 @@
 """
 odoo_db_client.py - Cliente asíncrono para consultar la base de datos PostgreSQL de Odoo.
-VERSIÓN 1.3 – Lectura directa de variables de entorno con logs de depuración.
+VERSIÓN 1.4 – Corrección de nombres de columnas según esquema real (website_meta_keywords).
 17AGO2026.
 """
 import os
@@ -114,7 +114,7 @@ class OdooDBClient:
 
     async def search_products_by_keyword(self, keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
-        Busca productos cuyo nombre o website_meta_keyword contengan la keyword.
+        Busca productos cuyo nombre o website_meta_keywords contengan la keyword.
         Retorna lista de diccionarios con los campos principales.
         """
         if not await self.ensure_connected():
@@ -123,12 +123,14 @@ class OdooDBClient:
 
         try:
             async with self.pool.acquire() as conn:
+                # Corrección: usar columnas que existen en el esquema real
+                # website_meta_keywords (plural) y description_website
                 rows = await conn.fetch("""
                     SELECT id, name, list_price,
-                           website_meta_keyword, description_website,
+                           website_meta_keywords, description_website,
                            data_sheet_auto, type, categ_id
                     FROM product_template
-                    WHERE website_meta_keyword ILIKE '%' || $1 || '%'
+                    WHERE website_meta_keywords ILIKE '%' || $1 || '%'
                        OR name ILIKE '%' || $1 || '%'
                     LIMIT $2
                 """, keyword, limit)
@@ -143,6 +145,66 @@ class OdooDBClient:
         except Exception as e:
             logger.error(f"[ODOO-DB] ❌ Error en búsqueda: {e}")
             self._initialized = False
+            return []
+
+    async def get_product_by_id(self, product_id: int) -> Optional[Dict[str, Any]]:
+        """Obtiene un producto por su ID (product_template)."""
+        if not await self.ensure_connected():
+            logger.warning("[ODOO-DB] ⚠️ No se pudo establecer conexión")
+            return None
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT id, name, list_price,
+                           website_meta_keywords, description_website,
+                           data_sheet_auto, type, categ_id
+                    FROM product_template
+                    WHERE id = $1
+                """, product_id)
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"[ODOO-DB] ❌ Error al obtener producto por ID: {e}")
+            return None
+
+    async def get_products_by_category(self, categ_id: int, limit: int = 20) -> List[Dict[str, Any]]:
+        """Obtiene productos de una categoría específica."""
+        if not await self.ensure_connected():
+            logger.warning("[ODOO-DB] ⚠️ No se pudo establecer conexión")
+            return []
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT id, name, list_price,
+                           website_meta_keywords, description_website,
+                           data_sheet_auto, type
+                    FROM product_template
+                    WHERE categ_id = $1
+                    LIMIT $2
+                """, categ_id, limit)
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"[ODOO-DB] ❌ Error en búsqueda por categoría: {e}")
+            return []
+
+    async def get_bom_components(self, product_tmpl_id: int) -> List[Dict[str, Any]]:
+        """
+        Retorna los componentes de la lista de materiales (mrp_bom)
+        para un product_tmpl_id dado.
+        """
+        if not await self.ensure_connected():
+            logger.warning("[ODOO-DB] ⚠️ No se pudo establecer conexión")
+            return []
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT bom.product_id, bom.product_qty, pt.name, pt.list_price
+                    FROM mrp_bom bom
+                    JOIN product_template pt ON bom.product_id = pt.id
+                    WHERE bom.product_tmpl_id = $1
+                """, product_tmpl_id)
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"[ODOO-DB] ❌ Error al obtener BOM: {e}")
             return []
 
     def format_price(self, price: Optional[float]) -> str:
