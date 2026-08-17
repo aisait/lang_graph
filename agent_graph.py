@@ -1,7 +1,7 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.7.5 – Asignación global del cliente Odoo y logs de depuración.
-15AGO2026.
+VERSIÓN 2.7.6 – Integración de Odoo con tres niveles de fallback y modo catálogo.
+17AGO2026.
 """
 import os
 import time
@@ -14,6 +14,7 @@ import functools
 import logging
 from typing import Annotated, TypedDict, Optional, List, Dict, Any
 from pydantic import BaseModel, Field
+from datetime import datetime, timezone
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
@@ -55,20 +56,10 @@ logger = logging.getLogger(__name__)
 from config import settings
 
 # =============================================================================
-# IMPORTACIÓN DEL CLIENTE ODOO DB (se asignará globalmente desde api_v2)
+# IMPORTACIÓN DIRECTA DEL CLIENTE ODOO DB (evita problemas de asignación)
 # =============================================================================
-# Inicialmente None; se asigna en la función set_odoo_client
-_odoo_client = None
-
-def set_odoo_client(client):
-    """Asigna el cliente Odoo para que sea usado por el grafo."""
-    global _odoo_client
-    _odoo_client = client
-    logger.info(f"Cliente Odoo asignado al grafo: {client is not None}")
-
-def get_odoo_client():
-    """Retorna el cliente Odoo asignado."""
-    return _odoo_client
+from odoo_db_client import odoo_db_client
+from price_extractor import extract_price_from_url
 
 # =============================================================================
 # INSTANCIAS GLOBALES
@@ -78,46 +69,6 @@ logger.info("SupervisorJarvi inicializado con 45 reglas")
 
 _epistemology = None
 _epistemology_lock = asyncio.Lock()
-
-# =============================================================================
-# FUNCIÓN PARA INICIALIZAR ORQUESTADOR DE FORMA LAZY (POR WORKER)
-# =============================================================================
-async def get_epistemology():
-    """Obtiene o inicializa el orquestador de forma lazy (por worker)."""
-    global _epistemology
-    if _epistemology is not None:
-        return _epistemology
-    async with _epistemology_lock:
-        if _epistemology is not None:
-            return _epistemology
-        try:
-            ctfom_db_url = settings.ctfom_database_url
-            if ctfom_db_url:
-                parsed = urlparse(ctfom_db_url)
-                query = parse_qs(parsed.query)
-                for key in ["pool_size", "max_overflow", "pool_timeout"]:
-                    query.pop(key, None)
-                clean_query = urlencode(query, doseq=True)
-                clean_url = urlunparse(parsed._replace(query=clean_query))
-                pool = await asyncpg.create_pool(clean_url, min_size=1, max_size=5)
-                repo = ProjectRepository(pool)
-                openai_client = openai.OpenAI(api_key=settings.openai_api_key)
-                _epistemology = EpistemologyOrchestrator(repo, openai_client)
-                logger.info("Orquestador inicializado lazy con CTFOM")
-            else:
-                from api_v2 import MemoryRepo
-                repo = MemoryRepo()
-                openai_client = openai.OpenAI(api_key=settings.openai_api_key)
-                _epistemology = EpistemologyOrchestrator(repo, openai_client)
-                logger.info("Orquestador inicializado lazy en memoria")
-        except Exception as e:
-            logger.error(f"Error en inicialización lazy del orquestador: {e}")
-            from api_v2 import MemoryRepo
-            repo = MemoryRepo()
-            openai_client = openai.OpenAI(api_key=settings.openai_api_key)
-            _epistemology = EpistemologyOrchestrator(repo, openai_client)
-            logger.warning("Orquestador inicializado lazy en memoria (fallback)")
-        return _epistemology
 
 # =============================================================================
 # CARGA DEL MARCO ACADÉMICO (REFERENCIAS APA)
@@ -171,7 +122,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.7.5"}
+        default_headers={"User-Agent": "JARVI/2.7.6"}
     )
 
 # =============================================================================
@@ -451,6 +402,46 @@ def extraer_tipo_producto(mensaje: str) -> Optional[str]:
     return None
 
 # =============================================================================
+# FUNCIÓN PARA INICIALIZAR ORQUESTADOR DE FORMA LAZY (POR WORKER)
+# =============================================================================
+async def get_epistemology():
+    """Obtiene o inicializa el orquestador de forma lazy (por worker)."""
+    global _epistemology
+    if _epistemology is not None:
+        return _epistemology
+    async with _epistemology_lock:
+        if _epistemology is not None:
+            return _epistemology
+        try:
+            ctfom_db_url = settings.ctfom_database_url
+            if ctfom_db_url:
+                parsed = urlparse(ctfom_db_url)
+                query = parse_qs(parsed.query)
+                for key in ["pool_size", "max_overflow", "pool_timeout"]:
+                    query.pop(key, None)
+                clean_query = urlencode(query, doseq=True)
+                clean_url = urlunparse(parsed._replace(query=clean_query))
+                pool = await asyncpg.create_pool(clean_url, min_size=1, max_size=5)
+                repo = ProjectRepository(pool)
+                openai_client = openai.OpenAI(api_key=settings.openai_api_key)
+                _epistemology = EpistemologyOrchestrator(repo, openai_client)
+                logger.info("Orquestador inicializado lazy con CTFOM")
+            else:
+                from api_v2 import MemoryRepo
+                repo = MemoryRepo()
+                openai_client = openai.OpenAI(api_key=settings.openai_api_key)
+                _epistemology = EpistemologyOrchestrator(repo, openai_client)
+                logger.info("Orquestador inicializado lazy en memoria")
+        except Exception as e:
+            logger.error(f"Error en inicialización lazy del orquestador: {e}")
+            from api_v2 import MemoryRepo
+            repo = MemoryRepo()
+            openai_client = openai.OpenAI(api_key=settings.openai_api_key)
+            _epistemology = EpistemologyOrchestrator(repo, openai_client)
+            logger.warning("Orquestador inicializado lazy en memoria (fallback)")
+        return _epistemology
+
+# =============================================================================
 # CONSTRUCCIÓN DEL GRAFO
 # =============================================================================
 def create_graph(checkpointer: BaseCheckpointSaver):
@@ -510,7 +501,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
-    # NODO 3: SELECCIÓN DE PRODUCTOS (CON SUPERVISIÓN Y FALLBACK A ODOO)
+    # NODO 3: SELECCIÓN DE PRODUCTOS (TRES NIVELES DE FALLBACK)
     # -------------------------------------------------------------------------
     @auditar_fase(nombre_fase="Selección de Productos", criticidad="ALTA")
     @observe_node(node_name="seleccionar_productos")
@@ -521,92 +512,189 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if ctx.get("product_tag"):
             return {"contexto_tecnico": ctx}
 
-        # Intentar primero con ontología local
-        tag = inferir_tag_por_mensaje(ultimo)
-        if tag:
-            ctx["product_tag"] = tag
-            ctx["fuente_producto"] = "ontologia"
-            logger.info(f"Producto detectado en ontología: tag={tag}")
-            ontologia = cargar_ontologia()
-            item = ontologia.get(tag, {})
-            tipo_producto = item.get("tipo", "unitario")
-            requisitos = get_requirements_by_tag(tag)
-            ctx["requisitos"] = requisitos
-            requires_diagnostic = get_requires_diagnostic(tag)
-            ctx["requiere_auditoria_electrica"] = requires_diagnostic
+        logger.info("=" * 80)
+        logger.info("[SELECTOR] 🚀 INICIANDO PROCESO DE SELECCIÓN DE PRODUCTOS")
+        logger.info(f"[SELECTOR] 📝 Consulta del usuario: '{ultimo}'")
+        logger.info("=" * 80)
 
-            if tipo_producto == "sistema":
-                tag_int = int(tag) if tag.isdigit() else 0
-                ongrid_tags = list(range(1, 11)) + [20, 35, 37, 38, 60, 61, 64, 79, 80, 81, 85]
-                offgrid_tags = [19, 50, 51, 52, 53, 56, 57, 58, 59, 62, 66, 69, 70, 71]
-                if tag_int in ongrid_tags:
-                    ctx["topologia"] = "On-Grid (Sistemas Atados a la Red)"
-                    ctx["tipo_producto"] = "sistema"
-                elif tag_int in offgrid_tags:
-                    ctx["topologia"] = "Off-Grid (Sistemas Aislados)"
-                    ctx["tipo_producto"] = "sistema"
-                else:
-                    ctx["topologia"] = "Pendiente (sistema no clasificado)"
-            else:
-                ctx["topologia"] = "No aplica (Producto unitario)"
-                ctx["tipo_producto"] = "unitario"
+        # ================================================================
+        # NIVEL 1: Odoo Database (3 intentos)
+        # ================================================================
+        logger.info("[SELECTOR] 📊 NIVEL 1: Intentando obtener producto desde Odoo DB")
+        odoo_product = None
+        odoo_results = []
+        odoo_connection_status = None
 
-            eval_data = {
-                "contexto": ctx,
-                "tipo_producto": ctx.get("tipo_producto"),
-                "product_tag": ctx.get("product_tag")
-            }
-            evaluacion = _supervisor.evaluate(eval_data)
-            if evaluacion["decision"] == "rewrite_context":
-                ctx.update(evaluacion.get("modified_context", {}))
-                logger.info(f"Supervisor aplicó regla {evaluacion['rule_id']} en selección de productos")
-
-            if not ctx.get("checklist_universal"):
-                ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
-            checklist = ctx["checklist_universal"]
-            if ctx.get("topologia") and "Pendiente" not in ctx["topologia"]:
-                checklist["topologia"] = "completado"
-            if ctx.get("tipo_producto"):
-                checklist["tipo_producto"] = "completado"
-            for req in requisitos:
-                field = req.get("field")
-                if field and ctx.get(field) is not None:
-                    checklist[field] = "completado"
-                elif field:
-                    checklist[field] = "pendiente"
-            ctx["checklist_universal"] = checklist
-            return {"contexto_tecnico": ctx}
-
-        # Si no se encuentra en ontología, intentar con Odoo DB usando el cliente global
-        odoo = get_odoo_client()
-        if odoo and odoo._initialized:
-            try:
-                odoo_results = await odoo.search_products_by_keyword(ultimo, limit=3)
+        try:
+            is_connected = await odoo_db_client.ensure_connected()
+            odoo_connection_status = odoo_db_client.get_connection_status()
+            logger.info(f"[SELECTOR] 📊 Odoo DB - Estado: {'✅ Conectado' if is_connected else '❌ Desconectado'}")
+            if is_connected:
+                odoo_results = await odoo_db_client.search_products_by_keyword(ultimo, limit=3)
                 if odoo_results:
-                    best = odoo_results[0]
-                    ctx["product_tag"] = f"odoo_{best['id']}"
+                    odoo_product = odoo_results[0]
+                    logger.info(f"[SELECTOR] 📊 Odoo DB - ✅ Producto encontrado: {odoo_product.get('name')}")
+                    logger.info(f"[SELECTOR] 📊 Odoo DB - ✅ Precio: {odoo_db_client.format_price(odoo_product.get('list_price'))}")
+
+                    ctx["product_tag"] = f"odoo_{odoo_product['id']}"
                     ctx["fuente_producto"] = "odoo"
-                    ctx["producto_odoo"] = best
+                    ctx["producto_odoo"] = odoo_product
                     ctx["odoo_search_results"] = odoo_results[:3]
-                    ctx["tipo_producto"] = best.get("type", "unitario")
+                    ctx["tipo_producto"] = odoo_product.get("type", "unitario")
                     ctx["requiere_auditoria_electrica"] = False
                     ctx["requisitos"] = []
-
-                    if not ctx.get("checklist_universal"):
-                        ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
-                    checklist = ctx["checklist_universal"]
-                    checklist["productos_interes"] = "completado"
-                    ctx["checklist_universal"] = checklist
-
-                    logger.info(f"Producto encontrado en Odoo: {best['name']} (ID {best['id']})")
+                    ctx["precio_extraido"] = odoo_db_client.format_price(odoo_product.get("list_price"))
+                    ctx["moneda_extraida"] = "GTQ"
+                    ctx["fuente_precio"] = "odoo_db"
+                    ctx["fuente_detalle"] = {
+                        "nivel": 1,
+                        "fuente": "odoo_db",
+                        "producto_id": odoo_product.get("id"),
+                        "precio_raw": odoo_product.get("list_price"),
+                        "intentos_conexion": odoo_connection_status.get("attempts", 0)
+                    }
+                    logger.info("[SELECTOR] 📊 Odoo DB - ✅ Información guardada en contexto")
+                    logger.info("=" * 80)
                     return {"contexto_tecnico": ctx}
-            except Exception as e:
-                logger.error(f"Error consultando Odoo DB en seleccionar_productos: {e}")
-        else:
-            logger.warning("Cliente Odoo no disponible en seleccionar_productos")
+                else:
+                    logger.warning("[SELECTOR] 📊 Odoo DB - ⚠️ No se encontraron productos coincidentes")
+                    ctx["error_odoo_db"] = "No se encontraron productos coincidentes en Odoo DB"
+            else:
+                logger.error(f"[SELECTOR] 📊 Odoo DB - ❌ No se pudo conectar después de {odoo_connection_status.get('attempts')} intentos")
+                ctx["error_odoo_db"] = f"No se pudo conectar a Odoo DB: {odoo_connection_status.get('last_error', 'Error desconocido')}"
+        except Exception as e:
+            logger.error(f"[SELECTOR] 📊 Odoo DB - ❌ Error inesperado: {e}")
+            ctx["error_odoo_db"] = str(e)
 
-        pregunta = "¿Sobre qué tipo de equipo le gustaría recibir asesoría? (ej. paneles solares, calentadores, bombas de agua, iluminación...)"
-        new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
+        # ================================================================
+        # NIVEL 2: Web Scraping via Ontología + Price Extractor
+        # ================================================================
+        logger.info("[SELECTOR] 🌐 NIVEL 2: Intentando obtener producto desde Web Scraping (AISA Solar)")
+        try:
+            ontologia = cargar_ontologia()
+            tag = inferir_tag_por_mensaje(ultimo)
+            if tag and tag in ontologia:
+                item = ontologia[tag]
+                if "url" in item and item["url"]:
+                    logger.info(f"[SELECTOR] 🌐 Extrayendo precio desde: {item['url']}")
+                    precio_data = extract_price_from_url(item["url"])
+                    if precio_data:
+                        logger.info(f"[SELECTOR] 🌐 ✅ Precio extraído: {precio_data['simbolo']} {precio_data['precio']:,.2f} ({precio_data['moneda']})")
+                        # Convertir a GTQ si es USD
+                        if precio_data["moneda"] == "USD":
+                            precio_gtq = precio_data["precio"] * 7.8
+                            simbolo = "Q"
+                        else:
+                            precio_gtq = precio_data["precio"]
+                            simbolo = precio_data.get("simbolo", "Q")
+                        ctx["product_tag"] = tag
+                        ctx["fuente_producto"] = "web_scraping"
+                        ctx["producto_web"] = item
+                        ctx["tipo_producto"] = item.get("tipo", "unitario")
+                        ctx["requisitos"] = item.get("requirements", [])
+                        ctx["requiere_auditoria_electrica"] = item.get("requiere_diagnostico_electrico", False)
+                        ctx["precio_extraido"] = f"{simbolo} {precio_gtq:,.2f}".replace(",", ".")
+                        ctx["moneda_extraida"] = "GTQ"
+                        ctx["fuente_precio"] = f"web_scraping:{item['url']}"
+                        ctx["fuente_detalle"] = {
+                            "nivel": 2,
+                            "fuente": "web_scraping",
+                            "url": item["url"],
+                            "precio_raw": precio_data["precio"],
+                            "moneda_raw": precio_data["moneda"],
+                            "selector": precio_data.get("selector"),
+                            "precio_convertido": precio_gtq,
+                            "tasa_cambio": 7.8 if precio_data["moneda"] == "USD" else 1.0
+                        }
+                        if not ctx.get("checklist_universal"):
+                            ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
+                        checklist = ctx["checklist_universal"]
+                        checklist["productos_interes"] = "completado"
+                        ctx["checklist_universal"] = checklist
+                        logger.info("[SELECTOR] 🌐 ✅ Información guardada en contexto (fuente: Web Scraping)")
+                        logger.info("=" * 80)
+                        return {"contexto_tecnico": ctx}
+                    else:
+                        logger.warning(f"[SELECTOR] 🌐 ❌ No se pudo extraer precio de {item['url']}")
+                        ctx["error_web_scraping"] = f"No se pudo extraer precio de {item['url']}"
+                else:
+                    logger.warning("[SELECTOR] 🌐 ⚠️ Producto sin URL en ontología")
+                    ctx["error_web_scraping"] = "Producto sin URL en ontología"
+            else:
+                logger.warning(f"[SELECTOR] 🌐 ⚠️ No se encontró tag para '{ultimo}' en ontología")
+                ctx["error_web_scraping"] = "Producto no encontrado en ontología"
+        except Exception as e:
+            logger.error(f"[SELECTOR] 🌐 ❌ Error en Web Scraping: {e}")
+            ctx["error_web_scraping"] = str(e)
+
+        # ================================================================
+        # NIVEL 3: Ontología Local (sin precio)
+        # ================================================================
+        logger.info("[SELECTOR] 📋 NIVEL 3: Intentando obtener producto desde Ontología Local")
+        try:
+            tag = inferir_tag_por_mensaje(ultimo)
+            if tag and tag in ontologia:
+                item = ontologia[tag]
+                logger.info(f"[SELECTOR] 📋 ✅ Producto encontrado: {item.get('nombre')}")
+                ctx["product_tag"] = tag
+                ctx["fuente_producto"] = "ontologia"
+                ctx["producto_ontologia"] = item
+                ctx["tipo_producto"] = item.get("tipo", "unitario")
+                ctx["requisitos"] = get_requirements_by_tag(tag)
+                ctx["requiere_auditoria_electrica"] = get_requires_diagnostic(tag)
+                ctx["precio_extraido"] = "Precio bajo consulta"
+                ctx["moneda_extraida"] = "GTQ"
+                ctx["fuente_precio"] = "ontologia_local_sin_precio"
+                ctx["fuente_detalle"] = {
+                    "nivel": 3,
+                    "fuente": "ontologia_local",
+                    "producto_tag": tag,
+                    "tiene_precio": False
+                }
+                if not ctx.get("checklist_universal"):
+                    ctx["checklist_universal"] = inicializar_checklist_universal(ctx)
+                checklist = ctx["checklist_universal"]
+                checklist["productos_interes"] = "completado"
+                ctx["checklist_universal"] = checklist
+                logger.info("[SELECTOR] 📋 ✅ Información guardada en contexto (fuente: Ontología Local)")
+                logger.info("=" * 80)
+                return {"contexto_tecnico": ctx}
+            else:
+                logger.warning(f"[SELECTOR] 📋 ⚠️ No se encontró tag para '{ultimo}' en ontología")
+                ctx["error_ontologia"] = "Producto no encontrado en ontología"
+        except Exception as e:
+            logger.error(f"[SELECTOR] 📋 ❌ Error en Ontología Local: {e}")
+            ctx["error_ontologia"] = str(e)
+
+        # ================================================================
+        # NIVEL 4: Derivación a Asesor (Último Recurso)
+        # ================================================================
+        logger.warning("[SELECTOR] 👤 NIVEL 4: Derivación a Asesor - Todos los niveles fallaron")
+        ctx["derivation_reason"] = {
+            "odoo_db": ctx.get("error_odoo_db", "No se intentó"),
+            "web_scraping": ctx.get("error_web_scraping", "No se intentó"),
+            "ontologia": ctx.get("error_ontologia", "No se intentó"),
+            "timestamp": str(datetime.now(timezone.utc)),
+            "consulta_usuario": ultimo
+        }
+        logger.info(f"[SELECTOR] 👤 Fallos: Odoo={ctx['derivation_reason']['odoo_db']}, Web={ctx['derivation_reason']['web_scraping']}, Ontología={ctx['derivation_reason']['ontologia']}")
+        ctx["escalation_mode"] = True
+        ctx["derivation_offered"] = True
+        ctx["micdp_offered"] = True
+
+        mensaje_derivacion = (
+            "Lamento informarle que no hemos podido obtener información del producto solicitado a través de nuestras fuentes de datos.\n\n"
+            "⚠️ He intentado obtener la información desde:\n"
+            "  1. Nuestra base de datos de productos (Odoo) - Sin éxito\n"
+            "  2. Nuestro catálogo web - Sin éxito\n"
+            "  3. Nuestro catálogo interno - Sin éxito\n\n"
+            "Para brindarle una atención personalizada y precisa, un asesor especializado de AISA Solar se comunicará con usted.\n\n"
+            "¿Autoriza que un asesor le contacte para ayudarle con su requerimiento?"
+        )
+
+        new_messages = state.get("messages", []) + [AIMessage(content=mensaje_derivacion)]
+        logger.info("[SELECTOR] 👤 ✅ Derivación a asesor activada.")
+        logger.info("=" * 80)
         return {"messages": new_messages, "contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
@@ -632,131 +720,6 @@ def create_graph(checkpointer: BaseCheckpointSaver):
             new_messages = state.get("messages", []) + [AIMessage(content=pregunta)]
             return {"messages": new_messages, "contexto_tecnico": ctx}
         return {"contexto_tecnico": ctx}
-
-    # -------------------------------------------------------------------------
-    # NODO 4b: BÚSQUEDA EN CATÁLOGO ODOO (usando el cliente global)
-    # -------------------------------------------------------------------------
-    @auditar_fase(nombre_fase="Búsqueda en Catálogo Odoo", criticidad="MEDIA")
-    @observe_node(node_name="buscar_en_catalogo_odoo")
-    async def buscar_en_catalogo_odoo_node(state: AgentState):
-        ctx = dict(state.get("contexto_tecnico") or {})
-        ctx["catalog_search_attempted"] = True
-        ultimo = extraer_intencion_humana(state.get("messages", []))
-
-        odoo = get_odoo_client()
-        if not odoo or not odoo._initialized:
-            logger.warning("Cliente Odoo no disponible (no conectado o no inicializado).")
-            response = "Lo siento, el catálogo de productos no está disponible en este momento. ¿Prefiere que un asesor le contacte o iniciar el Proceso Conversacional para la Definición de Proyectos?"
-            ctx["derivation_offered"] = True
-            ctx["micdp_offered"] = True
-            return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
-
-        try:
-            logger.info(f"Buscando en Odoo con keyword: '{ultimo}'")
-            results = await odoo.search_products_by_keyword(ultimo, limit=5)
-            if results:
-                ctx["odoo_search_results"] = results
-                ctx["catalog_search_mode"] = True
-                ctx["awaiting_expansion"] = True
-                ctx["fuente_producto"] = "odoo"
-
-                lines = ["Hemos encontrado los siguientes productos en nuestro catálogo real:\n"]
-                for idx, prod in enumerate(results, 1):
-                    precio = odoo.format_price(prod.get("list_price"))
-                    desc = prod.get("description_website", "")
-                    if desc and len(desc) > 100:
-                        desc = desc[:100] + "..."
-                    lines.append(f"{idx}. **{prod['name']}** – {precio}")
-                    if desc:
-                        lines.append(f"   {desc}")
-                lines.append("\n¿Le gustaría saber más sobre alguno en específico? (indique el número o el nombre)")
-
-                response_text = "\n".join(lines)
-                return {"messages": [AIMessage(content=response_text)], "contexto_tecnico": ctx}
-            else:
-                response = "No encontramos productos que coincidan con su consulta. ¿Prefiere que un asesor le contacte para ayudarle personalmente o desea iniciar el Proceso Conversacional para la Definición de Proyectos?"
-                ctx["derivation_offered"] = True
-                ctx["micdp_offered"] = True
-                return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
-        except Exception as e:
-            logger.error(f"Error en búsqueda en catálogo Odoo: {e}")
-            response = "Ocurrió un error al consultar el catálogo. Por favor, intente de nuevo más tarde o solicite asistencia de un asesor."
-            ctx["derivation_offered"] = True
-            ctx["micdp_offered"] = True
-            return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
-
-    # -------------------------------------------------------------------------
-    # NODO 4c: AMPLIAR INFORMACIÓN DE PRODUCTO ODOO
-    # -------------------------------------------------------------------------
-    @auditar_fase(nombre_fase="Ampliar Información Producto Odoo", criticidad="MEDIA")
-    @observe_node(node_name="ampliar_informacion_producto")
-    async def ampliar_informacion_producto_node(state: AgentState):
-        ctx = dict(state.get("contexto_tecnico") or {})
-        ultimo = extraer_intencion_humana(state.get("messages", []))
-
-        if not ctx.get("catalog_search_mode") or not ctx.get("awaiting_expansion"):
-            return {"contexto_tecnico": ctx}
-
-        results = ctx.get("odoo_search_results", [])
-        if not results:
-            ctx["catalog_search_mode"] = False
-            ctx["awaiting_expansion"] = False
-            return {"contexto_tecnico": ctx}
-
-        selected_product = None
-        # Buscar por número (1,2,3...)
-        match_num = re.search(r'\b([1-5])\b', ultimo)
-        if match_num:
-            idx = int(match_num.group(1)) - 1
-            if 0 <= idx < len(results):
-                selected_product = results[idx]
-
-        # Si no, buscar por nombre (fuzzy simple)
-        if not selected_product:
-            for prod in results:
-                if prod['name'].lower() in ultimo or any(kw.lower() in ultimo for kw in prod.get('website_meta_keyword', '').split(',')):
-                    selected_product = prod
-                    break
-
-        if not selected_product:
-            msg = "No he identificado a qué producto se refiere. Por favor, indique el número de la lista o el nombre exacto."
-            return {"messages": [AIMessage(content=msg)], "contexto_tecnico": ctx}
-
-        odoo = get_odoo_client()
-        if not odoo or not odoo._initialized:
-            msg = "El catálogo no está disponible en este momento. Intente más tarde."
-            return {"messages": [AIMessage(content=msg)], "contexto_tecnico": ctx}
-
-        try:
-            full_product = await odoo.get_product_by_id(selected_product['id'])
-            if not full_product:
-                full_product = selected_product
-
-            precio = odoo.format_price(full_product.get("list_price"))
-            nombre = full_product.get("name", "Producto")
-            desc = full_product.get("description_website", "")
-            ficha = full_product.get("data_sheet_auto", "")
-
-            lines = []
-            lines.append(f"**{nombre}**")
-            lines.append(f"Precio: {precio}")
-            if desc:
-                lines.append(f"Descripción: {desc}")
-            if ficha:
-                lines.append(f"Ficha técnica: {ficha[:300]}..." if len(ficha) > 300 else f"Ficha técnica: {ficha}")
-
-            lines.append("\n¿Necesita información de otro producto o desea que armemos una cotización?")
-
-            response_text = "\n".join(lines)
-            ctx["awaiting_expansion"] = False
-            ctx["current_product_id"] = full_product.get("id")
-            ctx["catalog_search_attempted"] = False
-
-            return {"messages": [AIMessage(content=response_text)], "contexto_tecnico": ctx}
-        except Exception as e:
-            logger.error(f"Error al ampliar información de producto: {e}")
-            ctx["awaiting_expansion"] = False
-            return {"contexto_tecnico": ctx}
 
     # -------------------------------------------------------------------------
     # NODO 5: GENERAR RESPUESTA COMERCIAL (CON SUPERVISIÓN Y DETECCIÓN ACADÉMICA)
@@ -1257,7 +1220,7 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         return {"messages": [ai_message], "contexto_tecnico": ctx}
 
     # =========================================================================
-    # CONDICIÓN DE BORDE
+    # CONDICIÓN DE BORDE (con redirección a búsqueda en catálogo)
     # =========================================================================
     def my_tools_condition(state: AgentState):
         messages = state.get("messages", [])
@@ -1272,38 +1235,140 @@ def create_graph(checkpointer: BaseCheckpointSaver):
         if ctx.get("derivation_offered") and any(k in ultimo for k in ["asesor", "llamada", "contactar"]):
             return "actualizar_checklist"
 
-        # 2. Si ya estamos en modo catálogo y esperamos expansión
-        if ctx.get("catalog_search_mode") and ctx.get("awaiting_expansion"):
-            if any(k in ultimo for k in ["amplíe", "más info", "dime más", "especificaciones", "detalles"]):
-                return "ampliar_informacion_producto"
-            elif len(ultimo.split()) > 2 and (
-                "panel" in ultimo or "batería" in ultimo or "inversor" in ultimo or 
-                any(p.get('name', '').lower() in ultimo for p in ctx.get("odoo_search_results", []))
-            ):
-                ctx["catalog_search_mode"] = False
-                ctx["awaiting_expansion"] = False
-                ctx["catalog_search_attempted"] = False
-                return "buscar_en_catalogo_odoo"
-            else:
-                ctx["catalog_search_mode"] = False
-                ctx["awaiting_expansion"] = False
-                ctx["derivation_offered"] = True
-                ctx["catalog_search_attempted"] = True
-                return "generar_respuesta_comercial"
-
-        # 3. Si se ofreció derivación y no se ha intentado la búsqueda, redirigir a búsqueda.
-        if (ctx.get("derivation_offered") and 
-            not ctx.get("catalog_search_mode") and 
-            not ctx.get("catalog_search_attempted")):
+        # 2. Si se ofreció derivación y no se ha intentado la búsqueda, redirigir a búsqueda en catálogo
+        if ctx.get("derivation_offered") and not ctx.get("catalog_search_attempted"):
             return "buscar_en_catalogo_odoo"
 
-        # 4. Flujo normal
+        # 3. Flujo normal
         if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
             return "tools"
         return "actualizar_checklist"
 
     # =========================================================================
-    # ENSAMBLAJE DEL GRAFO
+    # NODO 4b: BÚSQUEDA EN CATÁLOGO ODOO (nuevo nodo)
+    # =========================================================================
+    @auditar_fase(nombre_fase="Búsqueda en Catálogo Odoo", criticidad="MEDIA")
+    @observe_node(node_name="buscar_en_catalogo_odoo")
+    async def buscar_en_catalogo_odoo_node(state: AgentState):
+        ctx = dict(state.get("contexto_tecnico") or {})
+        ctx["catalog_search_attempted"] = True
+        ultimo = extraer_intencion_humana(state.get("messages", []))
+
+        if not odoo_db_client or not odoo_db_client._initialized:
+            logger.warning("[CATALOGO] Cliente Odoo no disponible.")
+            response = "Lo siento, el catálogo de productos no está disponible en este momento. ¿Prefiere que un asesor le contacte o iniciar el Proceso Conversacional para la Definición de Proyectos?"
+            ctx["derivation_offered"] = True
+            ctx["micdp_offered"] = True
+            return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
+
+        try:
+            logger.info(f"[CATALOGO] Buscando en Odoo con keyword: '{ultimo}'")
+            results = await odoo_db_client.search_products_by_keyword(ultimo, limit=5)
+            if results:
+                ctx["odoo_search_results"] = results
+                ctx["catalog_search_mode"] = True
+                ctx["awaiting_expansion"] = True
+                ctx["fuente_producto"] = "odoo"
+
+                lines = ["Hemos encontrado los siguientes productos en nuestro catálogo real:\n"]
+                for idx, prod in enumerate(results, 1):
+                    precio = odoo_db_client.format_price(prod.get("list_price"))
+                    desc = prod.get("description_website", "")
+                    if desc and len(desc) > 100:
+                        desc = desc[:100] + "..."
+                    lines.append(f"{idx}. **{prod['name']}** – {precio}")
+                    if desc:
+                        lines.append(f"   {desc}")
+                lines.append("\n¿Le gustaría saber más sobre alguno en específico? (indique el número o el nombre)")
+
+                response_text = "\n".join(lines)
+                return {"messages": [AIMessage(content=response_text)], "contexto_tecnico": ctx}
+            else:
+                response = "No encontramos productos que coincidan con su consulta. ¿Prefiere que un asesor le contacte para ayudarle personalmente o desea iniciar el Proceso Conversacional para la Definición de Proyectos?"
+                ctx["derivation_offered"] = True
+                ctx["micdp_offered"] = True
+                return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
+        except Exception as e:
+            logger.error(f"[CATALOGO] Error en búsqueda: {e}")
+            response = "Ocurrió un error al consultar el catálogo. Por favor, intente de nuevo más tarde o solicite asistencia de un asesor."
+            ctx["derivation_offered"] = True
+            ctx["micdp_offered"] = True
+            return {"messages": [AIMessage(content=response)], "contexto_tecnico": ctx}
+
+    # =========================================================================
+    # NODO 4c: AMPLIAR INFORMACIÓN DE PRODUCTO ODOO
+    # =========================================================================
+    @auditar_fase(nombre_fase="Ampliar Información Producto Odoo", criticidad="MEDIA")
+    @observe_node(node_name="ampliar_informacion_producto")
+    async def ampliar_informacion_producto_node(state: AgentState):
+        ctx = dict(state.get("contexto_tecnico") or {})
+        ultimo = extraer_intencion_humana(state.get("messages", []))
+
+        if not ctx.get("catalog_search_mode") or not ctx.get("awaiting_expansion"):
+            return {"contexto_tecnico": ctx}
+
+        results = ctx.get("odoo_search_results", [])
+        if not results:
+            ctx["catalog_search_mode"] = False
+            ctx["awaiting_expansion"] = False
+            return {"contexto_tecnico": ctx}
+
+        selected_product = None
+        # Buscar por número (1,2,3...)
+        match_num = re.search(r'\b([1-5])\b', ultimo)
+        if match_num:
+            idx = int(match_num.group(1)) - 1
+            if 0 <= idx < len(results):
+                selected_product = results[idx]
+
+        # Si no, buscar por nombre (fuzzy simple)
+        if not selected_product:
+            for prod in results:
+                if prod['name'].lower() in ultimo or any(kw.lower() in ultimo for kw in prod.get('website_meta_keyword', '').split(',')):
+                    selected_product = prod
+                    break
+
+        if not selected_product:
+            msg = "No he identificado a qué producto se refiere. Por favor, indique el número de la lista o el nombre exacto."
+            return {"messages": [AIMessage(content=msg)], "contexto_tecnico": ctx}
+
+        if not odoo_db_client or not odoo_db_client._initialized:
+            msg = "El catálogo no está disponible en este momento. Intente más tarde."
+            return {"messages": [AIMessage(content=msg)], "contexto_tecnico": ctx}
+
+        try:
+            full_product = await odoo_db_client.get_product_by_id(selected_product['id'])
+            if not full_product:
+                full_product = selected_product
+
+            precio = odoo_db_client.format_price(full_product.get("list_price"))
+            nombre = full_product.get("name", "Producto")
+            desc = full_product.get("description_website", "")
+            ficha = full_product.get("data_sheet_auto", "")
+
+            lines = []
+            lines.append(f"**{nombre}**")
+            lines.append(f"Precio: {precio}")
+            if desc:
+                lines.append(f"Descripción: {desc}")
+            if ficha:
+                lines.append(f"Ficha técnica: {ficha[:300]}..." if len(ficha) > 300 else f"Ficha técnica: {ficha}")
+
+            lines.append("\n¿Necesita información de otro producto o desea que armemos una cotización?")
+
+            response_text = "\n".join(lines)
+            ctx["awaiting_expansion"] = False
+            ctx["current_product_id"] = full_product.get("id")
+            ctx["catalog_search_attempted"] = False
+
+            return {"messages": [AIMessage(content=response_text)], "contexto_tecnico": ctx}
+        except Exception as e:
+            logger.error(f"[CATALOGO] Error al ampliar información: {e}")
+            ctx["awaiting_expansion"] = False
+            return {"contexto_tecnico": ctx}
+
+    # =========================================================================
+    # ENSAMBLAJE DEL GRAFO (se añaden los nuevos nodos)
     # =========================================================================
     graph_builder.add_node("clasificar_intencion_comercial", clasificar_intencion_comercial_node)
     graph_builder.add_node("validar_ubicacion_cliente", validar_ubicacion_cliente_node)
