@@ -1,6 +1,6 @@
 """
 odoo_db_client.py - Cliente asíncrono para consultar la base de datos PostgreSQL de Odoo.
-VERSIÓN 1.4 – Corrección de nombres de columnas según esquema real (website_meta_keywords).
+VERSIÓN 1.5 – Búsqueda flexible en name, description, description_sale, default_code.
 17AGO2026.
 """
 import os
@@ -29,7 +29,6 @@ class OdooDBClient:
         self._last_error: Optional[str] = None
         self._connection_history: List[Dict] = []
 
-        # Log de depuración para verificar valores
         logger.info(f"[ODOO-DB] Configuración: host={self.host}, port={self.port}, database={self.database}, user={self.user}")
 
     async def connect(self) -> bool:
@@ -64,7 +63,6 @@ class OdooDBClient:
                     timeout=10.0
                 )
 
-                # Verificar conexión con una consulta simple
                 async with self.pool.acquire() as conn:
                     result = await conn.fetchval("SELECT 1")
                     if result == 1:
@@ -112,10 +110,10 @@ class OdooDBClient:
                 return await self.connect()
         return await self.connect()
 
-    async def search_products_by_keyword(self, keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
+    async def search_products_flexible(self, keyword: str, limit: int = 20) -> List[Dict[str, Any]]:
         """
-        Busca productos cuyo nombre o website_meta_keywords contengan la keyword.
-        Retorna lista de diccionarios con los campos principales.
+        Busca productos cuyo nombre, descripción, descripción de venta o código
+        contengan la keyword (ILIKE). Retorna hasta 'limit' resultados con campos clave.
         """
         if not await self.ensure_connected():
             logger.warning("[ODOO-DB] ⚠️ No se pudo establecer conexión, retornando lista vacía")
@@ -123,89 +121,48 @@ class OdooDBClient:
 
         try:
             async with self.pool.acquire() as conn:
-                # Corrección: usar columnas que existen en el esquema real
-                # website_meta_keywords (plural) y description_website
                 rows = await conn.fetch("""
-                    SELECT id, name, list_price,
-                           website_meta_keywords, description_website,
-                           data_sheet_auto, type, categ_id
+                    SELECT id, name, list_price, default_code, description,
+                           description_sale
                     FROM product_template
-                    WHERE website_meta_keywords ILIKE '%' || $1 || '%'
-                       OR name ILIKE '%' || $1 || '%'
+                    WHERE name ILIKE '%' || $1 || '%'
+                       OR description ILIKE '%' || $1 || '%'
+                       OR description_sale ILIKE '%' || $1 || '%'
+                       OR default_code ILIKE '%' || $1 || '%'
+                    ORDER BY 
+                        CASE WHEN name ILIKE '%' || $1 || '%' THEN 1 ELSE 2 END,
+                        LENGTH(name)
                     LIMIT $2
                 """, keyword, limit)
                 results = [dict(r) for r in rows]
                 if results:
-                    logger.info(f"[ODOO-DB] ✅ Búsqueda por '{keyword}': {len(results)} resultados")
+                    logger.info(f"[ODOO-DB] ✅ Búsqueda flexible por '{keyword}': {len(results)} resultados")
                     for r in results:
-                        logger.info(f"[ODOO-DB]    - {r.get('name')} (Q {r.get('list_price')})")
+                        logger.info(f"[ODOO-DB]    - {r.get('name')} (Código: {r.get('default_code')}) - Q {r.get('list_price')}")
                 else:
-                    logger.info(f"[ODOO-DB] ℹ️ Búsqueda por '{keyword}': 0 resultados")
+                    logger.info(f"[ODOO-DB] ℹ️ Búsqueda flexible por '{keyword}': 0 resultados")
                 return results
         except Exception as e:
-            logger.error(f"[ODOO-DB] ❌ Error en búsqueda: {e}")
+            logger.error(f"[ODOO-DB] ❌ Error en búsqueda flexible: {e}")
             self._initialized = False
             return []
 
     async def get_product_by_id(self, product_id: int) -> Optional[Dict[str, Any]]:
-        """Obtiene un producto por su ID (product_template)."""
+        """Obtiene un producto por su ID."""
         if not await self.ensure_connected():
-            logger.warning("[ODOO-DB] ⚠️ No se pudo establecer conexión")
             return None
         try:
             async with self.pool.acquire() as conn:
                 row = await conn.fetchrow("""
-                    SELECT id, name, list_price,
-                           website_meta_keywords, description_website,
-                           data_sheet_auto, type, categ_id
+                    SELECT id, name, list_price, default_code, description,
+                           description_sale
                     FROM product_template
                     WHERE id = $1
                 """, product_id)
                 return dict(row) if row else None
         except Exception as e:
-            logger.error(f"[ODOO-DB] ❌ Error al obtener producto por ID: {e}")
+            logger.error(f"[ODOO-DB] Error al obtener producto por ID: {e}")
             return None
-
-    async def get_products_by_category(self, categ_id: int, limit: int = 20) -> List[Dict[str, Any]]:
-        """Obtiene productos de una categoría específica."""
-        if not await self.ensure_connected():
-            logger.warning("[ODOO-DB] ⚠️ No se pudo establecer conexión")
-            return []
-        try:
-            async with self.pool.acquire() as conn:
-                rows = await conn.fetch("""
-                    SELECT id, name, list_price,
-                           website_meta_keywords, description_website,
-                           data_sheet_auto, type
-                    FROM product_template
-                    WHERE categ_id = $1
-                    LIMIT $2
-                """, categ_id, limit)
-                return [dict(r) for r in rows]
-        except Exception as e:
-            logger.error(f"[ODOO-DB] ❌ Error en búsqueda por categoría: {e}")
-            return []
-
-    async def get_bom_components(self, product_tmpl_id: int) -> List[Dict[str, Any]]:
-        """
-        Retorna los componentes de la lista de materiales (mrp_bom)
-        para un product_tmpl_id dado.
-        """
-        if not await self.ensure_connected():
-            logger.warning("[ODOO-DB] ⚠️ No se pudo establecer conexión")
-            return []
-        try:
-            async with self.pool.acquire() as conn:
-                rows = await conn.fetch("""
-                    SELECT bom.product_id, bom.product_qty, pt.name, pt.list_price
-                    FROM mrp_bom bom
-                    JOIN product_template pt ON bom.product_id = pt.id
-                    WHERE bom.product_tmpl_id = $1
-                """, product_tmpl_id)
-                return [dict(r) for r in rows]
-        except Exception as e:
-            logger.error(f"[ODOO-DB] ❌ Error al obtener BOM: {e}")
-            return []
 
     def format_price(self, price: Optional[float]) -> str:
         """Formatea el precio en Quetzales (Q) con dos decimales."""
@@ -217,7 +174,6 @@ class OdooDBClient:
             return "Precio bajo consulta"
 
     def get_connection_status(self) -> dict:
-        """Retorna el estado completo de la conexión para diagnóstico."""
         return {
             "connected": self._initialized,
             "attempts": self._connection_attempts,
@@ -228,7 +184,6 @@ class OdooDBClient:
             "port": self.port,
             "database": self.database
         }
-
 
 # Instancia global
 odoo_db_client = OdooDBClient()
