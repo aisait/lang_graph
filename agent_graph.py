@@ -1,6 +1,6 @@
 """
 agent_graph.py - Grafo agéntico de JARVI 2.0 con instrumentación CTFOM.
-VERSIÓN 2.7.7 – Búsqueda flexible con fuzzy matching y opciones.
+VERSIÓN 2.7.8 – Búsqueda flexible con difflib y selección de opciones.
 17AGO2026.
 """
 import os
@@ -10,6 +10,7 @@ import asyncio
 import requests
 import re
 import json
+import difflib
 import functools
 import logging
 from typing import Annotated, TypedDict, Optional, List, Dict, Any
@@ -53,11 +54,10 @@ import asyncpg
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 # =============================================================================
-# IMPORTACIÓN DEL CLIENTE ODOO Y FUZZY MATCHING
+# IMPORTACIÓN DEL CLIENTE ODOO Y PRICE EXTRACTOR
 # =============================================================================
 from odoo_db_client import odoo_db_client
 from price_extractor import extract_price_from_url
-from rapidfuzz import fuzz, process
 
 logger = logging.getLogger(__name__)
 from config import settings
@@ -123,7 +123,7 @@ def get_llm():
         temperature=0.1,
         timeout=60.0,
         max_retries=5,
-        default_headers={"User-Agent": "JARVI/2.7.7"}
+        default_headers={"User-Agent": "JARVI/2.7.8"}
     )
 
 # =============================================================================
@@ -218,8 +218,8 @@ class InferenciaEnergetica(TypedDict):
     micdp_offered: Optional[bool]
     micdp_active: Optional[bool]
     catalog_search_attempted: Optional[bool]
-    esperando_seleccion: Optional[bool]          # Nuevo: esperando que elija opción
-    productos_opciones: Optional[List[tuple]]     # Nuevo: lista de (idx, score, producto_dict)
+    esperando_seleccion: Optional[bool]          # Nuevo
+    productos_opciones: Optional[List[tuple]]     # Nuevo
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -287,7 +287,7 @@ def normalizar_productos_interes(productos_raw) -> List[Dict[str, str]]:
     return []
 
 # =============================================================================
-# FUNCIÓN PARA NORMALIZAR CONSULTA DEL USUARIO (NUEVA)
+# FUNCIÓN PARA NORMALIZAR CONSULTA DEL USUARIO
 # =============================================================================
 def normalizar_consulta(texto: str) -> str:
     """
@@ -296,9 +296,7 @@ def normalizar_consulta(texto: str) -> str:
     """
     if not texto:
         return ""
-    # Eliminar [Caso No. ...]
     texto = re.sub(r'\[caso no\..*?\]', '', texto, flags=re.IGNORECASE)
-    # Palabras vacías (stopwords) personalizadas
     stopwords = {'por', 'favor', 'dame', 'precio', 'información', 'info', 
                  'solo', 'solamente', 'necesito', 'quiero', 'consultar',
                  'producto', 'batería', 'bateria', 'gel', 'ah', 'v', 'volt',
@@ -480,7 +478,6 @@ async def clasificar_intencion_comercial_node(state: AgentState):
         ctx["catalog_search_attempted"] = False
         ctx["catalog_search_mode"] = False
         ctx["awaiting_expansion"] = False
-        # También limpiamos el estado de selección si el usuario envía nuevo mensaje
         ctx["esperando_seleccion"] = False
         ctx["productos_opciones"] = []
 
@@ -540,53 +537,40 @@ async def seleccionar_productos_node(state: AgentState):
     logger.info("[SELECTOR] 📊 NIVEL 1: Intentando obtener producto desde Odoo DB (búsqueda flexible)")
     odoo_results = []
     try:
-        # Limpiar la consulta para eliminar ruido
         consulta_limpia = normalizar_consulta(ultimo)
         logger.info(f"[SELECTOR] 📊 Consulta normalizada: '{consulta_limpia}'")
         if not consulta_limpia:
-            consulta_limpia = ultimo  # fallback
+            consulta_limpia = ultimo
         odoo_results = await odoo_db_client.search_products_flexible(consulta_limpia, limit=20)
         if odoo_results:
             logger.info(f"[SELECTOR] 📊 Odoo DB - {len(odoo_results)} candidatos encontrados")
-            # Aplicar fuzzy matching para rankear
             textos_candidatos = []
             for prod in odoo_results:
-                # Combina nombre, descripción y código para matching
-                texto_candidato = prod.get('name', '')
-                if prod.get('description'):
-                    texto_candidato += " " + prod['description']
+                texto = prod.get('name', '')
                 if prod.get('description_sale'):
-                    texto_candidato += " " + prod['description_sale']
-                if prod.get('default_code'):
-                    texto_candidato += " " + prod['default_code']
-                textos_candidatos.append(texto_candidato)
+                    texto += " " + prod['description_sale']
+                textos_candidatos.append(texto)
 
-            # Calcular puntajes usando token_set_ratio
             puntajes = []
             for idx, texto in enumerate(textos_candidatos):
-                score = fuzz.token_set_ratio(consulta_limpia, texto)
+                score = difflib.SequenceMatcher(None, consulta_limpia, texto).ratio() * 100
                 puntajes.append((idx, score, odoo_results[idx]))
-
-            # Ordenar por puntaje descendente
             puntajes.sort(key=lambda x: x[1], reverse=True)
-            mejores = puntajes[:5]  # Top 5
+            mejores = puntajes[:5]
 
-            # Log de puntajes
             for idx, score, prod in mejores:
-                logger.info(f"[SELECTOR] 📊   {prod.get('name')} - Score: {score}%")
+                logger.info(f"[SELECTOR] 📊   {prod.get('name')} - Score: {score:.1f}%")
 
-            # Si el mejor tiene score >= 85% y hay diferencia clara con el segundo
             if mejores and mejores[0][1] >= 85 and (len(mejores) == 1 or (mejores[0][1] - mejores[1][1]) > 15):
                 producto_elegido = mejores[0][2]
                 ctx["product_tag"] = f"odoo_{producto_elegido['id']}"
                 ctx["fuente_producto"] = "odoo"
                 ctx["producto_odoo"] = producto_elegido
                 ctx["odoo_search_results"] = [producto_elegido]
-                ctx["tipo_producto"] = "unitario"  # por defecto, se puede refinar después
+                ctx["tipo_producto"] = "unitario"
                 ctx["requiere_auditoria_electrica"] = False
                 ctx["requisitos"] = []
                 ctx["precio_extraido"] = odoo_db_client.format_price(producto_elegido.get('list_price'))
-                ctx["codigo_producto"] = producto_elegido.get('default_code', 'N/A')
                 ctx["fuente_precio"] = "odoo_db"
                 ctx["fuente_detalle"] = {
                     "nivel": 1,
@@ -601,21 +585,17 @@ async def seleccionar_productos_node(state: AgentState):
                 checklist["productos_interes"] = "completado"
                 ctx["checklist_universal"] = checklist
 
-                # Respuesta directa
-                respuesta = f"✅ Encontramos el producto: **{producto_elegido['name']}** (Código: {ctx['codigo_producto']}) - Precio: {ctx['precio_extraido']}"
+                respuesta = f"✅ Encontramos el producto: **{producto_elegido['name']}** - Precio: {ctx['precio_extraido']}"
                 logger.info(f"[SELECTOR] 📊 ✅ Coincidencia exacta: {respuesta}")
                 logger.info("=" * 80)
                 return {"messages": [AIMessage(content=respuesta)], "contexto_tecnico": ctx}
             else:
-                # Hay múltiples opciones, presentar lista numerada
                 opciones = []
                 for i, (idx, score, prod) in enumerate(mejores, 1):
                     precio = odoo_db_client.format_price(prod.get('list_price'))
-                    codigo = prod.get('default_code', 'N/A')
-                    opciones.append(f"{i}. **{prod['name']}** (Código: {codigo}) - {precio}")
+                    opciones.append(f"{i}. **{prod['name']}** - {precio}")
                 respuesta = "🔍 Encontramos varios productos similares:\n\n" + "\n".join(opciones) + "\n\n¿Cuál de estos le interesa? (Indique el número)"
-                # Guardar opciones en contexto para manejar la selección
-                ctx["productos_opciones"] = mejores  # lista de (idx, score, prod_dict)
+                ctx["productos_opciones"] = mejores
                 ctx["esperando_seleccion"] = True
                 logger.info("[SELECTOR] 📊 📋 Presentando opciones al usuario")
                 logger.info("=" * 80)
@@ -760,16 +740,14 @@ async def procesar_seleccion_producto_node(state: AgentState):
     ultimo = extraer_intencion_humana(state.get("messages", []))
     opciones = ctx.get("productos_opciones", [])
     if not opciones:
-        # Si no hay opciones, salir del estado y continuar
         ctx["esperando_seleccion"] = False
         return {"contexto_tecnico": ctx}
 
-    # Intentar parsear número (1-5)
     match = re.search(r'\b([1-5])\b', ultimo)
     if match:
         idx = int(match.group(1)) - 1
         if 0 <= idx < len(opciones):
-            producto_elegido = opciones[idx][2]  # el dict del producto
+            producto_elegido = opciones[idx][2]
             ctx.pop("esperando_seleccion", None)
             ctx.pop("productos_opciones", None)
             ctx["product_tag"] = f"odoo_{producto_elegido['id']}"
@@ -779,7 +757,6 @@ async def procesar_seleccion_producto_node(state: AgentState):
             ctx["requiere_auditoria_electrica"] = False
             ctx["requisitos"] = []
             ctx["precio_extraido"] = odoo_db_client.format_price(producto_elegido.get('list_price'))
-            ctx["codigo_producto"] = producto_elegido.get('default_code', 'N/A')
             ctx["fuente_precio"] = "odoo_db"
             ctx["fuente_detalle"] = {
                 "nivel": 1,
@@ -793,28 +770,23 @@ async def procesar_seleccion_producto_node(state: AgentState):
             checklist["productos_interes"] = "completado"
             ctx["checklist_universal"] = checklist
 
-            respuesta = f"✅ Excelente elección. El producto **{producto_elegido['name']}** (Código: {ctx['codigo_producto']}) tiene un precio de {ctx['precio_extraido']}. ¿Necesita más información o desea cotizar?"
+            respuesta = f"✅ Excelente elección. El producto **{producto_elegido['name']}** tiene un precio de {ctx['precio_extraido']}. ¿Necesita más información o desea cotizar?"
             logger.info(f"[SELECTOR] 🎯 Usuario seleccionó opción {idx+1}: {producto_elegido['name']}")
             return {"messages": [AIMessage(content=respuesta)], "contexto_tecnico": ctx}
         else:
-            # Número fuera de rango
             return {"messages": [AIMessage(content="⚠️ Número inválido. Por favor, indique un número del 1 al 5.")], "contexto_tecnico": ctx}
     else:
-        # Si no es número, intentar buscar por nombre (fuzzy) entre las opciones
         consulta_norm = normalizar_consulta(ultimo)
         if consulta_norm:
             mejores = []
             for idx, (orig_idx, score, prod) in enumerate(opciones):
-                texto_candidato = prod.get('name', '')
-                if prod.get('description'):
-                    texto_candidato += " " + prod['description']
-                if prod.get('default_code'):
-                    texto_candidato += " " + prod['default_code']
-                score = fuzz.token_set_ratio(consulta_norm, texto_candidato)
+                texto = prod.get('name', '')
+                if prod.get('description_sale'):
+                    texto += " " + prod['description_sale']
+                score = difflib.SequenceMatcher(None, consulta_norm, texto).ratio() * 100
                 mejores.append((idx, score, prod))
             mejores.sort(key=lambda x: x[1], reverse=True)
             if mejores and mejores[0][1] >= 80:
-                # Coincidencia suficiente, tomar el primero
                 producto_elegido = mejores[0][2]
                 ctx.pop("esperando_seleccion", None)
                 ctx.pop("productos_opciones", None)
@@ -825,7 +797,6 @@ async def procesar_seleccion_producto_node(state: AgentState):
                 ctx["requiere_auditoria_electrica"] = False
                 ctx["requisitos"] = []
                 ctx["precio_extraido"] = odoo_db_client.format_price(producto_elegido.get('list_price'))
-                ctx["codigo_producto"] = producto_elegido.get('default_code', 'N/A')
                 ctx["fuente_precio"] = "odoo_db"
                 ctx["fuente_detalle"] = {
                     "nivel": 1,
@@ -839,10 +810,9 @@ async def procesar_seleccion_producto_node(state: AgentState):
                 checklist["productos_interes"] = "completado"
                 ctx["checklist_universal"] = checklist
 
-                respuesta = f"✅ Entendido, ha seleccionado **{producto_elegido['name']}** (Código: {ctx['codigo_producto']}) - Precio: {ctx['precio_extraido']}. ¿Necesita más información o desea cotizar?"
+                respuesta = f"✅ Entendido, ha seleccionado **{producto_elegido['name']}** - Precio: {ctx['precio_extraido']}. ¿Necesita más información o desea cotizar?"
                 return {"messages": [AIMessage(content=respuesta)], "contexto_tecnico": ctx}
 
-        # Si no se entiende, pedir aclaración
         return {"messages": [AIMessage(content="⚠️ No he entendido su selección. Por favor, indique el número de la opción que le interesa (1, 2, 3, 4 o 5).")], "contexto_tecnico": ctx}
 
 # =============================================================================
@@ -1368,12 +1338,12 @@ async def ejecutar_entrevista_node(state: AgentState, config: RunnableConfig):
     return {"messages": [ai_message], "contexto_tecnico": ctx}
 
 # =============================================================================
-# NODO 4b: BÚSQUEDA EN CATÁLOGO ODOO (ya no se usa, se reemplaza por seleccionar_productos flexible)
+# NODO 4b: BÚSQUEDA EN CATÁLOGO ODOO (ya no se usa, pero se mantiene por compatibilidad)
 # =============================================================================
 # Nota: este nodo ya no es necesario, pero se mantiene por compatibilidad (no se usa)
 
 # =============================================================================
-# CONDICIÓN DE BORDE (con redirección a selección o procesamiento)
+# CONDICIÓN DE BORDE
 # =============================================================================
 def my_tools_condition(state: AgentState):
     messages = state.get("messages", [])
@@ -1388,7 +1358,7 @@ def my_tools_condition(state: AgentState):
     if ctx.get("derivation_offered") and any(k in ultimo for k in ["asesor", "llamada", "contactar"]):
         return "actualizar_checklist"
 
-    # 2. Si estamos esperando selección de producto, redirigir al nodo correspondiente
+    # 2. Si estamos esperando selección de producto
     if ctx.get("esperando_seleccion"):
         return "procesar_seleccion_producto"
 
@@ -1398,7 +1368,7 @@ def my_tools_condition(state: AgentState):
     return "actualizar_checklist"
 
 # =============================================================================
-# ENSAMBLAJE DEL GRAFO (se añaden los nuevos nodos)
+# ENSAMBLAJE DEL GRAFO
 # =============================================================================
 def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder = StateGraph(AgentState)
@@ -1430,8 +1400,8 @@ def create_graph(checkpointer: BaseCheckpointSaver):
     graph_builder.add_edge("verificar_cierre", "anexar_caso_respuesta")
     graph_builder.add_edge("ejecutar_entrevista", END)
 
-    # Nota: los nodos antiguos buscar_en_catalogo_odoo y ampliar_informacion_producto ya no se usan
-    # pero se mantienen en el código por si se necesitan en el futuro (no se añaden al grafo)
+    # Conexión para el nodo de selección
+    graph_builder.add_edge("procesar_seleccion_producto", "generar_respuesta_comercial")
 
     return graph_builder.compile(checkpointer=checkpointer)
 
